@@ -47,7 +47,15 @@ Monkeybee keeps the alien-artifact ambition, but v1 is gated on a correct baseli
 
 ### Delivery spine
 
-Monkeybee defines four release slices:
+Monkeybee defines five release slices:
+
+0. **Slice F — Foundation freeze**
+   - identity model (`DocumentId`, `SnapshotId`, `ResourceFingerprint`)
+   - `ExecutionContext` precedence and provider-policy rules
+   - ownership lattice + mutation/writeback invariants
+   - render/content/paint boundary freeze
+   - scope registry bootstrap (see Part 8)
+   - cache-key doctrine finalized before subsystem fan-out
 
 1. **Slice A — Reader kernel**
    - open/parse/repair
@@ -74,7 +82,9 @@ Monkeybee defines four release slices:
    - multi-oracle render comparison
    - CI scorecards and regression gates
 
-**v1 release requirement:** Slice A + Slice B + Slice D.
+**v1 release requirement:** Slice F + Slice A + Slice B + Slice D.
+
+No feature bead may begin implementation until its Slice F dependencies are ratified.
 **v1 optional beta lane:** Slice C may ship behind a feature flag if it threatens v1 critical path.
 
 Every task in the roadmap must declare its owning slice.
@@ -93,6 +103,12 @@ Monkeybee adopts explicit, named operational modes that encode mutually competin
 
 - **Strict mode:** Deterministic, pedantic, conformance-focused. Rejects input that violates the PDF specification. Useful for conformance validation, profile checking, and detecting producer bugs. Does not attempt repair. Every deviation from spec produces a structured diagnostic.
 - **Tolerant mode:** Recovers from malformed real-world PDFs without undefined behavior, panics, or unbounded allocation. This is the default mode for real-world ingestion. Applies repair strategies, heuristic recovery, and producer-quirk shims. Every repair action is recorded in the compatibility ledger.
+  **Ambiguity rule:** if multiple recovery strategies produce materially different semantic
+  outcomes (page count, object graph, text decode, signature coverage, or write impact) and no
+  deterministic tiebreaker exists, tolerant mode emits `parse.repair.ambiguous`.
+  By default, `engine.open()` returns the highest-confidence candidate plus the ambiguity record;
+  `ForensicPreserve` may instead reject ambiguous recovery unless
+  `allow_ambiguous_recovery=true`.
 - **Preserve mode:** Byte-preserving where possible. Does not rewrite, renumber, or reformat objects the engine does not semantically own. This mode exists to support signature-safe workflows and incremental-update integrity. The parser in preserve mode retains raw byte spans, whitespace, and formatting for objects it does not modify.
 
 **Write modes:**
@@ -108,15 +124,18 @@ The mode is not a global singleton. A single session can parse in tolerant mode,
 Modes are low-level contracts. Most callers should start from an `OperationProfile` preset:
 
 - `ViewerFast`
-  - parse=tolerant, write=deterministic, security=compatible, open=eager|lazy
+  - parse=tolerant, write=deterministic, security=compatible, open=eager|lazy,
+    provider_policy=pinned_then_ambient
 - `ForensicPreserve`
   - parse=preserve, write=incremental_append, security=hardened, open=eager
 - `EditorSafe`
   - parse=tolerant, write=plan_selected, security=hardened, open=eager
 - `BatchProof`
-  - parse=tolerant, write=deterministic, security=strict_or_hardened, open=eager, determinism=on
+  - parse=tolerant, write=deterministic, security=strict_or_hardened, open=eager,
+    determinism=on, provider_policy=pinned_only
 - `BrowserWasm`
-  - parse=tolerant, write=deterministic, security=strict, open=in_memory_remote
+  - parse=tolerant, write=deterministic, security=strict, open=in_memory_remote,
+    provider_policy=pinned_only
 
 `ExecutionContext::from_profile(profile)` materializes budgets, cache policy, provider policy,
 determinism, and default write/open behavior from the preset.
@@ -204,11 +223,18 @@ trait OracleProvider {
 }
 ```
 
-The oracle provides deterministic resource resolution for CI/proof runs. In non-CI mode, the
-oracle falls through to ambient system resources (fonts, ICC profiles). In CI/proof mode, the
-oracle uses pinned resource packs for reproducibility.
+The engine uses explicit resource-pack policy in all modes:
+- `PinnedOnly`
+- `PinnedThenAmbient`
+- `AmbientAllowed`
 
-Proof/CI mode must use pinned providers rather than ambient system discovery.
+Pinned resource packs include fallback fonts, Base 14 metrics, CJK fallbacks, standard CMaps,
+and ICC defaults with provenance + license metadata.
+
+Proof/CI mode must use `PinnedOnly`.
+`ViewerFast` may use `PinnedThenAmbient`.
+Every fallback resolution records provenance (`pack`, `ambient`, or `caller-supplied`) in the
+diagnostic stream and compatibility ledger.
 Deterministic mode fixes serialization order, stable hashers, fallback resources, and oracle manifests so CI evidence is reproducible across hosts.
 
 ### Feature module registry
@@ -645,6 +671,8 @@ pub struct CapabilityReport {
     pub edit_safety: EditSafetyClass,
     pub preserve_constraints: Vec<PreserveConstraint>,
     pub expected_degradations: Vec<FeatureCode>,
+    pub recovery_confidence: RecoveryConfidence,
+    pub ambiguity_count: u32,
 }
 ```
 
@@ -679,7 +707,7 @@ session = engine.open(byte_source, open_options)?;         // parses, produces f
 snapshot = session.current_snapshot();                      // Arc<PdfSnapshot>, cheap clone
 
 // Read operations (parallel-safe on snapshot):
-rendered_page = snapshot.render_page(page_index, render_opts, &exec_ctx)?;
+rendered = snapshot.render_page(page_index, render_opts, &exec_ctx)?;
 text = snapshot.extract_text(page_index, extract_opts, &exec_ctx)?;
 info = snapshot.inspect_object(obj_ref)?;
 
@@ -699,6 +727,32 @@ This API ensures:
 - Read operations are parallelizable
 - Write planning is inspectable before committing bytes
 - The engine's caches survive across snapshots (keyed by snapshot_id)
+
+```
+pub struct RenderResult {
+    pub pixels: RasterSurface,
+    pub report: RenderReport,
+}
+
+pub struct RenderReport {
+    pub degraded_regions: Vec<RegionRef>,
+    pub placeholder_regions: Vec<PlaceholderRef>,
+    pub missing_resources: Vec<ResourceKey>,
+    pub substituted_fonts: Vec<FontSubstitution>,
+    pub budget_events: Vec<BudgetEvent>,
+}
+
+pub struct ExtractResult {
+    pub surface: PhysicalText | LogicalText | TaggedText,
+    pub report: ExtractReport,
+}
+
+pub struct ExtractReport {
+    pub unmappable_spans: Vec<TextGap>,
+    pub substituted_fonts: Vec<FontSubstitution>,
+    pub degraded_regions: Vec<RegionRef>,
+}
+```
 
 ### Library API error contract
 
@@ -743,6 +797,7 @@ All caches are governed by a single `CachePolicy`.
 `CachePolicy` defines:
 - in-memory byte budget
 - spill-store byte budget
+- optional persistent derived-artifact store policy
 - per-cache admission rules
 - pinning rules
 - eviction rules
@@ -764,6 +819,22 @@ Canonical caches:
 
 **Scratch spill store:** bounded local store for oversized decoded streams, raster tiles,
   isolated-decoder outputs, and other large intermediate artifacts.
+
+**Persistent derived-artifact store:** optional disk-backed cache keyed by:
+`(input_sha256, engine_version, provider_manifest, security_profile, artifact_kind)`.
+Eligible artifacts:
+- repaired xref index
+- parsed object-stream index
+- parsed font / CMap / ICC metadata
+- page dependency graph
+- progressive prefetch plans
+
+Ineligible artifacts:
+- raw decrypted streams
+- caller-sensitive extracted text
+- artifacts derived from ambiguous recovery unless explicitly allowed
+
+The persistent store is disabled by default for encrypted inputs and for restricted corpus tiers.
 
 When memory pressure exceeds in-memory cache budgets, eligible artifacts may spill to the
 scratch store instead of being dropped outright.
@@ -1865,6 +1936,8 @@ Key responsibilities:
    emits a schema-versioned `DiffReport`
 - `monkeybee plan-save <file> [--incremental|--rewrite]` — preview ownership, rewritten regions,
   signature impact, and fallback reasons before saving; emits a schema-versioned `WritePlanReport`
+- `monkeybee plan-save <file> --patches` — emit `BytePatchPlan` with preserved ranges,
+  append ranges, and signed-range audit
 - `monkeybee proof <corpus-dir>` — run the full proof harness
 - `monkeybee conformance <file> [--profile pdf-a4|pdf-x6]` — profile-specific validation
 - `monkeybee optimize <file> [--dedup|--gc|--recompress] -o <o>` — full-rewrite compaction and cleanup as an explicit user operation
@@ -2147,6 +2220,23 @@ before any bytes are written.
 - `ownership_transitions`
 - `blocked_preserve_regions`
 - `full_rewrite_reasons`
+
+After `WritePlan`, the writer must compile a concrete `BytePatchPlan`:
+
+```
+BytePatchPlan {
+  immutable_prefix_end: u64,
+  preserved_spans: Vec<ByteSpan>,
+  appended_segments: Vec<AppendedSegment>,
+  signed_range_audit: Vec<SignedRangeCheck>,
+  planned_startxref: u64,
+  patch_sha256: [u8; 32],
+}
+```
+
+`BytePatchPlan` is the last inspectable artifact before byte emission.
+Preserve-mode and signature-safe guarantees are made against `BytePatchPlan`, not only against
+object-level classifications.
 
 ### Error taxonomy
 
@@ -2792,9 +2882,13 @@ Proves: the quirk-shim layer correctly compensates for producer-specific deviati
 Test cases: single incremental update, multiple chained updates, update that deletes objects, update that modifies the page tree, update that adds annotations, update that changes encryption, conflicting object definitions across updates.
 Proves: incremental update chain parsing correctly resolves to the latest state, and incremental save produces a valid appended section that other readers accept.
 
-*Class: encryption*
+*Class: encryption-read*
 Test cases: V1/R2 (40-bit RC4), V2/R3 (128-bit RC4), V4/R4 (AES-128), V5/R5 (AES-256), V5/R6 (AES-256 with revised password handling), empty passwords, non-ASCII passwords, permission restrictions.
-Proves: decryption works for all standard security handler versions. Encryption of output files produces files that reference renderers can decrypt.
+Proves: decryption works for all standard security handler versions.
+
+*Class: encryption-write* [post-v1 unless explicitly promoted]
+Test cases: output files encrypted by Monkeybee can be opened by reference renderers.
+Proves: output-encryption interoperability.
 
 *Class: annotation-roundtrip*
 Test cases: each annotation type created by Monkeybee, saved, and reopened. Annotations on pages with non-identity rotation. Annotations on pages with CropBox offset. Annotations added to files from different producers. Annotations with rich text content. Reply chains. Annotations that reference page resources.
@@ -2902,6 +2996,7 @@ CompatibilityLedger {
   features: [FeatureEntry],     // one per detected feature category
   repairs: [RepairEntry],       // one per repair action taken
   diagnostics: [DiagnosticEntry], // warnings, notes, errors
+  ambiguities: [AmbiguityEntry],  // competing recovery candidates and why they differed
   pages: [PageLedger],           // per-page feature/diagnostic breakdown
   summary: LedgerSummary,
 }
@@ -3068,6 +3163,15 @@ renderer binaries).
 - The baseline is updated by committing a new `proof-baseline.json` when regressions are
   intentionally accepted (with a justification in the commit message).
 
+Canonical benchmark runs record:
+- benchmark profile id
+- hardware / OS image
+- compiler version
+- security profile
+- provider manifest
+- warm/cold cache state
+- percentile outputs (`p50`, `p95`, worst-case`)
+
 **Reference renderer setup:**
 - CI uses container images with pinned versions of PDFium, MuPDF, Ghostscript, and pdf.js.
 - Container digests are recorded in `oracle-manifest.json` at the workspace root.
@@ -3107,6 +3211,17 @@ v1 may not be released until:
 - All `unsafe` blocks are tagged and auditable.
 
 ### Security profiles
+
+### Support-class doctrine
+
+Compatibility claims are qualified by support class:
+- `native-compatible`
+- `native-hardened`
+- `native-strict`
+- `wasm-strict`
+- `proof-canonical`
+
+Feature tables, ledgers, and generated capability docs must report support in this qualified form.
 
 Monkeybee distinguishes memory safety from execution safety.
 `ExecutionContext` selects a security profile:
@@ -3169,15 +3284,18 @@ The open strategy is set per `OpenSession` and propagates to all downstream cach
 
 **Benchmark class specifics:**
 
-*Latency class (small simple PDFs):* Documents of 1-5 pages with text and simple graphics. Target: first-page render under 50ms at 150 DPI on a modern desktop CPU. This class measures startup overhead, parser initialization, font cache cold-start, and single-page rendering pipeline latency. Representative files: a 1-page letter, a 3-page report with a table, a 2-page form.
+*Latency profile `desktop-x86_64-cold`:* defined CPU SKU, OS image, compiler version,
+security profile, provider manifest, and cold-cache state. Gates use `p50` and `p95`.
 
-*Throughput class (large complex PDFs):* Documents of 50-500 pages with mixed content (text, images, vector graphics, fonts). Target: sustained throughput of 10+ pages/second at 150 DPI using page-level parallelism. This class measures parallel rendering efficiency, cache effectiveness, and memory management under sustained load. Representative files: a 200-page technical manual with diagrams, a 100-page scanned document, a 500-page novel with embedded fonts.
+*Throughput profile `desktop-x86_64-warm`:* defined hardware + warm-cache state.
+Gates use sustained throughput and regression budget against previous canonical run.
 
 *Stress class (pathological PDFs):* Documents designed to stress specific subsystems: pages with 1M+ content stream operators, deeply nested transparency groups (20+ levels), documents with 10,000+ fonts, files with 100+ incremental updates. Target: no operation takes more than 10x the expected time for the content size; no operation causes unbounded memory growth. This class validates that resource limits and algorithmic complexity are under control.
 
 *Round-trip class:* Measures the overhead of load-save-reload cycles. Target: save time under 2x the initial parse time for full-rewrite mode; save time under 0.1x parse time for incremental-append mode (since only changed objects are written). This class measures writer efficiency and change-tracking overhead.
 
-*Memory class:* Peak memory usage during parsing and rendering. Target: peak memory under 5x the file size for typical documents; under 2x file size for parsing-only (no rendering). This class measures allocation discipline, cache sizing, and stream buffering behavior.
+*Memory profile:* defined allocator, artifact-store policy, and corpus subset.
+Gates use peak RSS and peak decoded-bytes counters.
 
 **WASM-friendly core target:**
 
@@ -3399,6 +3517,23 @@ All limits are configured and accounted through `ExecutionContext`; actual budge
 
 v1 is the point where Monkeybee PDF publicly claims engine reality. The following must be true:
 
+### Scope registry doctrine
+
+Every feature is assigned exactly one scope class:
+- `v1_gating`
+- `v1_supported_non_gating`
+- `v1_advisory`
+- `post_v1`
+- `experimental`
+
+The scope registry is machine-readable and CI-validated against:
+- release gates
+- proof doctrine test classes
+- bead appendix
+- generated capability docs
+
+No feature may be `v1_gating` in one section and `post_v1` in another.
+
 ### Functional gates
 
 - [ ] Parser handles all corpus categories with correct Tier 1/2/3 classification.
@@ -3440,7 +3575,7 @@ Each gated test class has a defined pass threshold and responsible crate:
 | transparency-compositing | render | MS-SSIM ≥0.97 vs consensus | Per-page, per-fixture |
 | producer-quirks | parser + render | ≥90% of quirk fixtures render correctly | MS-SSIM ≥0.95 |
 | incremental-update | parser + write | 100% of corpus fixtures | Parse-save-reparse |
-| encryption | parser | 100% of standard handlers (V1-V5) | Decrypt success |
+| encryption-read | parser | 100% of standard handlers (V1-V5) | Decrypt success |
 | annotation-roundtrip | annotate + write | 100% of annotation types | Geometry ≤0.5pt drift |
 | page-mutation | edit + document | 100% of mutation ops | Structural validity |
 | generation | compose + write | 100% of generation tests | Strict-mode self-parse + ref render |
@@ -3448,7 +3583,7 @@ Each gated test class has a defined pass threshold and responsible crate:
 | color-space | render | ΔE₀₀ ≤2.0 vs reference on corpus | Per-pixel average |
 | content-stream-stress | content | Complete without timeout on corpus | All ops processed |
 | signature-preserve | write | 100% byte-range integrity | Byte comparison |
-| redaction-safety | edit | 0 recoverable redacted content | Extraction scan |
+| redaction-safety | edit | Non-gating in v1 unless B-EDIT-003 is separately promoted |
 
 **Regression policy:** A test class that was passing in the previous CI run and fails in the
 current run is a blocking regression. The PR cannot merge until the regression is resolved or
@@ -3508,7 +3643,8 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 - [ ] All errors use the shared error taxonomy.
 - [ ] All `unsafe` blocks are documented and tested.
 - [ ] Public API is documented with examples.
-- [ ] README accurately reflects proven capabilities (no roadmap theater).
+- [ ] README and website capability tables are generated from proof artifacts + scope registry
+      (no manual capability claims).
 - [ ] Resource limits are enforced for all adversarial-input-facing code paths.
 
 ### Baseline v1 vs experimental feature classification
@@ -3521,8 +3657,8 @@ The following table consolidates the baseline/experimental classification from a
 | Cross-reference streams | Baseline (read), Post-baseline (write) | Must read; write deferred unless forced by compact mode |
 | Object stream packing | Post-baseline | Requires xref streams, adds complexity |
 | All standard filters (Flate, LZW, ASCII85, etc.) | Baseline | Required for real-world PDFs |
-| JBIG2 decode | Baseline (via isolated JBIG2-capable decoder path) | Common in scanned docs |
-| JPEG 2000 decode | Baseline (via openjpeg-sys) | Common in print-quality PDFs |
+| JBIG2 decode | Baseline on `native-compatible`/`native-hardened`; explicit degradation on `wasm-strict` unless a proven pure-Rust path exists | Target-qualified support |
+| JPEG 2000 decode | Baseline on `native-compatible`/`native-hardened`; explicit degradation on `wasm-strict` unless a proven pure-Rust path exists | Target-qualified support |
 | Encryption V1-V5 (read) | Baseline | Required for real-world PDFs |
 | Encryption (write) | Post-baseline / out of v1 gating | Not needed for v1 proof; deferred entirely from v1 release gates |
 | Mesh shadings (types 4-7) | Post-baseline | Rare, complex, not v1-gating |
@@ -3736,6 +3872,7 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-PROOF-008: Multi-oracle rendering arbitration
 - B-PROOF-009: Arlington-model conformance validation integration
 - B-PROOF-010: Corpus-level compatibility aggregation and regression tracking
+- B-PROOF-011: Capability-matrix generation for README/site/CLI
 
 ### CLI beads
 - B-CLI-001: Render command
@@ -3748,6 +3885,7 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-CLI-008: Diagnose command
 - B-CLI-009: Proof command
 - B-CLI-010: Conformance command
+- B-CLI-011: `capabilities` command (emit generated support matrix and proof provenance)
 
 ### Checkpoint beads
 - B-CHECK-001: Post-foundation Come-to-Jesus checkpoint (core + parser done, verify against North Star)
