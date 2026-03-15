@@ -21,7 +21,7 @@ monkeybee-pdf/
 │   │   │   ├── context.rs        # ExecutionContext (budgets, cancellation, providers)
 │   │   │   ├── diagnostics.rs    # DiagnosticSink trait, Diagnostic type, VecSink, CallbackSink, FilteringSink, CountingSink
 │   │   │   ├── version.rs        # PdfVersion tracking (input, feature, output), version-gated feature registry
-│   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider
+│   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider, OracleProvider
 │   │   └── Cargo.toml
 │   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
 │   │   ├── src/
@@ -306,6 +306,15 @@ pub struct PdfStream {
 /// Dictionary with insertion-order preservation
 pub struct PdfDictionary {
     entries: IndexMap<PdfName, PdfValue>,
+}
+
+/// StreamHandle: mediates between raw byte source and consumers that need decoded data.
+/// Clone + Send + Sync. Carries no decoded data — only metadata to locate and decode the stream.
+pub struct StreamHandle {
+    pub object_id: ObjRef,
+    pub raw_span: ByteSpan,              // offset + length in the byte source
+    pub filter_chain: Vec<FilterSpec>,   // ordered decode filters with parameters
+    pub expected_decoded_length: Option<u64>,  // from content dimensions, when known
 }
 ```
 
@@ -620,6 +629,126 @@ pub struct PlaceholderInfo {
     pub fetch_range: Option<(u64, u64)>,
 }
 ```
+
+### Dependency graph (`monkeybee-document::depgraph`)
+
+```rust
+/// Edge type classification for the dependency graph
+pub enum EdgeType {
+    ContentRef,    // page/form XObject content stream references a resource by name
+    DictRef,       // dictionary value is an indirect reference
+    ArrayRef,      // array element is an indirect reference
+    InheritedRef,  // page inherits an attribute from an ancestor
+}
+
+/// Dependency graph: DAG mapping objects to their transitive dependencies.
+/// Computed lazily, cached per snapshot, stored as adjacency lists in DashMap.
+pub struct DependencyGraph {
+    pub forward: DashMap<ObjRef, Vec<(ObjRef, EdgeType)>>,  // A -> [B, C, ...]
+    pub reverse: DashMap<ObjRef, Vec<(ObjRef, EdgeType)>>,  // B -> [A, ...]
+    pub snapshot_id: SnapshotId,
+}
+
+/// Result of edit_impact query
+pub struct EditImpact {
+    pub affected_pages: Vec<usize>,
+    pub invalidated_caches: Vec<CacheKey>,
+    pub regeneration_needed: Vec<ObjRef>,
+}
+```
+
+### Fetch scheduler (`monkeybee-bytes::fetch`)
+
+```rust
+/// Fetch scheduler: mediates byte-range requests for remote or lazy byte sources.
+pub trait FetchScheduler: Send + Sync {
+    /// Request bytes in the given range. Returns a future that resolves when available.
+    fn request_range(&self, offset: u64, length: u64) -> FetchHandle;
+
+    /// Submit a prefetch plan (ordered list of ranges by priority).
+    fn submit_prefetch(&self, plan: PrefetchPlan);
+
+    /// Cancel all outstanding requests.
+    fn cancel_all(&self);
+
+    /// Report fetch statistics (requests issued, bytes fetched, latencies).
+    fn statistics(&self) -> FetchStatistics;
+}
+
+/// Ordered list of (offset, length, priority) tuples for prefetch planning.
+pub struct PrefetchPlan {
+    pub ranges: Vec<(u64, u64, u32)>,  // (offset, length, priority)
+}
+
+pub struct FetchStatistics {
+    pub requests_issued: u64,
+    pub bytes_fetched: u64,
+    pub avg_latency_ms: f64,
+}
+```
+
+### WritePlan classification (`monkeybee-write::plan`)
+
+```rust
+/// Classification of each object for the write plan (extended from ObjectAction).
+/// See SPEC.md Part 4 for full classification rules and signature impact analysis.
+pub enum WritePlanClassification {
+    PreserveBytes,           // unmodified + ForeignPreserved + incremental-append
+    AppendOnly,              // new object, incremental-append only
+    RewriteOwned,            // modified + Owned, re-serialize from semantic repr
+    RegenerateAppearance,    // widget annotation needing appearance regeneration
+    RequiresFullRewrite,     // cannot be incrementally saved (deleted, opaque+modified, structural)
+    Unsupported,             // OpaqueUnsupported + unmodified, copy verbatim or leave untouched
+}
+
+/// Signature impact report produced by WritePlan computation.
+pub struct SignatureImpact {
+    pub signatures: Vec<SignatureStatus>,
+}
+
+pub struct SignatureStatus {
+    pub signature_ref: ObjRef,
+    pub byte_range: Vec<(u64, u64)>,
+    pub invalidated: bool,
+    pub reason: Option<String>,
+}
+```
+
+### Provider traits (`monkeybee-core::traits`)
+
+```rust
+/// CryptoProvider: extension point for signature verification and digest computation.
+pub trait CryptoProvider: Send + Sync {
+    fn verify_cms_signature(
+        &self,
+        signed_bytes: &[u8],
+        signature_der: &[u8],
+    ) -> Result<SignatureVerification>;
+
+    fn verify_timestamp(
+        &self,
+        tst_der: &[u8],
+    ) -> Result<TimestampVerification>;
+
+    fn digest(&self, algorithm: DigestAlgorithm, data: &[u8]) -> Vec<u8>;
+}
+
+/// OracleProvider: deterministic resource resolution for CI/proof reproducibility.
+pub trait OracleProvider: Send + Sync {
+    fn resolve(&self, key: &OracleKey) -> Option<Arc<[u8]>>;
+    fn manifest(&self) -> OracleManifest;
+}
+```
+
+### Test obligation matrix reference
+
+The SPEC.md Part 8 defines a test obligation matrix with per-crate pass thresholds and metrics
+for 14 gated test classes (xref-repair, font-fallback, transparency-compositing, producer-quirks,
+incremental-update, encryption, annotation-roundtrip, page-mutation, generation, adversarial,
+color-space, content-stream-stress, signature-preserve, redaction-safety). Each class has a
+defined primary crate, pass threshold, and metric. See SPEC.md Part 8 "Test obligation matrix"
+for the full table. The regression policy requires that any previously-passing test class that
+fails in a new CI run is a blocking regression.
 
 ## Critical data flows
 
