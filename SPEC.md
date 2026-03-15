@@ -1,0 +1,1974 @@
+# PLAN TO CREATE MONKEYBEE PDF
+
+## Part 0 — Constitutional basis
+
+### Imported North Star thesis
+
+Monkeybee PDF is an open-source, memory-safe, high-performance Rust PDF engine for ugly real-world PDFs. Its purpose is to become a genuinely formidable bidirectional document engine: one that can ingest hostile and malformed files, accurately render them, surface useful structure from them, mutate them in disciplined ways, generate and emit valid documents, and survive repeated round trips without collapsing into corruption, hand-waving, or roadmap theater.
+
+The central thesis is the closed loop:
+
+```
+open → understand → render → inspect/extract → annotate/edit → save/generate → reopen → validate
+```
+
+This loop is not a feature list. It is the proof that the engine owns enough of document reality to operate bidirectionally on hard, ugly, real-world documents. Every subsystem, every crate, every design decision must be measured against this loop.
+
+### Non-negotiables
+
+1. The closed loop must be real, not aspirational. Load-modify-save-reload-validate must work on representative ugly PDFs.
+2. Memory safety is constitutional identity, not a convenience. Unsafe is minimal, explicit, justified, and aggressively tested.
+3. Ugly real-world PDFs are the target, not a clean elegant subset. The long tail of malformed, quirky, hostile files is where the engine proves itself.
+4. Annotation, editing, and extraction are part of the engine thesis, not optional stretch goals.
+5. Proof is automated, pathological-corpus-backed, round-trip-grounded, and externally legible. No feature ships on rhetoric alone.
+6. Architecture is natively owned, not donor-inherited. External implementations are behavioral references, not architectural authorities.
+7. The compatibility doctrine (Tier 1/2/3) is explicit and unapologetic. Silent evasion is unacceptable.
+
+### Anti-goals
+
+- Monkeybee is not trying to become a polished desktop PDF suite in v1.
+- Monkeybee is not a giant layout-authoring DSL.
+- Monkeybee is not trying to achieve perfect semantic recovery from every hostile file ever made.
+- Monkeybee is not trying to finish the entire PDF category in one stroke.
+- Monkeybee must not become incoherent because agents can generate enormous quantities of code. Deeper coherence, not decorative sprawl.
+- Monkeybee is not adding 3D PDF support, OCR, document understanding, accessibility remediation, or semantic format conversion to v1. Those are post-v1 lanes.
+
+### Alien artifact doctrine
+
+Monkeybee aspires to feel like an alien artifact in the only sense that matters: a disturbing combination of breadth, depth, coherence, and evidence. Not arbitrary exotic cleverness. Not decorative math. A system where the renderer, document model, extraction layer, mutation substrate, generation path, compatibility handling, and proof machinery all feel like manifestations of one underlying idea rather than a pile of features.
+
+In concrete terms, "alien artifact" for this domain means:
+1. **Mathematical sophistication threaded through every hot path.** Where competing engines use brute force (supersampling for anti-aliasing, linear scan for CMap lookup, pixel-wise comparison for render diffing), Monkeybee uses genuinely stronger methods (exact analytic area coverage via Green's theorem, robust geometric predicates, multi-scale structural similarity, information-theoretic repair scoring, spectral-aware color science). These are not garnishes — they are the techniques that make the engine qualitatively different.
+2. **Correctness that is provable, not merely tested.** Exact area coverage gives mathematically correct anti-aliasing. Robust predicates eliminate floating-point degeneracy artifacts. Bayesian repair confidence gives auditable reasoning for every recovery decision. MS-SSIM gives perceptually valid render comparison. Each technique carries its own correctness proof.
+3. **Performance that comes from algorithmic insight, not just Rust's speed.** Tetrahedral interpolation is faster AND more accurate than trilinear. Tile-based lazy compositing is faster AND uses less memory than full-page buffers. Adaptive curvature-aware subdivision produces fewer triangles for the same visual quality. The alien artifact is not "fast because Rust" — it is fast because the algorithms are right.
+4. **An architecture that feels internally inevitable once understood.** The shared event-driven content stream interpreter, the unified geometry pipeline, the layered caching strategy, the composable parse/write modes, the compatibility ledger as the single evidence spine — these are not independent design decisions but consequences of the closed-loop thesis applied consistently.
+
+### Operational mode doctrine
+
+Monkeybee adopts explicit, named operational modes that encode mutually competing goals rather than hand-waving them. These modes are not hints — they are contracts that constrain parser, object model, writer, and editor behavior simultaneously.
+
+**Parse modes:**
+
+- **Strict mode:** Deterministic, pedantic, conformance-focused. Rejects input that violates the PDF specification. Useful for conformance validation, profile checking, and detecting producer bugs. Does not attempt repair. Every deviation from spec produces a structured diagnostic.
+- **Tolerant mode:** Recovers from malformed real-world PDFs without undefined behavior, panics, or unbounded allocation. This is the default mode for real-world ingestion. Applies repair strategies, heuristic recovery, and producer-quirk shims. Every repair action is recorded in the compatibility ledger.
+- **Preserve mode:** Byte-preserving where possible. Does not rewrite, renumber, or reformat objects the engine does not semantically own. This mode exists to support signature-safe workflows and incremental-update integrity. The parser in preserve mode retains raw byte spans, whitespace, and formatting for objects it does not modify.
+
+**Write modes:**
+
+- **Deterministic write:** Full document rewrite with canonical formatting, rebuilt cross-references, and normalized structure. Produces the smallest, cleanest output. Breaks existing signatures.
+- **Incremental append:** Append-only update section. Adds a new cross-reference section and trailer without rewriting existing bytes. Preserves existing signatures on unmodified content. Required for signature-safe preserve workflows.
+- **Downlevel output:** Emit output constrained to an older PDF version or a specific profile (e.g., PDF/A-4, PDF/X-6). The writer validates output against the target profile's constraints and rejects or downgrades features that violate them.
+
+The mode is not a global singleton. A single session can parse in tolerant mode, inspect the result, and then write in incremental-append mode. The modes compose.
+
+---
+
+## Part 1 — User workflows and visible proof
+
+### Workflow 1: Render hostile PDFs
+
+A user (or agent) hands Monkeybee a PDF that other open-source tools mishandle. Monkeybee parses it (tolerantly where necessary), resolves the document structure, and produces trustworthy visual output. The output is verified against reference renderers. If the file contains features that cannot yet be rendered, the engine surfaces explicit diagnostics rather than producing silently wrong output.
+
+Proof surfaces: pathological corpus render comparisons, reference-guided differential testing, compatibility ledger entries.
+
+### Workflow 2: Annotate existing ugly PDFs
+
+A user loads an ugly real-world PDF, adds annotations (text notes, highlights, stamps, drawing markup), saves the annotated file, and reopens it. The annotations are geometrically correct, the original document is preserved, and the round trip does not corrupt the file.
+
+Proof surfaces: annotation round-trip harness, geometry preservation checks, save-reopen validation.
+
+### Workflow 3: Extract useful structure
+
+A user loads a PDF and extracts text with positions, metadata, page structure, resource inventory, font information, and diagnostics about unsupported regions. The extraction is useful enough that downstream tools can build on it.
+
+Proof surfaces: extraction correctness tests on representative docs, position accuracy validation, diagnostics completeness.
+
+### Workflow 4: Edit and mutate documents
+
+A user loads a PDF, performs structural edits (add/remove/reorder pages, update metadata, modify resources), saves, and reopens. The modified document is structurally valid and renders correctly.
+
+Proof surfaces: mutation round-trip harness, structural validity checks, render comparison pre/post edit.
+
+### Workflow 5: Generate new documents
+
+A user (or agent) creates a new PDF from scratch using Monkeybee's generation API. The generated document renders correctly under both Monkeybee and reference implementations. It is structurally valid, well-formed, and useful.
+
+Proof surfaces: generation validation against reference renderers, structural conformance checks.
+
+### Workflow 6: Inspect and diagnose
+
+A user loads a PDF and uses Monkeybee's inspection tools to understand the document's internal structure: object graph, cross-references, page tree, resource dictionaries, font tables, content stream structure, incremental updates, and compatibility status. This is the "X-ray mode" that makes the engine useful for debugging and forensics.
+
+Proof surfaces: inspection accuracy on known-structure documents, diagnostics completeness.
+
+### Workflow 7: Signature-safe modification
+
+A user loads a signed PDF, adds annotations or form field values using incremental-append save mode, and the existing digital signatures remain valid. The engine does not rewrite bytes it does not own. The user can verify that the signature still validates after the modification.
+
+Proof surfaces: signature validity checks pre- and post-modification, byte-range preservation verification, incremental-update structural integrity.
+
+---
+
+## Part 2 — Compatibility target
+
+### The ugly PDF tail
+
+The target is not the clean subset that makes engineering feel elegant. The target is the long tail of real PDFs in the wild:
+
+**Structural pathologies:**
+- Malformed cross-reference tables and streams
+- Broken or circular object graphs
+- Missing or invalid trailers
+- Incremental-update chains with conflicting state
+- Linearization artifacts and damaged linearization headers
+- Hybrid cross-reference files
+
+**Font and encoding nightmares:**
+- Missing or incomplete ToUnicode CMaps
+- Type 1 fonts with broken metrics
+- CIDFont subsetting errors
+- Encoding conflicts between font dictionaries and content streams
+- Embedded fonts with invalid tables
+- CJK fonts with non-standard encodings
+
+**Rendering edge cases:**
+- Transparency groups with isolated/knockout combinations
+- Soft masks from luminosity and alpha
+- Overprint and overprint mode interactions
+- Blend mode stacking
+- Type 3 font glyphs with embedded graphics state
+- Tiling patterns with unusual matrices
+- Shading patterns across color spaces
+
+**Producer quirks:**
+- Files from hundreds of different PDF producers with varying spec compliance
+- Quirks specific to major producers (Acrobat, Word, LaTeX, Chrome print, LibreOffice, etc.)
+- Scanned documents with unusual page structures
+- Print-pipeline artifacts
+
+**Legacy and hostile categories:**
+- XFA forms and hybrid XFA/AcroForm documents (Tier 2/3: detect, characterize, handle where safe)
+- PostScript XObjects (Tier 2/3: detect, constrained handling where feasible)
+- Flash/RichMedia legacy (Tier 3: detect and degrade explicitly)
+- Encrypted files with various security handlers
+- Adversarial inputs designed to exploit parser bugs
+
+### Repair strategies and fallback chains
+
+This section specifies the actual recovery mechanisms for each pathology class. These are not aspirational — they are the concrete strategies the tolerant parser must implement.
+
+#### Cross-reference repair
+
+A well-formed PDF ends with `%%EOF`, preceded by a `startxref` pointer to the last cross-reference section. In practice, this chain breaks constantly.
+
+**Wrong `startxref` offset:** The `startxref` value points to a byte offset that does not contain `xref` (for table-style) or a valid cross-reference stream object. Recovery strategy:
+1. Scan backward from `%%EOF` looking for the `xref` keyword or a stream object with `/Type /XRef`. Search in a window of ±4096 bytes from the declared offset first, then expand.
+2. If backward scan fails, scan forward from the declared offset.
+3. If both fail, fall back to full-file `xref` keyword scan (costly but necessary for severely damaged files).
+4. Record the repair in the compatibility ledger with the original offset, the discovered offset, and the scan method used.
+
+**Corrupted cross-reference table entries:** Individual xref entries are 20 bytes each (10-digit offset, 5-digit generation, `f`/`n` flag, and line endings). Common corruptions:
+- Wrong offsets (object is not at the declared position). Recovery: when an object lookup fails at the declared offset, scan forward/backward from that position looking for `N 0 obj` where N is the expected object number. If found within a reasonable window (configurable, default 8192 bytes), use the discovered offset and record the repair.
+- Missing entries. Recovery: if an object is referenced but has no xref entry, perform a full-file scan for `N 0 obj` patterns and build a supplementary xref from discovered objects.
+- Entries pointing to freed objects that are still referenced. Recovery: treat as in-use if the object is actually present at the offset.
+
+**Cross-reference stream recovery:** Cross-reference streams (PDF 1.5+) encode the xref as a compressed stream object. Failures include: corrupted stream data (decompression failure), invalid `/W` array (field widths), or missing `/Size`. Recovery:
+1. If the stream decompresses but the `/W` array is invalid, try common field-width patterns: `[1 2 1]`, `[1 3 1]`, `[1 3 2]`, `[1 4 2]`.
+2. If the stream itself is corrupted, fall back to a full-file object scan.
+3. For hybrid files (both table and stream xrefs), cross-validate entries between the two and prefer the stream version for objects present in both.
+
+**Missing or invalid trailer:** The trailer dictionary provides `/Root`, `/Info`, `/Size`, `/Encrypt`, and `/ID`. If the trailer is missing or damaged:
+1. Scan for `/Root` references across all dictionaries. The catalog object is identifiable by containing `/Type /Catalog` and `/Pages`.
+2. Reconstruct `/Size` from the highest object number discovered during xref repair.
+3. If `/Encrypt` is missing but streams appear encrypted (decompression fails in patterns consistent with encryption), report the situation — do not guess encryption parameters.
+
+**Incremental update chain conflicts:** Each incremental update appends a new xref section and trailer with `/Prev` pointing to the previous xref. Conflicts arise when:
+- Multiple updates define the same object number with different content. Resolution: last-writer-wins (the most recent update in the chain takes precedence), per the PDF specification.
+- `/Prev` chain is circular (points back to an earlier section already visited). Detection: maintain a visited-offsets set during chain traversal. If a cycle is detected, stop traversal and use the objects discovered so far.
+- An intermediate update's xref is corrupted. Recovery: skip the corrupted section and continue traversal via its `/Prev` pointer if recoverable, or terminate the chain at the last valid section.
+
+**Linearization damage:** Linearized files have a specific structure (hint tables, part 1/part 2 division) that enables page-at-a-time download. When linearization headers are damaged but the underlying objects are intact, the strategy is: ignore linearization hints entirely and fall back to standard xref-based access. Record the linearization damage in the compatibility ledger. Never attempt to repair linearization hints — only bypass them.
+
+#### Font and encoding recovery
+
+Font handling in real-world PDFs is where the gap between spec and reality is widest. The engine must implement a multi-stage fallback chain for text decoding (character code → Unicode) and a separate chain for glyph rendering (character code → glyph outline).
+
+**Text decoding fallback chain (character code → Unicode):**
+
+1. **ToUnicode CMap:** If the font dictionary contains a `/ToUnicode` entry pointing to a CMap stream, use it. This is the most reliable path when present. Parse the CMap's `beginbfchar`/`beginbfrange` mappings. Handle common CMap errors: wrong range boundaries, overlapping ranges (last definition wins), and malformed hex strings (pad or truncate to expected length).
+
+2. **Predefined CMap + CIDSystemInfo:** For CIDFonts (Type 0 composite fonts), if no ToUnicode is present, check the `/Encoding` entry for a named CMap (e.g., `UniJIS-UTF16-H`, `GBK-EUC-H`). Combine with the font's `/CIDSystemInfo` (Registry/Ordering/Supplement) to select the correct predefined CMap from the engine's built-in CMap database. The engine must ship with the standard Adobe CMaps for CJK encodings: Adobe-Japan1, Adobe-CNS1, Adobe-GB1, Adobe-Korea1.
+
+3. **Encoding + Differences array:** For simple fonts (Type 1, TrueType with simple encoding), check the `/Encoding` entry. If it names a standard encoding (`WinAnsiEncoding`, `MacRomanEncoding`, `MacExpertEncoding`, `StandardEncoding`), use the predefined character-code-to-name mapping. If a `/Differences` array is present, apply its overrides: each entry is a starting code followed by glyph name replacements. Map glyph names to Unicode via the Adobe Glyph List (AGL) and its supplement.
+
+4. **Glyph name → Unicode via AGL:** If the font uses named glyphs (common in Type 1 and TrueType with post tables), map glyph names to Unicode using the Adobe Glyph List. Handle `uniXXXX` and `uXXXX` naming conventions. Handle the common case where producers use nonstandard glyph names (e.g., `a1`, `a2` for Zapf Dingbats variants) by maintaining a supplementary mapping table.
+
+5. **TrueType `cmap` table direct mapping:** For embedded TrueType fonts, if all CMap/Encoding paths fail, attempt to extract Unicode mappings directly from the font's `cmap` table. Prefer platform 3 encoding 1 (Windows Unicode BMP) or platform 0 (Unicode). This is a recovery-only path — the PDF spec says the font dictionary's encoding takes precedence, but when that encoding is broken or missing, the `cmap` table is often the only remaining source of truth.
+
+6. **Character code identity mapping:** As a last resort for CIDFonts with no other mapping source, treat the character code as a Unicode code point (identity mapping). This is frequently correct for fonts with Identity-H or Identity-V encoding when the CIDs happen to correspond to Unicode values. Record this assumption in the compatibility ledger.
+
+7. **Unmappable:** If no strategy produces a Unicode mapping, record the character as unmappable with its raw character code, font name, and encoding information. The extraction layer reports these. The renderer uses `.notdef` or a substitution glyph.
+
+**Glyph rendering fallback chain (character code → outline):**
+
+1. For embedded fonts: extract the glyph program from the embedded font data (Type 1 charstring, TrueType `glyf`/`gvar` table, CFF charstring, or Type 3 content stream). If the embedded font data is corrupt (invalid charstring, broken `glyf` offsets, truncated CFF), attempt partial recovery: render glyphs that are valid, use `.notdef` for broken individual glyphs.
+
+2. For non-embedded fonts: attempt system font substitution based on the font's `/BaseFont` name, font descriptor flags (serif, sans-serif, fixed-pitch, italic, bold), and Panose classification if present. Maintain a substitution table mapping common PDF font names (`Helvetica`, `Times-Roman`, `Courier`, `Symbol`, `ZapfDingbats`, `Arial`, `TimesNewRoman`) to bundled or system font equivalents.
+
+3. For the 14 standard fonts (the "Base 14"): the engine must ship with metrics for all 14 (Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Symbol, ZapfDingbats). Optionally ship with outlines; at minimum, provide glyph widths so text positioning is correct even if the outlines must come from system substitution.
+
+4. Width override: regardless of which glyph outlines are used, the font dictionary's `/Widths` array (or `/W` array for CIDFonts) takes precedence for glyph advance widths. A common producer bug is embedding a subsetted font whose internal metrics disagree with the `/Widths` array. Always trust the PDF-level widths for positioning; use the embedded font only for outlines.
+
+**Specific font-type recovery notes:**
+
+- **Type 1 with broken PFB:** Some producers embed Type 1 fonts with incorrect segment lengths in the PFB binary header. Recovery: ignore segment lengths and parse the ASCII/binary segments by looking for the `eexec` and `cleartomark` markers directly.
+- **CFF with wrong offsets:** CFF (Compact Font Format) data uses offset-based indexing. If the Top DICT's CharStrings offset is wrong, scan for the CharStrings INDEX structure (count followed by offsize followed by offset array) in likely positions.
+- **TrueType with broken `loca` table:** The `loca` table maps glyph IDs to offsets in the `glyf` table. If `loca` entries point outside `glyf` bounds, clamp to the `glyf` table length and record the error. Individual broken glyphs use `.notdef`; the rest of the font remains usable.
+- **CJK identity CIDFonts with no embedded data:** Very common in files from Asian producers. The font dictionary specifies a CIDFont with no embedded font program, relying on the viewer having the font installed. The engine must: (a) recognize common CIDFont names and map them to available CJK fonts, (b) provide a CJK fallback font or clearly report the missing font so the user can supply one.
+
+#### Transparency edge case handling
+
+The PDF transparency model (ISO 32000-1 §11.6, ISO 32000-2 §11.7) is a full Porter-Duff compositing system with additional complexity from isolation, knockout, soft masks, and blend modes. The edge cases that matter most:
+
+**Isolated vs. non-isolated groups:** An isolated transparency group composites against a fully transparent backdrop. A non-isolated group composites against the group's own backdrop (the content underneath it). The difference is subtle but visually significant when the group contains semi-transparent elements. The engine must track the isolation flag per group and correctly initialize the backdrop for compositing.
+
+**Knockout groups:** In a knockout group, each element composites directly against the group's initial backdrop rather than against the accumulated result of previous elements in the group. This means earlier elements in the group do not contribute to the backdrop of later elements. The engine must maintain both the "accumulated" buffer and the "initial backdrop" buffer for knockout groups, selecting the correct source per-element.
+
+**Isolated knockout groups:** The combination of isolation and knockout is the hardest case. The group composites against a transparent backdrop (isolation), and each element composites against that transparent backdrop rather than against previously drawn elements (knockout). This requires careful buffer management to avoid double-compositing artifacts.
+
+**Soft mask from luminosity:** A soft mask derived from a transparency group's luminosity uses the formula: `mask_value = luminosity(composite_result) * backdrop_alpha`. The luminosity calculation depends on the group's color space. The engine must composite the mask group to completion, convert each pixel to luminosity (using the color space's luminosity coefficients — for DeviceRGB: 0.2126·R + 0.7152·G + 0.0722·B), and then use the result as an alpha mask. A common bug is using simple averaging instead of proper luminosity weights.
+
+**Soft mask from alpha:** Simpler than luminosity: the mask value is the alpha channel of the composited mask group. But note that the mask group itself may contain transparency, so it must be fully composited before the alpha is extracted.
+
+**Blend mode interactions:** PDF defines 16 blend modes: Normal, Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion, Hue, Saturation, Color, Luminosity. The last four (Hue, Saturation, Color, Luminosity) are non-separable — they operate on the composite color value rather than per-channel. The engine must implement all 16. The hard cases: blend modes stacked inside nested transparency groups with different isolation/knockout settings; blend modes applied to elements that are themselves soft-masked; blend modes in different color spaces requiring conversion before blending.
+
+**Overprint and overprint mode:** Overprint (`/OP`, `/op`) controls whether painting in one colorant erases other colorants in the same area. Overprint mode (`/OPM`) modifies the behavior for DeviceCMYK: OPM=1 means a zero component value does not overwrite the corresponding backdrop component (the "nonzero overprint" rule). This matters for CMYK-heavy print-oriented PDFs and is a common source of visual differences between renderers. The engine must: (a) track the overprint state in the graphics state, (b) implement the OPM=1 nonzero rule for DeviceCMYK, (c) extend overprint semantics to Separation and DeviceN color spaces (overprint applies per-component based on the colorant names).
+
+#### Producer quirk catalog
+
+Different PDF producers generate files with consistent, predictable deviations from the specification. The engine should maintain an isolated quirk-shim layer that detects the producer (from the `/Producer` and `/Creator` metadata fields) and activates appropriate compensations.
+
+**Adobe Acrobat quirks:**
+- Often writes `%%EOF` followed by additional bytes (common in incremental saves). Tolerant parser must not choke on trailing garbage after `%%EOF`.
+- Uses proprietary extensions in form fields (e.g., `/AA` additional-actions dictionaries with Acrobat-specific trigger types).
+- Sometimes writes `/Length` values for streams that are off by one (missing the final newline before `endstream`). Recovery: if `endstream` is not found at exactly offset + length, scan forward up to 16 bytes for `endstream`.
+
+**Microsoft Word/Print-to-PDF quirks:**
+- Generates extremely deep page trees (one intermediate node per page instead of a flat list or balanced tree). The page tree walker must handle arbitrary depth without stack overflow.
+- Often emits CIDFonts with Identity-H encoding and a ToUnicode CMap, but the ToUnicode CMap sometimes has incomplete coverage (particularly for ligatures and special characters).
+- Uses named destinations with unusual characters that other parsers may reject. Tolerant parser must accept any byte sequence in a name object after the `/` prefix.
+
+**LaTeX/pdfTeX/LuaTeX quirks:**
+- Type 1 font subsetting with glyph names that do not conform to the Adobe Glyph List (e.g., custom glyph names for math symbols). The AGL lookup must fall back to the font's built-in encoding when AGL lookup fails.
+- Content streams that use `BT`/`ET` blocks with unusual text positioning (e.g., resetting the text matrix mid-block with `Tm` for every glyph). This is legal but unusual and can confuse text extraction that assumes sequential `Tj`/`TJ` within a block.
+
+**Chrome/Chromium print-to-PDF quirks:**
+- Generates pages with large numbers of small path operations (one path per character when printing web content). This is legal but performance-sensitive; the content stream interpreter must handle hundreds of thousands of operators per page without degradation.
+- Uses DeviceRGB exclusively, even for content that originated in CMYK workflows. No color management issues, but the files can be extremely large.
+- Sometimes generates clipping paths that are never used (empty clip followed by immediate restore). The renderer should handle this gracefully (it is a no-op).
+
+**LibreOffice quirks:**
+- Occasionally generates cross-reference tables with incorrect entry counts (`/Size` is wrong). Recovery: count actual entries and use the real count.
+- Font embedding sometimes omits the `/FontDescriptor` for standard fonts. The engine must not crash on a missing font descriptor — fall back to the Base 14 metrics if the `/BaseFont` name matches a standard font.
+
+**InDesign quirks:**
+- Heavy use of Separation and DeviceN color spaces with spot colors. The engine must handle DeviceN with many components (4+) and correctly apply the `/AlternateSpace` and `/TintTransform` when the actual colorants are unavailable.
+- Uses nested transparency groups extensively. Performance and correctness are both at stake.
+
+**Quartz (macOS Preview/Core Graphics) quirks:**
+- Generates PDFs with unusual UserUnit values (the page is defined in a non-standard unit). The engine must scale correctly based on the `/UserUnit` page attribute (default is 1/72 inch per unit).
+- Sometimes uses `/Filter` arrays with a single filter (e.g., `[/FlateDecode]` instead of `/FlateDecode`). Both forms are legal per spec, but some parsers only handle the name form. The engine must accept both.
+
+#### XFA safe-contained handling (Tier 2)
+
+XFA (XML Forms Architecture) is deprecated as of PDF 2.0 but persists in millions of existing government and enterprise forms. Full XFA support requires a complete XML layout engine — that is not a v1 goal. However, the engine must not simply blank-page on XFA documents.
+
+**Detection:** Check for `/AcroForm` dictionary with an `/XFA` entry. The `/XFA` value is either a stream or an array of alternating name/stream pairs (packet-based XFA). Also check for the presence of a `/NeedsRendering` key set to `true` in the catalog, which signals that the XFA layer is authoritative over AcroForm.
+
+**Safe subset handling:**
+1. **Hybrid XFA/AcroForm documents:** Many XFA documents also contain an AcroForm fallback layer with pre-rendered appearance streams. If AcroForm field widgets have appearance streams (`/AP` entries), render from those. This gives usable visual output for the majority of hybrid documents without any XFA interpretation.
+2. **XFA template extraction:** Parse the XFA XML packets to extract the template structure, dataset values, and locale information. Expose these through the extraction/inspection API as structured XML, even if the engine cannot render the XFA layout.
+3. **Static XFA forms:** A subset of XFA forms are "static" (no dynamic layout recalculation needed). For these, the AcroForm appearance streams are usually sufficient.
+4. **Dynamic XFA forms without AcroForm fallback:** These are the hard case. The engine reports them as Tier 3 (detected, cannot render, explicit diagnostic). The compatibility ledger records the XFA version, template complexity, and which packets are present.
+
+**What the engine explicitly does not do for XFA in v1:** No XFA layout engine. No XFA scripting. No XFA-specific form filling. No XFA-to-AcroForm conversion.
+
+#### PostScript XObject handling (Tier 2/3)
+
+PostScript XObjects (`/Subtype /PS`) embed raw PostScript code within a PDF. They are deprecated since PDF 1.4 but still appear in old files generated by early Acrobat Distiller and some RIPs.
+
+**Detection:** Identify XObjects with `/Subtype /PS`. These contain PostScript language code rather than PDF content stream operators.
+
+**Tier 2 handling (where feasible):** For the limited subset of PostScript XObjects that consist only of path construction (moveto, lineto, curveto, fill, stroke) and simple graphics state manipulation, translate the PostScript operators to equivalent PDF content stream operators. This handles the common case of vector art embedded as PostScript.
+
+**Tier 3 handling (default):** For PostScript XObjects that use control flow, stack manipulation, or PostScript-specific operators that have no PDF equivalent, record a diagnostic and render a placeholder (bounding-box rectangle with diagnostic text, or skip the XObject). Do not attempt to interpret arbitrary PostScript — that would require a full PostScript interpreter, which is a different engine.
+
+#### Encryption and security handler recovery
+
+**Encryption and security handler recovery**
+
+**Standard security handlers (V1-V5):** Support all standard encryption revisions. V1/V2 use RC4; V4 adds AES-128; V5 uses AES-256. The engine must support all of these for decryption. For output encryption, default to AES-256 (V5, R6) as the strongest standard option.
+
+**Encryption key derivation specifics:**
+
+For V1-V4 (R2-R4), the encryption key is derived from:
+1. Pad the user password to 32 bytes using the standard padding string (defined in ISO 32000-1 Table 3.19 — a fixed 32-byte sequence starting with `0x28 0xBF 0x6E 0x5E...`).
+2. Hash with MD5: padded password + `/O` value + permissions integer (little-endian 4 bytes) + document `/ID` first element.
+3. For R3+, iterate the MD5 hash 50 times, taking the first N bytes each time (where N is the key length / 8).
+4. The result is the file encryption key.
+
+For V5 (R5-R6), key derivation uses SHA-256/SHA-384/SHA-512:
+1. Concatenate the UTF-8 password (truncated to 127 bytes, SASLprep-normalized for R6) with the validation salt and user key data from the `/U` entry.
+2. Hash with SHA-256 (R5) or the extended hash algorithm (R6 — an iterative SHA-256/384/512 scheme with AES-CBC rounds, designed to resist GPU acceleration).
+3. The intermediate hash decrypts the `/UE` (user encryption key) entry using AES-256-CBC to yield the file encryption key.
+
+**Per-object key derivation:** For V1-V4, each object is encrypted with a per-object key derived from: file encryption key + object number (little-endian 3 bytes) + generation number (little-endian 2 bytes), hashed with MD5, truncated to min(key_length + 5, 16) bytes. For AES (V4), append the bytes `0x73 0x41 0x6C 0x54` ("sAlT") before the final MD5. For V5, the file encryption key is used directly (no per-object derivation).
+
+**What gets encrypted:** All strings and streams are encrypted, with exceptions: the `/ID` array values in the trailer, the encryption dictionary itself, strings within the encryption dictionary, and cross-reference streams (their data is not encrypted, though objects referenced from them may be). String encryption uses the per-object key; stream encryption also uses the per-object key but may use a different algorithm (e.g., strings with RC4 and streams with AES in a V4 file, controlled by `/StrF` and `/StmF`).
+
+**Password handling edge cases:**
+- Empty owner/user passwords (very common). The engine must correctly handle the empty-string password case, which requires specific padding per the spec (28 bytes of the standard padding string).
+- UTF-8 password normalization (SASLprep, per PDF 2.0). Passwords must be normalized before encryption key derivation.
+- Files where the permissions integer is incorrect but the encryption is otherwise valid. Do not reject a file solely because its stated permissions seem wrong — decrypt and let the user decide.
+
+**Non-standard security handlers:** The engine detects non-standard security handlers (any `/Filter` value other than `/Standard` in the encryption dictionary) and reports them as Tier 3. It does not attempt to implement proprietary DRM schemes (Adobe LiveCycle Policy Server, FileOpen, etc.).
+
+### Tiered compatibility doctrine
+
+For every feature category, Monkeybee must classify its handling:
+
+**Tier 1 — Full native support:** The feature is implemented directly, tested against the pathological corpus, and covered by round-trip validation. This is the default target for all core PDF 2.0 features.
+
+**Tier 2 — Safe contained handling:** The feature cannot be fully supported natively, but partial, sandboxed, or constrained handling is possible. The engine provides useful functionality without violating safety or polluting architecture. The compatibility ledger records the handling mode.
+
+**Tier 3 — Explicit detected degradation:** The feature is detected and reported. The engine produces diagnostics, records the situation in the compatibility ledger, and degrades in principled, instrumented ways. No silent failures. No blank pages without explanation.
+
+### Compatibility ledger
+
+Every document processed by Monkeybee produces a compatibility report: what was encountered, how it was handled, what tier applied, what degraded, what succeeded. This ledger is machine-readable and is the backbone of the proof infrastructure.
+
+The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
+
+---
+
+## Part 3 — System architecture
+
+### Workspace layout
+
+Monkeybee is a Cargo workspace with focused crates that share a common document core. The architecture enforces separation of concerns while ensuring the document model is genuinely reusable across all subsystems.
+
+### Crate boundaries
+
+#### `monkeybee-core`
+
+The foundation. Owns the document object model, cross-reference management, page tree, resource resolution, object identity, inherited state propagation, and shared geometry/page-state understanding.
+
+Key responsibilities:
+- PDF object types (booleans, integers, reals, strings, names, arrays, dictionaries, streams, references)
+- Cross-reference tables and streams (reading, writing, repair)
+- Object graph with reference resolution
+- Page tree with inherited attributes
+- Resource dictionaries and resolution chain
+- Document-level metadata
+- Incremental update tracking
+- Shared coordinate geometry and transformation pipeline
+- Canonicalization without destructive loss
+
+The core must be mutation-friendly. Its representations must preserve enough structure that editing, annotation, and re-serialization are practical — not one-way lossy collapse.
+
+**PDF object type specifics:**
+
+The object model must faithfully represent the nine fundamental PDF object types:
+
+- **Boolean:** `true` or `false`. Trivial but must be preserved exactly for round-trip.
+- **Integer:** Signed integers. PDF does not define a specific integer size; in practice, 64-bit signed covers all real-world cases. Must not silently truncate.
+- **Real:** Floating-point numbers. PDF reals are expressed as fixed-point or floating-point decimal strings. The internal representation must preserve enough precision to round-trip without drift (at minimum, f64). When serializing, emit the minimum number of decimal places that preserves the value, capped at 6 decimal places for coordinates and 10 for color values.
+- **String:** Two forms — literal strings (parenthesis-delimited, with escape sequences) and hexadecimal strings (angle-bracket-delimited). The internal representation stores raw bytes. Text interpretation (PDFDocEncoding vs. UTF-16BE, detected by BOM) is layered above.
+- **Name:** `/`-prefixed atoms. Name objects use `#XX` hex encoding for bytes outside the printable ASCII range. The internal representation is the decoded byte sequence; the serializer re-encodes as needed.
+- **Array:** Ordered heterogeneous collections. Arrays may contain any object type, including other arrays and indirect references. No inherent size limit, but the engine should enforce a configurable maximum nesting depth to prevent stack overflow on adversarial input.
+- **Dictionary:** Key-value maps where keys are names and values are any object type. Duplicate keys are technically malformed; the engine uses last-definition-wins semantics in tolerant mode and reports a diagnostic.
+- **Stream:** A dictionary plus a byte sequence. The dictionary contains at least `/Length`. The raw bytes are the encoded form; the decoded form is obtained by applying the filter chain. The core stores both the raw bytes (for preserve-mode round-trip) and provides lazy-decoded access.
+- **Null:** The null object. Represents absence. References to free objects resolve to null.
+- **Indirect reference:** A pair of (object number, generation number) pointing to an indirect object elsewhere in the file. The object graph resolves these on demand.
+
+**Resource dictionary resolution chain:**
+
+Page resources are inherited down the page tree hierarchy. A page's effective resources are determined by:
+1. Check the page object's own `/Resources` dictionary.
+2. If absent (or for missing individual resource categories), walk up the page tree to ancestors.
+3. The first ancestor with a `/Resources` dictionary for the needed category provides it.
+4. Resource categories (`/Font`, `/XObject`, `/ExtGState`, `/ColorSpace`, `/Pattern`, `/Shading`, `/Properties`) are resolved independently — a page might inherit fonts from one ancestor and XObjects from another.
+
+The core must cache resolved resources per page to avoid repeated tree traversal.
+
+**Coordinate geometry and transformation pipeline:**
+
+PDF uses a bottom-left coordinate system with units of 1/72 inch (by default). The transformation pipeline is:
+1. **User space → Device space:** The CTM (Current Transformation Matrix) maps from user space to device space. It is a 3×2 affine matrix [a b c d e f] applied as: x' = a·x + c·y + e, y' = b·x + d·y + f.
+2. **Page boxes:** MediaBox defines the physical medium boundary. CropBox (defaults to MediaBox) defines the visible region. BleedBox, TrimBox, and ArtBox define printing-related regions. All boxes are in user space coordinates.
+3. **Page rotation:** The `/Rotate` attribute (0, 90, 180, 270 degrees) is applied after the page's own coordinate system. Rendering, annotation placement, and extraction must all account for rotation.
+4. **UserUnit:** PDF 1.6+ allows a `/UserUnit` value that scales the default user-space unit. A UserUnit of 2.0 means each unit is 2/72 inch instead of 1/72.
+5. **Form XObject transformations:** Form XObjects have their own `/Matrix` that maps from the form's coordinate space to the enclosing content stream's space. This is composed with the current CTM.
+
+The shared geometry module must provide: matrix multiplication, matrix inversion, point transformation, rectangle transformation (with proper handling of rotated/skewed rectangles), and rectangle intersection/union.
+
+#### `monkeybee-parser`
+
+Reads PDF bytes into the core document model.
+
+Key responsibilities:
+- Lexing and tokenization
+- Object parsing (all PDF object types)
+- Cross-reference parsing (tables and streams, including repair)
+
+**Lexer specifics:**
+
+The PDF lexer must handle:
+
+1. **Whitespace:** PDF defines whitespace as: NUL (0x00), TAB (0x09), LF (0x0A), FF (0x0C), CR (0x0D), SPACE (0x20). CR+LF is treated as a single end-of-line. The lexer must consume whitespace between tokens but preserve it for preserve-mode byte fidelity.
+
+2. **Comments:** `%` introduces a comment that runs to end-of-line. Comments are not semantically significant but must be preserved in preserve mode.
+
+3. **Delimiter characters:** `(`, `)`, `<`, `>`, `[`, `]`, `{`, `}`, `/`, `%`. These terminate any preceding token and begin a new syntactic element.
+
+4. **Numeric tokens:** Integers (optional sign, digits) and reals (optional sign, digits with decimal point). The lexer must distinguish between integers and reals because some PDF operations treat them differently. Edge cases: `+0`, `-0`, `.5` (no leading zero), `5.` (no trailing digit after decimal), and very large integers that exceed i64 range (fall back to f64 representation with a diagnostic).
+
+5. **String tokens:** Literal strings `(...)` with balanced parenthesis counting and escape sequences (`\n`, `\r`, `\t`, `\b`, `\f`, `\\`, `\(`, `\)`, `\ddd` for octal, and line continuation with `\` at end of line). Hex strings `<...>` with pairs of hex digits (a trailing odd digit is padded with 0). The lexer must handle multi-line literal strings and nested parentheses correctly.
+
+6. **Name tokens:** `/` followed by the name bytes. `#XX` hex escape sequences within names (e.g., `/My#20Name` for the name "My Name"). The name's decoded form is a byte sequence, not necessarily valid UTF-8 (though it usually is in practice).
+
+7. **Keyword tokens:** `true`, `false`, `null`, `obj`, `endobj`, `stream`, `endstream`, `xref`, `trailer`, `startxref`, `R` (indirect reference marker). The lexer recognizes these as distinct from general name tokens.
+
+8. **Stream data:** Between `stream` (followed by a single EOL: LF or CR+LF, not just CR) and `endstream`. The lexer must extract exactly `/Length` bytes of stream data. The `endstream` keyword must follow immediately (possibly preceded by an EOL that is not counted in the length — this is a spec ambiguity that causes real-world issues). In tolerant mode, if `endstream` is not found at the expected position, scan forward up to 32 bytes.
+- Stream decompression and filter chains (FlateDecode, LZWDecode, ASCII85Decode, ASCIIHexDecode, RunLengthDecode, CCITTFaxDecode, JBIG2Decode, DCTDecode, JPXDecode, Crypt)
+- Incremental update parsing
+- Encryption/decryption support (standard security handlers)
+- Linearization detection and handling
+- Tolerant mode: repair malformed structures, recover from common producer errors
+- Strict mode: validate against spec, reject non-conforming input
+- Preserve mode: retain raw byte spans for signature-safe workflows
+- Content stream parsing (operators and operands)
+- Parser diagnostics and error recovery metadata
+
+**Filter chain specifics:**
+
+Stream data may pass through multiple filters in sequence. The `/Filter` entry specifies either a single filter name or an array of filter names applied in order. The `/DecodeParms` entry (or array thereof) supplies filter-specific parameters.
+
+- **FlateDecode:** zlib/deflate decompression. The most common filter. Parameters: `/Predictor` (PNG predictors 10-15, TIFF predictor 2), `/Colors`, `/BitsPerComponent`, `/Columns`. The predictor undoing is applied *after* deflate decompression. This is a frequent source of bugs — the predictor parameters must be correctly propagated. For PNG predictors, each row is preceded by a filter-type byte (0=None, 1=Sub, 2=Up, 3=Average, 4=Paeth).
+- **LZWDecode:** LZW decompression. Less common than Flate. Parameters include `/EarlyChange` (default 1). The LZW implementation must handle the early-change variant that Acrobat uses.
+- **ASCII85Decode / ASCIIHexDecode:** Text-to-binary decodings. These appear as outer wrappers when the PDF was generated for environments that cannot handle binary data. ASCII85 uses the `~>` end-of-data marker; ASCIIHex uses `>`. Both must tolerate whitespace.
+- **RunLengthDecode:** Simple RLE decompression. Byte-based: 0-127 means copy next N+1 bytes; 129-255 means repeat next byte 257-N times; 128 is EOD.
+- **CCITTFaxDecode:** Group 3 or Group 4 fax decompression. Parameters: `/K` (-1 for Group 4, 0 for Group 3 one-dimensional, >0 for mixed), `/Columns`, `/Rows`, `/BlackIs1`, `/EncodedByteAlign`. Common in scanned document images.
+- **JBIG2Decode:** JBIG2 decompression. May reference global segments via `/DecodeParms` → `/JBIG2Globals`. The globals stream must be resolved and prepended.
+- **DCTDecode:** JPEG decompression. The stream data is a complete JPEG file (with SOI/EOI markers). The engine must handle both baseline and progressive JPEG. The `/ColorTransform` parameter controls whether a YCbCr→RGB conversion is applied (default: yes for 3-component, no for others).
+- **JPXDecode:** JPEG 2000 decompression. The stream data is a complete JP2 or J2K codestream. Color space information may come from the image's own headers or be overridden by the PDF's `/ColorSpace` entry.
+- **Crypt:** Decryption filter for per-object encryption. Used when only specific streams are encrypted differently from the document default.
+
+**Filter chain edge cases and failure modes:**
+
+- **Cascaded filters:** A stream with `/Filter [/ASCII85Decode /FlateDecode]` means: first decode ASCII85 (outer), then decompress Flate (inner). The order in the array is the decoding order. A common producer bug is listing the filters in encoding order instead of decoding order — the tolerant parser should detect this (if the first filter fails, try reversing the order) and record the repair.
+- **Predictor parameter mismatch:** PNG predictors require `/Colors`, `/BitsPerComponent`, and `/Columns` to be correct. If they are wrong, the unpredicted data will be garbled. The tolerant parser should: (a) try the declared parameters first, (b) if the result looks wrong (e.g., image dimensions don't match expected), try inferring parameters from the image XObject's own `/Width`, `/Height`, `/BitsPerComponent`.
+- **Truncated streams:** If decompression produces fewer bytes than expected (based on the image or content dimensions), pad with zeros and record a diagnostic. Do not crash or reject the document.
+- **JBIG2 global segments:** JBIG2 streams can reference global segment data stored in a separate stream (pointed to by `/DecodeParms` → `/JBIG2Globals`). The engine must resolve this reference before decompression. If the globals stream is missing, the JBIG2 decode fails; report as Tier 3.
+- **DCTDecode color transform ambiguity:** When a JPEG image is decoded via DCTDecode, the `/ColorTransform` parameter controls YCbCr→RGB conversion. If absent, the default is 1 (yes) for 3-component images and 0 (no) for 1- or 4-component. Some producers set it incorrectly, leading to images with inverted or wrong colors. The tolerant parser can detect this heuristically: if the decoded image looks predominantly blue/yellow (a hallmark of missing YCbCr→RGB conversion), try toggling the color transform.
+- **JPXDecode color space conflict:** A JPEG 2000 image may have an embedded ICC profile that conflicts with the PDF-level `/ColorSpace`. Per the spec, the PDF-level color space takes precedence. The engine must extract the raw component data from the JP2 and reinterpret it in the PDF-declared color space.
+
+**Content stream parsing specifics:**
+
+Content streams contain a sequence of operands followed by operators. The parser must:
+1. Tokenize the content stream, recognizing the same object types as the main document parser (numbers, strings, names, arrays, dictionaries) plus the special inline-image syntax (`BI`...`ID`...`EI`).
+2. Build operand stacks and pair them with operators. The operator determines how many preceding operands to consume.
+3. Handle nested content streams: a page's content may be a single stream or an array of streams that are logically concatenated.
+4. Handle `BX`/`EX` compatibility regions, where unknown operators between these markers are skipped without error.
+
+#### `monkeybee-render`
+
+Produces visual output from the document model.
+
+Key responsibilities:
+- Content stream interpretation (graphics state machine)
+- Text rendering: font selection, encoding resolution, glyph positioning, kerning, text state
+- Font handling: Type 1, TrueType, OpenType/CFF, CIDFont, Type 3, font subsetting, ToUnicode mapping
+- Image rendering: inline and XObject images, color space conversion, interpolation
+- Vector graphics: path construction, stroking, filling, clipping, winding rules
+- Color management: DeviceRGB, DeviceCMYK, DeviceGray, CalRGB, CalGray, Lab, ICCBased, Indexed, Separation, DeviceN, Pattern
+- Transparency: groups, soft masks, blend modes, isolated/knockout, alpha compositing
+- Patterns: tiling patterns, shading patterns (all function and axial/radial/mesh types)
+- Graphics state: CTM, clipping, line properties, rendering intent, overprint
+- Page rendering: media box, crop box, bleed/trim/art boxes, rotation, user unit
+- Optional content (layers): OCG visibility, OCMD membership, default/print/export states
+- Output targets: raster (PNG/JPEG), vector (SVG), and extensible backend interface
+
+**Output backend architecture:**
+
+The renderer is backend-agnostic: it interprets content streams and emits drawing commands to an abstract backend trait. This enables multiple output formats from a single interpretation pass.
+
+*Raster backend (PNG/JPEG):* Renders to an in-memory pixel buffer (RGBA, 8 bits per component). The buffer dimensions are determined by the page dimensions and the requested DPI. Anti-aliasing is applied during rasterization (not as a post-process). JPEG output converts from RGBA to RGB (discarding alpha — JPEG does not support transparency) and encodes with configurable quality. PNG output preserves alpha and uses maximum compression.
+
+*SVG backend:* Translates PDF drawing operations to SVG elements. Text is emitted as `<text>` elements with explicit positioning (not as paths, unless the font is not embeddable or the text uses unusual rendering modes). Images are embedded as base64 data URIs. Clipping paths use SVG `<clipPath>` elements. Transparency uses SVG opacity and filter elements. The SVG output is useful for web embedding and as a debugging tool (SVG structure mirrors PDF content stream structure).
+
+*Extensible backend trait:* The backend trait defines methods for: begin/end page, draw path (with fill/stroke/clip mode), draw text run (positioned glyphs), draw image (positioned pixel data), push/pop graphics state, set clipping path, begin/end transparency group. Third-party backends (e.g., a GPU-accelerated backend, a print spooler backend, or a PDF-to-PDF transformation backend) can implement this trait without modifying the core renderer.
+
+**Page rendering specifics:**
+
+A page is rendered by:
+1. Determine the effective page boxes (MediaBox, CropBox after inheritance resolution).
+2. Apply the page rotation (`/Rotate`). Rotation is applied as a coordinate transform: for 90° rotation, the rendering origin shifts and axes swap. The content stream itself is not rotated — the rendering pipeline applies the rotation.
+3. Apply UserUnit scaling if present (multiply all dimensions by the UserUnit value).
+4. Initialize the graphics state: CTM to the identity (plus any rotation/scaling from steps 2-3), clip to CropBox, color to DeviceGray black, line width 1.0, and all other state parameters to their defaults (per ISO 32000-2 Table 52).
+5. If the page has multiple content streams (an array of stream references), concatenate them logically with a space separator. This is important: the graphics state persists across stream boundaries within a page. A `q` in stream 1 can be matched by a `Q` in stream 2. (A common producer bug is leaving unmatched `q`/`Q` across stream boundaries — the renderer must handle this gracefully, restoring to a sane default state if `Q` underflows.)
+6. Interpret the concatenated content stream through the shared graphics state machine.
+7. Render annotations on top of the page content (annotations are painted after the page's content stream, in the order they appear in the page's `/Annots` array).
+8. Apply optional content visibility: if the document has optional content groups (OCGs / layers), evaluate the visibility of each marked content span based on the current OCG state (default, print, or export configuration). Invisible content is skipped during rendering.
+
+**Optional content (layers) handling:**
+
+PDF optional content allows content to be organized into groups that can be shown or hidden. This is used for: language variants, CAD drawing layers, watermarks, print-only or screen-only content.
+
+- `/OCProperties` in the document catalog defines the optional content configuration.
+- Individual content streams use `BDC /OC /OptionalContentGroupName` ... `EMC` to mark content belonging to a group.
+- The `/OCGs` array lists all optional content groups.
+- The `/D` (default) configuration specifies: `/ON` (visible groups), `/OFF` (hidden groups), `/Order` (UI display order), `/AS` (auto-state rules for print/export).
+- Optional Content Membership Dictionaries (OCMDs) combine multiple OCGs with Boolean logic (`/AllOn`, `/AnyOn`, `/AllOff`, `/AnyOff`).
+- The renderer must evaluate OCG/OCMD visibility for each marked content span and skip invisible content.
+
+**Content stream operator set:**
+
+The PDF content stream uses approximately 73 operators organized into the following categories. The renderer's dispatch table must handle all of them:
+
+*Path construction operators:*
+- `m` (moveto), `l` (lineto), `c` (curveto — cubic Bézier, 3 control points), `v` (curveto — initial point is current point), `y` (curveto — final point is third control point), `h` (closepath), `re` (rectangle — appends a closed rectangular subpath)
+
+*Path painting operators:*
+- `S` (stroke), `s` (close and stroke), `f` (fill, nonzero winding), `F` (fill, nonzero winding — same as `f`, PDF 1.0 compatibility), `f*` (fill, even-odd), `B` (fill and stroke, nonzero winding), `B*` (fill and stroke, even-odd), `b` (close, fill, and stroke, nonzero winding), `b*` (close, fill, and stroke, even-odd), `n` (end path without fill or stroke — used for clipping-only paths)
+
+*Clipping operators:*
+- `W` (clip, nonzero winding), `W*` (clip, even-odd). Note: these modify the clipping path only in combination with a subsequent path-painting operator. The clipping takes effect after the paint. This is a common source of implementation bugs.
+
+*Text object operators:*
+- `BT` (begin text object), `ET` (end text object)
+
+*Text state operators:*
+- `Tc` (character spacing), `Tw` (word spacing), `Tz` (horizontal scaling), `TL` (leading), `Tf` (font and size), `Tr` (rendering mode — 0=fill, 1=stroke, 2=fill+stroke, 3=invisible, 4-7=same with clipping), `Ts` (rise)
+
+*Text positioning operators:*
+- `Td` (move to start of next line, offset by tx/ty), `TD` (same as `Td` but also sets leading to -ty), `Tm` (set text matrix and text line matrix), `T*` (move to start of next line using current leading)
+
+*Text showing operators:*
+- `Tj` (show string), `TJ` (show string array — alternates strings and numeric kerning adjustments), `'` (move to next line and show string), `"` (set word spacing, character spacing, move to next line, show string)
+
+*Color operators:*
+- `CS` (set stroke color space), `cs` (set fill color space), `SC` (set stroke color — up to 4 components), `SCN` (set stroke color — supports Pattern and additional components), `sc` (set fill color), `scn` (set fill color — supports Pattern), `G` (set stroke gray), `g` (set fill gray), `RG` (set stroke RGB), `rg` (set fill RGB), `K` (set stroke CMYK), `k` (set fill CMYK)
+
+*Graphics state operators:*
+- `q` (save graphics state — push), `Q` (restore graphics state — pop), `cm` (concatenate matrix to CTM), `w` (line width), `J` (line cap style — 0=butt, 1=round, 2=square), `j` (line join style — 0=miter, 1=round, 2=bevel), `M` (miter limit), `d` (dash pattern — array + phase), `ri` (rendering intent), `i` (flatness tolerance), `gs` (set parameters from ExtGState dictionary)
+
+*XObject and shading operators:*
+- `Do` (invoke named XObject — image, form, or PostScript), `sh` (paint area with shading pattern)
+
+*Inline image operators:*
+- `BI` (begin inline image), `ID` (begin image data — followed by raw bytes), `EI` (end inline image). The inline image dictionary uses abbreviated key names (`/W` for `/Width`, `/H` for `/Height`, `/CS` for `/ColorSpace`, etc.).
+
+*Marked content operators:*
+- `BMC` (begin marked content), `BDC` (begin marked content with properties), `EMC` (end marked content), `MP` (marked content point), `DP` (marked content point with properties)
+
+*Compatibility operators:*
+- `BX` (begin compatibility section), `EX` (end compatibility section). Unknown operators between `BX`/`EX` are silently ignored.
+
+**Font type differences and rendering requirements:**
+
+Each font type places different demands on the engine:
+
+*Type 1 fonts:*
+- Glyph outlines encoded as PostScript Type 1 charstrings (a stack-based bytecode). The engine must interpret hinting instructions (hstem, vstem, flex) and charstring operators (rmoveto, rlineto, rrcurveto, etc.).
+- Font data format: PFB (binary) or PFA (ASCII hex). Encrypted with the well-known `eexec` and charstring encryption.
+- Encoding: specified by the font dictionary's `/Encoding` entry. For subsetted Type 1 fonts, the encoding often uses a `/Differences` array that maps character codes to custom glyph names.
+- Metrics: glyph widths from the font dictionary's `/Widths` array. For non-embedded Type 1, use the built-in metrics from the font program or the Base 14 tables.
+- Multiple Master Type 1 fonts: rare in PDFs but technically possible. The engine should detect and handle the default instance; full Multiple Master interpolation is a Tier 2 feature.
+
+*TrueType fonts:*
+- Glyph outlines encoded as quadratic Bézier splines in the `glyf` table (or as CFF data in the `CFF ` table for OpenType/CFF).
+- Font data: a complete TrueType/OpenType font file (or a subset thereof). The engine must parse the font directory (`sfnt` header), `cmap`, `glyf`, `loca`, `head`, `hhea`, `hmtx`, `maxp`, `name`, `OS/2`, and `post` tables at minimum.
+- Encoding: TrueType fonts in PDFs can use either "simple" encoding (via the `/Encoding` entry, similar to Type 1) or "composite" encoding (via a CMap, when used as a CIDFont descendant). For simple TrueType, the character code typically indexes via the font's `cmap` table using platform 3 encoding 1 (Windows Unicode BMP) or platform 1 encoding 0 (Mac Roman), depending on the `/Encoding` value.
+- Hinting: TrueType instructions (bytecode) in the `fpgm`, `prep`, and individual glyph programs. Full hinting is not required for v1 — unhinted outlines at document resolution are acceptable. Hinting primarily matters at low DPI (screen rendering).
+
+*CFF (Compact Font Format) / OpenType-CFF:*
+- Glyph outlines encoded as CFF charstrings (Type 2 charstring format — cubic Bézier). The CFF format uses: Header, Name INDEX, Top DICT INDEX, String INDEX, Global Subr INDEX, and per-font CharStrings INDEX, Private DICT, and Local Subr INDEX.
+- Subroutines: CFF charstrings use both global and local subroutine calls (operators 10 and 29). The engine must implement subroutine flattening for rendering and must handle the biased numbering scheme (subr index = operand + bias, where bias depends on the number of subroutines).
+- CFF2 (used in newer OpenType/CFF2 variable fonts): not expected in most PDFs but should be detected and flagged if present.
+
+*CIDFont (Type 0 composite fonts):*
+- The "Type 0" font in PDF is a composite font: a top-level Type 0 font dictionary references a CIDFont descendant (either CIDFontType0 for CFF-based or CIDFontType2 for TrueType-based). A CMap maps character codes to CIDs (Character IDs), and the CIDFont maps CIDs to glyph outlines.
+- CMap chain: The `/Encoding` of the Type 0 font names a CMap. Predefined CMap names (e.g., `Identity-H`, `Identity-V`, `UniJIS-UTF16-H`) reference built-in CMap definitions. Custom CMaps are embedded as stream objects. The CMap may reference a `usecmap` parent for hierarchical definitions.
+- The `/W` and `/W2` arrays in the CIDFont dictionary define glyph widths (horizontal and vertical). These arrays use a compressed format: `[cid [w1 w2 ...]]` or `[cid_start cid_end w]`.
+- `/DW` (default width) and `/DW2` (default vertical metrics) provide defaults for CIDs not in the `/W` arrays.
+- `/CIDToGIDMap`: for CIDFontType2 (TrueType-based CIDFont), this maps CIDs to glyph IDs in the TrueType font. It can be `/Identity` (CID = GID) or a stream of 2-byte big-endian GID values.
+
+*Type 3 fonts:*
+- Glyph outlines defined as content streams (PDF operators, not font-specific bytecode). Each glyph is a small PDF page, essentially.
+- The font dictionary's `/CharProcs` maps glyph names to content streams. The `/Encoding` maps character codes to glyph names.
+- Type 3 glyph content streams can use most PDF operators including color, images, and even other fonts. The engine must recursively interpret these content streams.
+- The font matrix (`/FontMatrix`) transforms from glyph space to text space. Common values are `[0.001 0 0 0.001 0 0]` (1000 units per em, like Type 1) or `[1 0 0 1 0 0]` (glyph coordinates are directly in text space units).
+- Type 3 rendering must establish a new graphics state with the font matrix composed into the text rendering matrix. Color operators in the glyph stream apply to the glyph (unlike Type 1/TrueType where the glyph inherits the current color state based on the rendering mode).
+
+**Color space resolution chain:**
+
+When a color operator sets a color, the engine must resolve the color space and convert to the output color space. The resolution chain:
+
+1. **Device color spaces** (`DeviceRGB`, `DeviceCMYK`, `DeviceGray`): Direct color values in the named device space. Conversion to the output space depends on rendering intent. If a default color space is registered (e.g., `/DefaultRGB` in the page's color space resources), that default applies.
+
+2. **CIE-based color spaces** (`CalRGB`, `CalGray`, `Lab`): Device-independent color spaces with defined white points, gamma, and matrix parameters. The engine converts from the CIE-based space to the profile connection space (PCS) and then to the output device space.
+
+3. **ICCBased:** The color space references an ICC profile stream. The engine must parse the ICC profile to extract the color conversion (A2B and B2A tables or matrix/TRC). For v1, support ICC v2 and v4 profiles for the common classes: input, display, output, and color space conversion. Use the absolute colorimetric, relative colorimetric, perceptual, and saturation rendering intents.
+
+4. **Indexed:** Maps integer indices (0-N, typically 0-255) to colors in a base color space. The lookup table is a byte string where each entry has as many components as the base space. Resolution: decode the index, look up the base color, then resolve the base color space.
+
+5. **Separation:** A single-component space representing a named colorant (e.g., a spot color). Contains an `/AlternateSpace` and `/TintTransform` (a PDF function) for fallback rendering. The engine evaluates the tint transform to convert the separation tint value to the alternate space, then resolves the alternate space.
+
+6. **DeviceN:** Multi-component named colorants. Similar to Separation but with N named components, an alternate space, and a tint transform. DeviceN with `/Process` and `/Spot` sub-categories (PDF 2.0) must be parsed. The tint transform converts the N-component input to the alternate space.
+
+7. **Pattern:** Either a tiling pattern (repeating graphical content) or a shading pattern (smooth color gradients). Tiling patterns contain a content stream rendered at the pattern cell's scale and tiled across the painted area. Shading patterns are defined by shading dictionaries with function-based, axial, radial, free-form mesh, lattice mesh, Coons patch mesh, or tensor-product patch mesh types.
+
+**Shading types:**
+- Type 1 (function-based): color = f(x, y) for each point in the shading domain
+- Type 2 (axial): linear gradient between two points, parameterized by t ∈ [t0, t1]
+- Type 3 (radial): gradient between two circles, parameterized by t ∈ [t0, t1]
+- Type 4 (free-form Gouraud-shaded triangle mesh): vertices with colors, interpolated across triangles
+- Type 5 (lattice-form Gouraud-shaded triangle mesh): grid of vertices with colors
+- Type 6 (Coons patch mesh): 4-sided patches defined by 12 control points and 4 corner colors
+- Type 7 (tensor-product patch mesh): 4-sided patches defined by 16 control points and 4 corner colors
+
+**Tiling pattern rendering specifics:**
+
+Tiling patterns repeat a small content stream over an area. The rendering is complex because:
+
+1. **Pattern space:** The pattern has its own coordinate system defined by the pattern matrix. The pattern cell is defined by `/BBox` in pattern space. The cell is tiled at intervals of `/XStep` (horizontal) and `/YStep` (vertical) in pattern space.
+
+2. **Paint type:** PaintType 1 (colored): the pattern's content stream defines its own colors. PaintType 2 (uncolored): the pattern's content stream uses the current color from the invoking context. For PaintType 2, the renderer must pass the invoking color state into the pattern's rendering context.
+
+3. **Tiling type:** TilingType 1 (constant spacing): pattern cells are spaced exactly by XStep/YStep, with no distortion. TilingType 2 (no distortion): spacing may be adjusted slightly to fit an integral number of cells. TilingType 3 (faster): allows distortion for performance.
+
+4. **Infinite tiling:** The pattern conceptually tiles infinitely. The renderer must tile only the visible region (the intersection of the clipping path and the current drawing area). Compute the range of tile indices that overlap the visible region and render only those. For very small XStep/YStep values (a common stress test), this can mean thousands of tiles — enforce a configurable maximum tile count.
+
+5. **Pattern within pattern:** Tiling patterns can reference other patterns (including themselves, creating infinite recursion). The renderer must detect recursive patterns (via a visited set during pattern rendering) and abort with a diagnostic.
+
+**Shading rendering specifics for mesh types (Types 4-7):**
+
+The mesh-based shading types define smooth color gradients over complex geometric regions. They are the most demanding rendering task in the PDF specification.
+
+For Type 6 (Coons patch mesh) and Type 7 (tensor-product patch mesh):
+1. Each patch is defined by control points and corner colors. Type 6 uses 12 control points (4 boundary curves × 3 cubic Bézier control points, minus shared corners); Type 7 uses 16 (4×4 grid of control points, enabling interior shape control).
+2. The renderer subdivides each patch into triangles fine enough that linear color interpolation within each triangle produces visually smooth results. Adaptive subdivision based on patch curvature and screen-space size is preferred over fixed subdivision.
+3. Color interpolation: corner colors are bilinearly interpolated across the patch's parameter space (s, t) ∈ [0,1]². The patch geometry maps parameter space to page space.
+4. Adjacent patches share edges (the last edge of one patch becomes the first edge of the next). The renderer must handle the edge-sharing protocol for both row-continuous and column-continuous meshes.
+5. For Types 4 and 5 (triangle meshes), Gouraud shading is used: colors are linearly interpolated across each triangle's area based on barycentric coordinates.
+
+Several PDF features (shading patterns, tint transforms for Separation/DeviceN, transfer functions, halftone spot functions) use PDF function objects. The engine must implement all four function types:
+
+- **Type 0 (sampled function):** A lookup table with interpolation. The function maps input values to output values using a grid of samples. Between grid points, the engine interpolates (linear interpolation is required; higher-order is optional). Parameters: `/Domain`, `/Range`, `/Size` (grid dimensions), `/BitsPerSample`, `/Encode`, `/Decode`. The decode array maps sample indices to the function's domain; the encode array maps input values to sample indices.
+
+- **Type 2 (exponential interpolation function):** Computes `C0 + x^N · (C1 - C0)` where `x` is the input, `N` is the exponent, and `C0`/`C1` are the boundary values. Simple but used frequently for linear and power-curve color transitions. Note: when N=1, this is a linear interpolation; when N≠1, it produces gamma-like curves.
+
+- **Type 3 (stitching function):** Combines multiple sub-functions defined on adjacent intervals of the input domain. Parameters: `/Functions` (array of sub-functions), `/Bounds` (boundary points between intervals), `/Encode` (maps each interval to the sub-function's domain). Used to create piecewise-defined color gradients with different behaviors in different regions.
+
+- **Type 4 (PostScript calculator function):** A small PostScript-like stack language with arithmetic, comparison, and conditional operators. The engine must implement a bounded interpreter for this language. Operators include: `add`, `sub`, `mul`, `div`, `idiv`, `mod`, `neg`, `abs`, `ceiling`, `floor`, `round`, `truncate`, `sqrt`, `sin`, `cos`, `atan`, `exp`, `ln`, `log`, `cvi`, `cvr`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or`, `xor`, `not`, `bitshift`, `true`, `false`, `if`, `ifelse`, `copy`, `exch`, `pop`, `dup`, `roll`, `index`. Type 4 functions must be resource-bounded: enforce a maximum stack depth (100) and maximum instruction count (10,000) to prevent hostile inputs from causing unbounded computation.
+
+**Metadata extraction specifics:**
+
+PDF documents carry metadata in two locations:
+
+1. **Document Info dictionary** (`/Info` in the trailer): Contains `/Title`, `/Author`, `/Subject`, `/Keywords`, `/Creator`, `/Producer`, `/CreationDate`, `/ModDate`, and optionally `/Trapped`. Dates are in PDF date format: `D:YYYYMMDDHHmmSSOHH'mm'` where `O` is the UTC offset indicator. The parser must handle: missing timezone offsets (assume local), two-digit years (rare but exists), and invalid date strings (report as-is rather than crashing).
+
+2. **XMP metadata** (`/Metadata` stream on the catalog, page objects, or individual resource objects): An XML packet using the Extensible Metadata Platform format. The engine must parse enough XMP to extract: Dublin Core properties (dc:title, dc:creator, dc:description, dc:subject), XMP basic properties (xmp:CreateDate, xmp:ModifyDate, xmp:CreatorTool), PDF-specific properties (pdf:Producer, pdf:Keywords), and PDF/A identification (pdfaid:part, pdfaid:conformance). Full XMP schema validation is not required for v1, but the engine must preserve XMP metadata byte-perfectly during round-trip operations (XMP packets often contain padding whitespace that must be preserved).
+
+When Info dictionary and XMP metadata disagree (common — many producers update one but not the other), the engine reports both and lets the consumer decide which to trust. For PDF/A conformance, XMP is authoritative.
+
+**Transparency compositing model:**
+
+The rendering pipeline must implement the full PDF transparency model as specified in ISO 32000-1 §11.6:
+
+The compositing formula for each pixel is:
+```
+Cr = (1 - αs/αr) · Cb + (αs/αr) · ((1 - αb) · Cs + αb · B(Cb, Cs))
+αr = αs + αb · (1 - αs)
+```
+Where: Cr = result color, Cb = backdrop color, Cs = source color, αs = source alpha (including shape and opacity), αb = backdrop alpha, αr = result alpha, B = blend function.
+
+For soft masks, the source alpha is modified: `αs = q · f_s · f_j · f_k`, where q = object opacity, f_s = shape (from the geometry), f_j = soft mask value, f_k = if in knockout group, uses the initial backdrop alpha rather than accumulated alpha.
+
+The renderer must maintain a compositing stack: each transparency group pushes a new compositing buffer. Group results are composited back into the parent when the group ends. The buffer management must handle:
+- Isolated groups (transparent initial backdrop)
+- Knockout groups (per-element compositing against initial backdrop)
+- Nested groups (arbitrary nesting depth)
+- Different blend modes at each nesting level
+- Soft masks applied to groups
+
+#### `monkeybee-write`
+
+Serializes the document model back to valid PDF bytes.
+
+Key responsibilities:
+- Object serialization (all PDF object types)
+- Cross-reference table/stream generation
+- Stream compression and filter chain application
+- Full document rewrite
+- Incremental save (append-only)
+- Structural validity enforcement
+- Page tree construction and manipulation
+- Resource dictionary management
+- Content stream generation
+- Font embedding and subsetting for generated content
+- Metadata generation and update
+- Encryption for output files
+- Linearization for output files (future)
+
+**Content stream generation specifics:**
+
+The write path must generate content streams for:
+1. **New pages in generated documents.** The generation API accepts high-level drawing commands (draw text, draw image, draw rectangle, set color, etc.) and emits a valid content stream. The emitter must: track graphics state to minimize redundant state-setting operators (don't emit `rg` if the color hasn't changed), properly balance `q`/`Q` pairs, emit `BT`/`ET` around text operations, and generate efficient `TJ` arrays with kerning adjustments rather than positioning each glyph individually.
+2. **Annotation appearance streams.** Per the annotation contract in Part 5, each annotation type requires a generated appearance stream (form XObject). The appearance stream must set its own graphics state cleanly (it inherits the default state, not the page's state at the point of rendering).
+3. **Annotation flattening.** When burning annotations into page content, the engine appends operators to the page's content stream. The appended operators must be wrapped in a `q`/`Q` pair to avoid contaminating the existing graphics state, and must correctly transform from the annotation's coordinate space to the page's coordinate space.
+4. **Redaction application.** As described in Part 5, applying redactions requires rewriting the page content stream with the redacted operators removed and the overlay content inserted.
+
+**Font embedding for generated content:**
+
+When generating new pages with text, the write path must embed the fonts used:
+1. Determine which glyphs are actually used on the page.
+2. Subset the font to include only those glyphs. For TrueType: rebuild `cmap`, `glyf`, `loca`, `hmtx` tables with only the used glyphs; renumber glyph IDs starting from 0 (with .notdef at 0); update `maxp`, `head`, `hhea`. For CFF: rebuild the CharStrings INDEX, Private DICT, and Local/Global Subr INDEXes with only the used glyphs. For Type 1: subset the CharStrings dictionary and re-encrypt.
+3. Generate the font dictionary, font descriptor, widths array, and ToUnicode CMap for the subsetted font.
+4. Embed the subsetted font program as a stream object with appropriate compression.
+5. For CIDFonts: generate the CIDFont descriptor with `/DW` and `/W` arrays, the CMap (typically Identity-H for Unicode-mapped fonts), and the CIDToGIDMap (typically Identity for subsetted TrueType CIDFonts).
+6. Tag the font name with a 6-letter random prefix followed by `+` (e.g., `ABCDEF+ArialMT`) to indicate subsetting. This is a convention, not a requirement, but it aids debugging and conformance checking.
+
+**Document generation API:**
+
+The generation API is the public surface for creating new PDFs from scratch. It must be high-level enough to be useful without forcing the caller to understand PDF internals, but low-level enough to express the full range of PDF content.
+
+API layers:
+1. **Document builder:** Create a new document, set metadata (title, author, producer), configure output options (PDF version, encryption, compression).
+2. **Page builder:** Add pages with specified dimensions and rotation. Set page-level resources.
+3. **Content builder:** A fluent API for building page content:
+   - Text operations: `begin_text()`, `set_font(name, size)`, `set_color(color)`, `move_to(x, y)`, `show_text(string)`, `show_text_with_kerning(segments)`, `end_text()`.
+   - Graphics operations: `move_to(x, y)`, `line_to(x, y)`, `curve_to(cp1, cp2, end)`, `close_path()`, `stroke()`, `fill()`, `clip()`, `set_line_width(w)`, `set_dash_pattern(array, phase)`.
+   - Image operations: `draw_image(image_data, format, rect)` — accepts JPEG, PNG, or raw pixel data and embeds appropriately (JPEG is passed through as DCTDecode; PNG is re-encoded as FlateDecode with PNG predictors; raw pixels are compressed with FlateDecode).
+   - State operations: `save_state()`, `restore_state()`, `transform(matrix)`, `set_blend_mode(mode)`, `set_opacity(alpha)`.
+   - Annotation operations: `add_annotation(type, rect, properties)` — delegates to the annotate crate.
+4. **Resource management:** The builder automatically tracks which fonts, images, and ExtGState dictionaries are used and generates the appropriate resource dictionaries. The caller does not manually manage resource names.
+
+The content builder emits content stream operators directly, tracking the graphics state to avoid redundant operator emission. The builder validates state consistency: `stroke()` without a preceding path produces an error, `end_text()` without `begin_text()` produces an error, unbalanced `save_state()`/`restore_state()` produces a warning.
+
+**Structural validity requirements for well-formed PDF output:**
+
+The write path must enforce the following invariants. These are not optional — a PDF that violates these will be rejected by conforming readers:
+
+1. **Header:** Must begin with `%PDF-1.N` or `%PDF-2.0`. If the file contains binary data (almost always), the second line should be a comment containing at least four bytes with values ≥ 128 (e.g., `%âãÏÓ`). This signals to transport layers that the file is binary.
+
+2. **Cross-reference integrity:** Every indirect object referenced anywhere in the document must have a cross-reference entry. The entry's byte offset must be exactly correct (pointing to the first digit of the object number in the `N G obj` line). The `/Size` entry in the trailer must be one greater than the highest object number used.
+
+3. **Stream length accuracy:** Every stream's `/Length` entry must exactly match the number of bytes between `stream\n` (or `stream\r\n`) and `endstream`. Off-by-one errors here are one of the most common causes of PDF corruption. The write path should compute lengths after all content is finalized, not before.
+
+4. **Page tree validity:** The page tree must have a root node (the `/Pages` object referenced by `/Root` → `/Pages`). Every `/Pages` node must have a `/Kids` array and a `/Count` that accurately reflects the total number of leaf pages in its subtree. Every page object must have `/Type /Page` and a `/Parent` back-reference.
+
+5. **Catalog completeness:** The document catalog (`/Type /Catalog`) must contain at minimum `/Pages`. Recommended: `/MarkInfo`, `/Lang`, `/ViewerPreferences` for profile-compliant output.
+
+6. **Font validity for generated content:** Embedded fonts must include: the font program stream with correct `/Length`, `/Length1` (for Type 1), `/Length2`, `/Length3` fields; a `/FontDescriptor` with `/FontBBox`, `/Flags`, `/ItalicAngle`, `/Ascent`, `/Descent`, `/CapHeight`, `/StemV`; and a `/Widths` array (or `/W` for CIDFonts) that matches the embedded glyph set.
+
+7. **Encryption consistency:** If the output is encrypted, every string and stream must be encrypted with the correct per-object key (derived from the object number and generation number). The encryption dictionary must correctly specify the algorithm, key length, and permissions.
+
+8. **Incremental save structure:** An incremental save appends: all new/modified objects, a new cross-reference section covering those objects, and a new trailer with `/Prev` pointing to the previous cross-reference section's byte offset. The appended section must not duplicate unchanged objects. The `/Size` in the new trailer must cover the full object number space (not just the new objects).
+
+**Signature-safe write path:**
+
+For preserve-mode / incremental-append workflows that must not invalidate existing digital signatures:
+
+- The writer must not modify any bytes in the existing file. New content is strictly appended.
+- The new cross-reference section references only new or modified objects. Unchanged objects retain their original byte offsets.
+- Byte ranges covered by existing signatures (the `/ByteRange` values in signature dictionaries) must remain untouched.
+- The writer must track which objects were modified and ensure the incremental update correctly supersedes only those objects.
+
+#### `monkeybee-annotate`
+
+Annotation creation, modification, and management.
+
+Key responsibilities:
+- Annotation types: Text, Link, FreeText, Line, Square, Circle, Polygon, PolyLine, Highlight, Underline, Squiggly, StrikeOut, Stamp, Caret, Ink, Popup, FileAttachment, Sound, Widget, Redact
+- Geometry-aware placement using shared page-state understanding
+- Appearance stream generation and management
+- Annotation flattening (burn into page content)
+- Annotation property modification
+- Reply chains and markup relationships
+- Form field interaction (AcroForm widgets)
+- Round-trip preservation: add annotation → save → reopen → verify
+
+**Appearance stream generation requirements per annotation type** are detailed in Part 5 (Subsystem Contracts).
+
+#### `monkeybee-extract`
+
+Structured extraction and inspection.
+
+Key responsibilities:
+- Text extraction with character positions, font information, and reading order heuristics
+- Metadata extraction (document info, XMP)
+- Page structure inspection
+- Resource inventory (fonts, images, color spaces)
+- Object graph inspection and querying
+- Image extraction
+
+**Object graph inspection:**
+
+The inspection API provides programmatic access to the document's internal structure:
+
+1. **Object-level access:** Look up any indirect object by number. Return its parsed representation (type, value, dictionary keys, stream metadata). For streams, report: raw length, decoded length, filter chain, and dictionary contents — without requiring full decompression.
+
+2. **Reference graph:** Given an object, list all objects it references (forward references) and all objects that reference it (back references). This enables dependency analysis: "what happens if I delete this object?" — check its back references.
+
+3. **Page tree visualization:** Render the page tree hierarchy showing: node types (Pages vs. Page), child counts, inherited attributes at each level, and which pages resolve to which leaf nodes.
+
+4. **Cross-reference dump:** Show the cross-reference table/stream with repair annotations: which entries were repaired, what the original values were, which objects are in object streams, and the incremental update chain with per-update object inventories.
+
+5. **Stream analysis:** For content streams, show the operator sequence with operand types and values without full interpretation. This is "disassembly mode" — useful for understanding what a content stream does without rendering it. Include byte offsets for each operator to correlate with hex dumps.
+
+6. **Resource dependency map:** Given a page, trace all transitive resource dependencies: fonts (with their encoding and embedded data info), images (with dimensions, color space, compression), form XObjects (with their own resource dependencies), patterns, color spaces, and ExtGState dictionaries. This answers "what does this page need to render correctly?"
+- Embedded file extraction
+- Bookmark/outline extraction
+- Form field data extraction
+- Diagnostics: unsupported features, degraded regions, compatibility notes
+- Machine-readable extraction output (JSON, structured text)
+
+**Embedded file extraction:**
+
+PDF documents can contain embedded files (attachments) in several locations:
+1. Document-level: `/Root` → `/Names` → `/EmbeddedFiles` name tree. Each entry maps a filename to a file specification dictionary containing the embedded file stream.
+2. Page-level: FileAttachment annotations contain embedded file streams.
+3. Form-level: Widget annotations on push-button fields can reference file attachments.
+
+The extraction pipeline must: enumerate all embedded files from all locations, extract the file data (decompressing through the filter chain), preserve the original filename and MIME type (from the `/UF` and `/Subtype` entries), and report file sizes and checksums.
+
+**Bookmark/outline extraction:**
+
+The document outline (bookmarks) is a tree rooted at `/Root` → `/Outlines`. Each outline item has: `/Title` (display text), `/Dest` or `/A` (destination — a page reference with view parameters, or an action dictionary), `/First` and `/Last` (child items), `/Next` and `/Prev` (sibling items), `/Count` (number of descendants), and `/C` (color) and `/F` (flags: italic, bold).
+
+Edge cases: circular outline trees (detect via visited-set), outline items with actions instead of destinations (actions may reference external URIs, JavaScript, or other documents — extract what is safe, report the rest), very deep outline trees (hundreds of nesting levels in programmatically generated documents).
+
+**Form field data extraction:**
+
+Extract all AcroForm field values as structured data: field name (full hierarchical path, e.g., `form1.section2.field3`), field type, current value, default value, options (for choice fields), flags (required, read-only, etc.). This enables form data round-trip: extract values → modify → fill back in → save.
+
+**Text extraction pipeline:**
+
+Text extraction reuses the same content stream interpretation pipeline as the renderer but operates in "analysis" mode instead of "render" mode. The pipeline:
+
+1. Interpret the content stream, tracking the text matrix and text rendering matrix exactly as the renderer would.
+2. For each `Tj`, `TJ`, `'`, or `"` operator, decode the string using the font's encoding (same fallback chain as described in Part 2).
+3. Record each character's Unicode value, position (in page coordinates, after applying the text matrix, CTM, and page rotation), font name, font size, and rendering mode.
+4. After all content streams for a page are processed, sort characters into reading order. The heuristic: group characters into lines (characters with similar Y positions within a tolerance of ~font-size/3), then sort lines top-to-bottom, then sort characters within each line left-to-right (or right-to-left for RTL scripts, detected by Unicode bidi category).
+5. Detect word boundaries by comparing horizontal gaps between consecutive characters to a threshold (typically 30-50% of the average character width in the current font).
+6. Detect paragraph boundaries by analyzing vertical gaps between lines.
+
+**Text extraction edge cases:**
+
+- **Text rendering mode 3 (invisible text):** Characters rendered with Tr=3 are invisible but still carry positional and Unicode information. Extraction must include them (they are the text layer in scanned PDFs with OCR overlays). The extraction output should flag invisible text distinctly.
+- **Overlapping text:** Some producers render text multiple times at the same position (e.g., once for fill, once for stroke, or as a shadow effect). The extraction pipeline must deduplicate: characters at the same position (within a tolerance of 0.5pt) with the same Unicode value are merged into one.
+- **Reversed text matrices:** Some producers position text right-to-left even for LTR scripts by using negative horizontal scaling or a mirrored text matrix. The extraction pipeline must detect this and reverse the character order to produce the correct logical reading order.
+- **Vertical text:** CJK documents may use vertical writing mode (indicated by a `-V` suffix on the CMap name, e.g., `UniJIS-UTF16-V`). Vertical text flows top-to-bottom, right-to-left. The extraction pipeline must detect vertical writing mode and adjust line/column grouping accordingly.
+- **Artificial spacing:** Some producers insert explicit spaces between every character for tracking/justification. The extraction pipeline should detect artificially spaced text (uniform gaps significantly smaller than a normal word space) and collapse the spacing.
+- **Text in patterns and form XObjects:** Text appearing inside tiling patterns or form XObjects must be extracted with the correct transformation applied (the pattern matrix or form matrix composed with the invoking CTM).
+- **Marked content for reading order:** Tagged PDFs use marked content sequences (`BMC`/`BDC`/`EMC`) with structure tags that define logical reading order. When available, the extraction pipeline should prefer the tagged reading order over geometric heuristics. However, most real-world PDFs are not tagged; geometric heuristics are the primary path.
+
+#### `monkeybee-proof`
+
+Automated validation and evidence generation.
+
+Key responsibilities:
+- Pathological corpus management (acquisition, indexing, categorization)
+- Render comparison harness (Monkeybee vs. reference renderers)
+- Round-trip validation harness (load → modify → save → reload → compare)
+- Annotation round-trip validation
+- Generation validation (create → render under Monkeybee and references)
+- Compatibility ledger aggregation and reporting
+- Performance benchmarking harness
+- Evidence artifact generation (diffs, reports, manifests, traces)
+- Regression detection
+- Coverage tracking across corpus categories
+- Conformance validation integration (Arlington model, profile checks)
+
+**Multi-oracle rendering arbitration:**
+
+The proof harness does not trust any single external renderer as ground truth. Instead, it uses consensus-style arbitration:
+
+1. Render each test page with Monkeybee, PDFium, MuPDF, pdf.js, and Ghostscript.
+2. Compute perceptual difference metrics (SSIM, DSSIM, or perceptual hash distance) between each pair of renderers.
+3. Identify consensus: if 3+ renderers agree (within a perceptual tolerance), that rendering is treated as the expected output. Monkeybee is measured against the consensus.
+4. Where renderers disagree: record the disagreement with per-renderer output, investigate the cause (spec ambiguity, renderer bug, or genuine implementation choice), and document the resolution.
+5. Where Monkeybee matches consensus but one renderer disagrees, that is evidence of the other renderer's bug — useful for the project's credibility narrative.
+
+**Conformance infrastructure (Arlington model):**
+
+The Arlington PDF Model is a machine-readable description of every dictionary, array, and value constraint in the PDF specification. The engine should use it for:
+
+1. **Validation:** Given a parsed PDF object, validate its keys, value types, required entries, and value constraints against the Arlington model. This replaces ad-hoc validation with systematic, spec-derived checking. Example: the Arlington model specifies that a Page dictionary must have `/Type` (value: `Page`), `/Parent` (indirect reference to Pages node), and must inherit or define `/MediaBox` (array of 4 numbers). The validator checks all of these mechanically.
+
+2. **Code generation:** Generate Rust type definitions, validation functions, and serialization helpers from the Arlington model. This ensures the engine's understanding of PDF dictionaries stays synchronized with the specification. The generated types provide compile-time guarantees that required fields are present and correctly typed.
+
+3. **Conformance testing:** For profile-specific output (PDF/A-4, PDF/X-6), the Arlington model's profile annotations indicate which features are required, optional, or prohibited. The write path uses these annotations to validate output conformance. For PDF/A-4 specifically: all fonts must be embedded, all color spaces must be device-independent or have an output intent, `/Metadata` must be present as XMP, and transparency must use only the blend modes permitted by the profile.
+
+4. **Diagnostic enrichment:** When validation fails, the Arlington model provides the spec reference (section number, table number) for the violated constraint. This makes diagnostics directly actionable: instead of "missing key in dictionary," the error says "Page dictionary missing required /MediaBox (ISO 32000-2 Table 30)."
+
+**Visual and structural PDF comparison:**
+
+The proof harness includes a comparison system that goes beyond pixel-diffing:
+
+1. **Perceptual image comparison:** Render both versions at the same DPI, compute SSIM (Structural Similarity Index) per page. SSIM > 0.98 is "visually identical." SSIM between 0.95-0.98 is "visually similar, minor differences." SSIM < 0.95 requires investigation. Additionally, compute a perceptual hash and DSSIM (Structural Dissimilarity) for a second opinion.
+
+2. **Structural comparison:** Compare the document object trees (page count, resource sets, font dictionaries, annotation lists, metadata) independently of rendering. This catches cases where rendering looks identical but the underlying structure has changed (e.g., font names rewritten, resources duplicated, metadata lost).
+
+3. **Text comparison:** Extract text from both versions and diff. This catches text extraction regressions separately from rendering regressions.
+
+4. **Reconciliation:** When structural and visual comparisons disagree (structure changed but visual is identical, or structure unchanged but visual differs), flag for manual investigation. These discrepancies often indicate subtle bugs.
+
+#### `monkeybee-cli`
+
+Command-line interface for all engine capabilities.
+
+Key responsibilities:
+- `monkeybee render <file> [--pages] [--format png|svg] [--dpi]`
+- `monkeybee extract <file> [--text|--meta|--images|--fonts|--structure]`
+- `monkeybee inspect <file> [--objects|--xref|--pages|--resources|--updates]`
+- `monkeybee annotate <file> --add <type> [--position] [--content] -o <o>`
+- `monkeybee edit <file> [--add-page|--remove-page|--reorder|--metadata] -o <o>`
+- `monkeybee generate [--template] -o <o>`
+- `monkeybee validate <file> [--roundtrip|--structure|--render-compare|--conformance]`
+- `monkeybee diagnose <file>` — full compatibility report
+- `monkeybee proof <corpus-dir>` — run the full proof harness
+- `monkeybee conformance <file> [--profile pdf-a4|pdf-x6|pdf-ua2]` — profile-specific validation
+
+**Command details:**
+
+*render:* Renders specified pages (default: all) to the specified format at the given DPI (default: 150). Supports page range syntax (`1-5`, `1,3,7`, `1-3,5-`). For SVG output, emits one SVG file per page. For PNG/JPEG, emits one image file per page. Output files are named `<basename>-page-<N>.<ext>`. If `--compare-ref` is specified, also renders with PDFium/MuPDF and outputs a visual diff image alongside. Returns a non-zero exit code if any page fails to render, with diagnostics on stderr.
+
+*extract:* Extracts structured data from the document. `--text` outputs UTF-8 text with optional position information (`--text --positions` outputs JSON with per-character coordinates). `--meta` outputs document metadata as JSON (Info dictionary + XMP). `--images` extracts all embedded images to individual files. `--fonts` outputs a font inventory: name, type, encoding, embedded status, glyph count, and ToUnicode coverage. `--structure` outputs the document structure: page tree, resource map, cross-reference summary, incremental update chain, and annotation inventory.
+
+*inspect:* Low-level document structure inspection. `--objects N` dumps the raw parsed representation of object N. `--xref` dumps the cross-reference table with repair annotations. `--pages` dumps the page tree with resolved inherited attributes. `--resources N` dumps the resolved resource dictionary for page N. `--updates` dumps the incremental update chain with per-update object lists. Output is JSON by default, with `--format pretty` for human-readable indented output.
+
+*diagnose:* Produces the full compatibility ledger for the document as specified in Part 6. Output is JSON. This is the "doctor's report" command: what features are present, what tier each is classified as, what repairs were applied, and what the overall compatibility assessment is. Useful for triaging problem PDFs.
+
+*validate:* Runs validation checks. `--structure` checks structural validity (xref integrity, page tree, required entries). `--roundtrip` performs load-save-reload and compares. `--render-compare` renders and compares against reference renderers. `--conformance` checks against the specified profile's requirements. Returns non-zero exit code on validation failure with structured diagnostic output.
+
+*proof:* Runs the full proof harness against a corpus directory. Produces the corpus-level compatibility report, regression summary, and evidence artifacts. Designed for CI integration: returns non-zero exit code if any regression is detected or if the pass rate drops below the configured threshold.
+
+---
+
+## Part 4 — Shared invariants
+
+These invariants apply across all crates and all operations. They are the architectural commitments that make the closed loop possible.
+
+### Object identity
+
+Every PDF object in the document model has a stable identity (object number + generation number for indirect objects). Object identity is preserved across parse → manipulate → serialize cycles. Reference resolution is explicit and traceable.
+
+### Provenance preservation
+
+The core document model preserves enough information about the original document structure that round-trip operations do not silently destroy structure. Canonicalization normalizes for sanity but does not erase provenance, geometry, ordering, or writeback-relevant metadata.
+
+In preserve mode, the model additionally retains:
+- Raw byte spans for unmodified objects (enabling byte-perfect write-back)
+- Original whitespace and formatting
+- Original cross-reference entry formats (table vs. stream)
+- Object stream membership (which objects were packed into which object streams)
+
+### Geometry guarantees
+
+All subsystems that deal with spatial operations (rendering, annotation, extraction, editing) share the same coordinate geometry and transformation pipeline from `monkeybee-core`. No subsystem maintains its own private geometry stack that can drift.
+
+### Mutation safety
+
+The document model supports disciplined mutation: adding, modifying, and removing objects with explicit change tracking. Mutations produce a well-defined delta that the write path can serialize. Mutations do not corrupt the object graph or violate reference integrity.
+
+The change tracking model:
+- Every mutation is recorded as (object_id, old_value_hash, new_value). This enables both incremental save (serialize only changed objects) and undo (restore old values).
+- New objects are assigned object numbers from a monotonically increasing allocator. Generation numbers for new objects are 0.
+- Deleted objects are recorded in the free list. Their generation number is incremented.
+- Reference integrity is maintained by a reference index: the model knows which objects reference which other objects, enabling orphan detection and referential integrity checks before save.
+
+### Error taxonomy
+
+All errors across the engine use a shared error taxonomy:
+- **Parse errors**: malformed syntax, invalid structure, unrecoverable corruption
+- **Semantic errors**: spec violations, unsupported features, incompatible combinations
+- **Render errors**: missing resources, unsupported operators, visual degradation
+- **Write errors**: serialization failures, structural invalidity
+- **Round-trip errors**: post-save validation failures
+- **Compatibility notes**: detected features handled at Tier 2 or Tier 3
+
+Every error carries enough context for diagnostics, compatibility accounting, and debugging. Context includes: the object number (if applicable), byte offset (if applicable), the subsystem that generated the error, a human-readable description, and a machine-readable error code.
+
+**Error code structure:**
+
+Error codes are hierarchical strings: `{subsystem}.{category}.{specific}`. Examples:
+
+- `parse.xref.wrong_offset` — cross-reference entry points to wrong byte offset
+- `parse.xref.missing_entry` — referenced object has no cross-reference entry
+- `parse.xref.circular_prev` — /Prev chain forms a cycle
+- `parse.stream.decompression_failed` — filter chain decompression produced an error
+- `parse.stream.wrong_length` — /Length value does not match actual stream data length
+- `parse.stream.truncated` — stream data shorter than expected
+- `parse.object.circular_reference` — object reference chain forms a cycle
+- `parse.object.duplicate_key` — dictionary contains duplicate key (last-wins applied)
+- `parse.encrypt.wrong_password` — provided password does not decrypt the file
+- `parse.encrypt.unsupported_handler` — non-standard security handler detected
+- `font.missing_tounicode` — font has no ToUnicode CMap; text extraction will use fallback
+- `font.broken_embedded` — embedded font data is corrupt; using substitution
+- `font.missing_glyph` — requested glyph not found in font; using .notdef
+- `font.no_embedded_data` — font is not embedded and no system substitute found
+- `font.encoding_conflict` — font dictionary encoding conflicts with embedded font encoding
+- `render.transparency.unsupported_blend` — unknown blend mode encountered
+- `render.color.missing_profile` — ICCBased color space references missing profile stream
+- `render.color.profile_parse_failed` — ICC profile data is invalid
+- `render.pattern.recursive` — tiling pattern references itself
+- `render.image.decode_failed` — image data could not be decoded
+- `render.xobject.postscript` — PostScript XObject detected (Tier 2/3)
+- `write.xref.offset_mismatch` — self-consistency check: written offset doesn't match xref entry
+- `write.stream.length_mismatch` — self-consistency check: stream length doesn't match /Length
+- `compat.xfa.detected` — XFA form data detected
+- `compat.xfa.dynamic_no_fallback` — dynamic XFA with no AcroForm fallback
+- `compat.flash.detected` — Flash/RichMedia content detected
+- `compat.postscript_xobject` — PostScript XObject detected
+
+**Error severity levels:**
+
+- **Fatal:** The operation cannot continue (e.g., cannot decrypt file, no valid xref found even after repair). The engine returns an error result.
+- **Error:** A significant problem was encountered but the operation can continue with degraded results (e.g., a font is missing and substituted, an image cannot be decoded). The result includes degradation markers.
+- **Warning:** A minor deviation from spec was detected and automatically handled (e.g., wrong stream length corrected, duplicate dictionary key resolved). The result is correct but the input was technically malformed.
+- **Info:** A notable feature was detected that may be relevant for compatibility reporting (e.g., XFA detected, encryption present, optional content layers present).
+
+All errors at all severity levels are collected into the compatibility ledger. Fatal errors terminate the current operation but do not crash the process.
+
+### Content stream contract
+
+Content stream parsing and interpretation follow a shared contract:
+- The graphics state machine is implemented once in a shared location.
+- Rendering, extraction, and inspection all consume content streams through the same interpretation pipeline.
+- The pipeline supports both "execute for rendering" and "analyze for extraction" modes without duplicated logic.
+- The pipeline emits events (operator dispatched, state changed, text shown, path painted, etc.) that downstream consumers can subscribe to selectively.
+
+**Event model:**
+
+The content stream interpreter is structured as an event emitter. Each operator in the content stream produces one or more events. Consumers register for the event categories they need:
+
+- **StateChange events:** Emitted whenever the graphics state changes. Includes: matrix change (from `cm`), color change (from color operators), text state change (from `Tc`, `Tw`, `Tz`, `TL`, `Tf`, `Tr`, `Ts`), line property change, ExtGState application, save/restore. Consumers: renderer (to update drawing state), extractor (to track text state).
+
+- **PathPaint events:** Emitted when a path is stroked, filled, or used for clipping (`S`, `f`, `B`, `W`, etc.). Includes the fully constructed path (list of subpaths with segments), the paint mode (stroke/fill/clip), and the relevant graphics state snapshot (color, line properties, CTM, blend mode). Consumers: renderer (to rasterize), extractor (to analyze page layout geometry).
+
+- **TextShow events:** Emitted for `Tj`, `TJ`, `'`, `"` operators. Includes: the raw byte string(s), decoded Unicode characters, per-character positions (in both text space and page space), font reference, font size, rendering mode, character spacing, and word spacing adjustments. Consumers: renderer (to draw glyphs), extractor (to collect text with positions).
+
+- **ImagePaint events:** Emitted for `Do` (image XObject) and `BI`/`ID`/`EI` (inline image). Includes: decoded image data, color space, dimensions, the CTM mapping the image to page space, interpolation flag, and any soft mask. Consumers: renderer (to composite the image), extractor (to catalog images).
+
+- **FormXObject events:** Emitted when `Do` invokes a form XObject. Includes: the form's resource dictionary, matrix, bounding box, and content stream reference. The interpreter recursively enters the form's content stream with the appropriate state setup. Consumers receive a "begin form" / "end form" bracket around the nested events.
+
+- **MarkedContent events:** Emitted for `BMC`, `BDC`, `EMC`, `MP`, `DP`. Includes: tag name, properties dictionary (if present), and optional content group reference (for layer visibility). Consumers: extractor (for tagged PDF structure), renderer (for optional content visibility).
+
+- **Error events:** Emitted when the interpreter encounters an invalid operator, wrong operand count, missing resource, or other error. In tolerant mode, the interpreter continues after the error. The error event includes the byte offset, the problematic operator, and a description. Consumers: all (for diagnostics and compatibility ledger).
+
+The event model ensures single-pass interpretation: the content stream is parsed and interpreted exactly once, and all consumers receive the events they need simultaneously. This avoids the performance cost of re-interpreting the same content stream for different purposes (rendering + extraction + inspection).
+
+---
+
+## Part 5 — Subsystem contracts
+
+### Object model contract
+
+The PDF object model in `monkeybee-core` must faithfully represent all PDF 2.0 object types. Indirect objects carry object number + generation number. Streams carry both the dictionary and the raw/decoded data. The object graph supports forward and reverse reference lookups. Object access is zero-copy where practical and always safe.
+
+**Invariants:**
+- Every indirect object has a unique (object_number, generation_number) pair.
+- Resolving an indirect reference always terminates (no infinite loops). The resolver maintains a visited set per resolution chain and produces an error for circular references.
+- Dictionary key order is preserved (insertion order) for provenance preservation, but semantics are order-independent.
+- Stream data is lazily decoded: raw bytes are always available, decoded bytes are produced on demand and may be cached.
+- The object model is thread-safe for read access. Write access requires exclusive ownership (enforced by Rust's ownership model).
+- Null objects and free-list objects are distinguishable: a reference to a free object resolves to null, but a null value stored directly in a dictionary is a different semantic state.
+
+**Data flow:** Raw bytes → parser → object model (in core) → consumers (renderer, extractor, writer, annotator). The object model is the single shared representation.
+
+**Edge cases:**
+- Object streams (PDF 1.5+): multiple objects packed into a single compressed stream object. The parser must extract individual objects from the stream. Object numbers within object streams do not have independent generation numbers (always 0).
+- Self-referencing objects: a dictionary that references itself (directly or indirectly). Must not cause infinite loops during traversal, serialization, or garbage collection.
+- Extremely large arrays or dictionaries (100,000+ entries): the model must handle these without O(n²) behavior on lookup. Use efficient data structures (hash maps for dictionaries, vectors for arrays).
+
+### Cross-reference and update contract
+
+Cross-reference tables and streams must be parsed, repaired when malformed, and regenerated on save. Incremental updates must be parsed as a chain and merged into the object graph with correct precedence. The write path must support both full-rewrite (rebuild xref from scratch) and incremental-append (add new xref section) save modes.
+
+**Invariants:**
+- After parsing, the merged cross-reference provides a single authoritative mapping from object number to byte offset (or object stream location). Later incremental updates override earlier ones.
+- In tolerant mode, every repair action is recorded: which entries were repaired, what the original (wrong) value was, what the discovered (correct) value is, and what repair strategy found it.
+- In preserve mode, the original cross-reference structure (table vs. stream, entry order, formatting) is recorded so that incremental saves can produce a structurally compatible append section.
+- The write path's full-rewrite mode produces a single cross-reference section covering all live objects. No free entries except the mandatory head-of-free-list entry (object 0).
+- The write path's incremental-append mode produces a cross-reference section covering only new/modified/deleted objects, with a `/Prev` pointer to the existing cross-reference.
+
+**Failure modes:**
+- Cross-reference pointing to middle of an object (wrong offset): recovered by scanning for `N 0 obj`.
+- Cross-reference entry count mismatch (declared N entries, actual M entries): use the actual count, record diagnostic.
+- Hybrid cross-reference (both table and stream in the same file): cross-validate, prefer stream entries for objects present in both.
+- Object stream containing objects that are also listed as non-stream objects in the xref: prefer the xref table's byte-offset entry (it is more likely to be the latest version).
+
+### Page inheritance contract
+
+Page attributes (MediaBox, CropBox, Resources, Rotate, etc.) are inherited down the page tree. The core must resolve inherited attributes explicitly so that consumers (renderer, extractor, annotator) always see the effective values, not raw tree fragments.
+
+**Inheritable attributes** (per ISO 32000-2 §7.7.3.4): `Resources`, `MediaBox`, `CropBox`, `Rotate`. Note: `BleedBox`, `TrimBox`, and `ArtBox` are NOT inheritable — they must be specified on the page object itself. A common producer bug is placing these on a parent node; the engine should handle this gracefully in tolerant mode (accept the inheritance) while flagging it as non-conforming in strict mode.
+
+**Resolution rules:**
+1. Look at the page object for the attribute.
+2. If not present, walk up the page tree via `/Parent` references.
+3. Stop at the first ancestor that defines the attribute.
+4. If no ancestor defines it, use the default: for `Resources`, an empty dictionary; for `MediaBox`, error (required); for `CropBox`, defaults to `MediaBox`; for `Rotate`, 0.
+
+**Page box relationships:** `CropBox` ≤ `MediaBox`. `BleedBox` defaults to `CropBox`. `TrimBox` defaults to `CropBox`. `ArtBox` defaults to `CropBox`. The renderer clips to `CropBox` for normal viewing. The write path must ensure these relationships hold for generated output.
+
+### Font and encoding contract
+
+Font handling must resolve: font dictionary → encoding → ToUnicode → glyph selection → metrics. The engine must handle Type 1, TrueType, OpenType/CFF, CIDFont (Type 0), and Type 3 fonts. Missing or broken ToUnicode maps must be detected and reported. Fallback glyph selection must be principled, not silently wrong. Font subsetting must be supported for the write path.
+
+**Detailed resolution chain:**
+
+1. **Font dictionary lookup:** The text operator `Tf /FontName size` selects a font. `/FontName` is looked up in the page's (resolved) resource dictionary under `/Font`. The result is a font dictionary.
+
+2. **Font type dispatch:** Examine `/Subtype` in the font dictionary:
+   - `/Type1` → Type 1 path
+   - `/TrueType` → TrueType path
+   - `/Type3` → Type 3 path
+   - `/Type0` → Composite font path (CIDFont)
+   - `/MMType1` → Multiple Master Type 1 (rare, Tier 2)
+   - `/CIDFontType0` or `/CIDFontType2` → These appear only as descendants of Type 0; direct use is malformed.
+
+3. **Encoding resolution (simple fonts — Type 1, TrueType, Type 3):**
+   - Check `/Encoding` in the font dictionary.
+   - If `/Encoding` is a name (`WinAnsiEncoding`, `MacRomanEncoding`, `MacExpertEncoding`): use the named encoding's code-to-name mapping.
+   - If `/Encoding` is a dictionary: check `/BaseEncoding` for the base mapping, then apply `/Differences` array overrides.
+   - If `/Encoding` is absent: for Type 1, use the font's built-in encoding; for TrueType, use the `cmap` table (platform 1 encoding 0 or platform 3 encoding 1, depending on the symbolic flag in `/FontDescriptor`).
+   - **Edge case:** TrueType fonts with the symbolic flag set but no built-in encoding. Fall back to the `cmap` table's first available encoding.
+
+4. **Encoding resolution (composite fonts — Type 0 → CIDFont):**
+   - The Type 0 font's `/Encoding` names a CMap (predefined name or embedded stream).
+   - The CMap maps character codes (1-4 bytes) to CIDs.
+   - The CIDFont's `/CIDToGIDMap` (for CIDFontType2) maps CIDs to glyph IDs.
+   - For CIDFontType0 (CFF-based), CIDs directly index the CFF charstring INDEX.
+
+5. **ToUnicode mapping:** Applied regardless of font type. If `/ToUnicode` is present, it overrides all other Unicode mapping paths. The ToUnicode CMap's `beginbfchar`/`beginbfrange` entries map character codes (in the content stream encoding) to Unicode values. **The ToUnicode CMap uses the original character codes from the content stream, not the CIDs.** This is a common point of confusion.
+
+6. **Glyph outline retrieval:** Based on font type and the resolved glyph ID / glyph name / CID, extract the glyph outline from the font program (embedded or substituted).
+
+7. **Width retrieval:** The font dictionary's `/Widths` array (simple fonts) or `/W` array (CIDFonts) provides glyph advance widths in glyph space units (typically 1/1000 of the font size for 1000-unit-per-em fonts). These widths are authoritative for text positioning, regardless of what the embedded font program says.
+
+**Invariants:**
+- Text positioning is always correct if the font dictionary's widths are used, even if glyph outlines are wrong or substituted.
+- Unicode extraction succeeds as far as the available mapping allows. Unmappable characters are flagged, not silently dropped.
+- The font cache maps (font_dictionary_object_id) → parsed font data. Font data is parsed once and reused across pages.
+- Font subsetting for the write path: when embedding fonts in generated PDFs, include only the glyphs actually used. Update the `/Widths` or `/W` array to cover only the used glyph set. For TrueType, regenerate the `cmap`, `glyf`, `loca`, `hmtx` tables with only the used glyphs. For CFF, regenerate the CharStrings INDEX.
+
+### Graphics state contract
+
+The graphics state machine (CTM, color state, text state, line properties, clipping path, blend mode, transparency, overprint, rendering intent) must be implemented as a single shared stack machine. Push/pop via `q`/`Q` operators must be precise. State inheritance across content streams (page → form XObject → tiling pattern) must follow the spec.
+
+**The graphics state contains:**
+
+*Device-independent state:*
+- **CTM** (Current Transformation Matrix): 3×2 affine matrix. Modified by `cm`. Saved/restored by `q`/`Q`.
+- **Clipping path**: the intersection of all clipping paths established by `W`/`W*` operators. Modified by `W`/`W*` followed by a path painting operator. Saved/restored by `q`/`Q`. Note: the clipping path can only shrink, never grow, within a single save/restore level.
+- **Color space and color** (stroke and fill separately): set by `CS`/`cs` and the various color operators. Default: DeviceGray, 0.0 (black).
+- **Text state**: character spacing (`Tc`), word spacing (`Tw`), horizontal scaling (`Tz`), leading (`TL`), font and size (`Tf`), rendering mode (`Tr`), text rise (`Ts`). These persist across `BT`/`ET` boundaries but are saved/restored by `q`/`Q`.
+- **Text matrix and text line matrix**: set by `Tm`, modified by `Td`/`TD`/`T*`/`Tj`/`TJ`/`'`/`"`. These are reset to identity at each `BT`.
+- **Line width** (`w`), **line cap** (`J`), **line join** (`j`), **miter limit** (`M`), **dash pattern** (`d`)
+- **Rendering intent** (`ri`): `AbsoluteColorimetric`, `RelativeColorimetric`, `Perceptual`, `Saturation`
+- **Flatness** (`i`): controls curve-to-line-segment conversion tolerance
+- **Smoothness**: controls shading interpolation accuracy (set via ExtGState)
+
+*Device-dependent state (from ExtGState dictionary via `gs` operator):*
+- **Overprint** (`/OP` for stroke, `/op` for fill) and **overprint mode** (`/OPM`)
+- **Blend mode** (`/BM`): one of the 16 standard blend modes, or an array for specifying a preference list
+- **Soft mask** (`/SMask`): a soft-mask dictionary referencing a transparency group
+- **Stroke alpha** (`/CA`) and **fill alpha** (`/ca`)
+- **Alpha source flag** (`/AIS`)
+- **Transfer function** (`/TR`, `/TR2`): adjusts the relationship between device color components and output
+- **Halftone** (`/HT`): controls halftone screening for raster output
+- **Black generation** (`/BG`, `/BG2`) and **undercolor removal** (`/UCR`, `/UCR2`): CMYK-specific adjustments
+- **Font** (`/Font`): array of [font size] — rarely used in ExtGState, usually set by `Tf`
+
+**Operator dispatch categories for the shared graphics state machine:**
+
+The interpreter receives each operator and dispatches to the appropriate handler. The categories are:
+
+1. **Graphics state operators** (`q`, `Q`, `cm`, `w`, `J`, `j`, `M`, `d`, `ri`, `i`, `gs`): modify the current graphics state. The `gs` operator requires resolving the named ExtGState from the page resources and applying all its entries to the current state.
+
+2. **Path construction operators** (`m`, `l`, `c`, `v`, `y`, `h`, `re`): build the current path. These do not produce any visible output. The path exists only in the current path register.
+
+3. **Path painting operators** (`S`, `s`, `f`, `F`, `f*`, `B`, `B*`, `b`, `b*`, `n`): consume the current path and produce visible output (or, for `n`, just clear the path). In render mode, these rasterize/stroke/fill the path. In extraction mode, these are typically ignored (except for clipping analysis).
+
+4. **Clipping operators** (`W`, `W*`): modify the clipping path. These must be followed by a path painting operator; the clipping takes effect after the paint. Common misunderstanding: `W n` (clip with the current path, then discard the path without painting) is the idiomatic way to set a clipping path without visible output.
+
+**Path rendering specifics:**
+
+The PDF path model is built on cubic Bézier curves and straight-line segments. Key rendering considerations:
+
+*Winding rules:* The nonzero winding number rule (`f`, `B`, `W`) counts the direction of path crossings: a point is inside if the total winding count is nonzero. The even-odd rule (`f*`, `B*`, `W*`) simply counts crossings: a point is inside if the crossing count is odd. Self-intersecting paths and paths with holes behave differently under these two rules. Both must be correctly implemented.
+
+*Stroke geometry:* Stroking a path generates a new shape by expanding the path by half the line width on each side. At path joins, the join style (miter, round, bevel) determines the shape. At path endpoints (open subpaths), the cap style (butt, round, square) determines the termination shape. Miter joins that exceed the miter limit are automatically converted to bevel joins. Dash patterns convert a continuous stroke into a series of dashes; the dash phase specifies the starting offset into the dash pattern. Stroke expansion is computed analytically (offset curves for Bézier segments, with exact arc segments for round joins/caps) rather than by polygon approximation — this feeds directly into the exact analytic area coverage rasterizer for artifact-free thin-line rendering at any scale.
+
+*Degenerate paths:* Zero-length subpaths (moveto followed immediately by another moveto or closepath) produce output only if the line cap is round or square (per the spec, they produce a dot). Zero-width strokes (`w 0`) are drawn as the thinnest possible line (1 device pixel). These edge cases are common in real-world PDFs and must be handled correctly. The robust geometric predicates (Part 7) ensure that degenerate and near-degenerate path configurations are handled without floating-point artifacts.
+
+*Rectangle shortcut:* The `re` operator (x y w h re) creates a closed rectangular subpath. This is by far the most common path construction in PDFs (used for backgrounds, table cells, form fields, clipping regions). The renderer should fast-path rectangle detection for both rasterization and clipping.
+
+5. **Text operators** (`BT`, `ET`, `Tc`, `Tw`, `Tz`, `TL`, `Tf`, `Tr`, `Ts`, `Td`, `TD`, `Tm`, `T*`, `Tj`, `TJ`, `'`, `"`): text state manipulation and text rendering. In render mode, these resolve fonts, decode strings, position glyphs, and draw them. In extraction mode, these produce character/position records.
+
+6. **Color operators** (`CS`, `cs`, `SC`, `SCN`, `sc`, `scn`, `G`, `g`, `RG`, `rg`, `K`, `k`): set the current color state for subsequent painting operations.
+
+7. **XObject and shading operators** (`Do`, `sh`): invoke external resources. `Do` requires resolving the named XObject from resources and dispatching based on its subtype (Image, Form, or PS). Form XObjects require recursive content stream interpretation with the form's own matrix and resources. `sh` paints the current area with a shading pattern.
+
+8. **Inline image operators** (`BI`, `ID`, `EI`): define and render an inline image. The image dictionary is between `BI` and `ID`; the raw image data is between `ID` and `EI`. Inline image dictionaries use abbreviated key names: `/W` for `/Width`, `/H` for `/Height`, `/BPC` for `/BitsPerComponent`, `/CS` for `/ColorSpace` (with abbreviations: `/G` = DeviceGray, `/RGB` = DeviceRGB, `/CMYK` = DeviceCMYK, `/I` = Indexed), `/F` for `/Filter` (with abbreviations: `/AHx` = ASCIIHexDecode, `/A85` = ASCII85Decode, `/LZW` = LZWDecode, `/Fl` = FlateDecode, `/RL` = RunLengthDecode, `/CCF` = CCITTFaxDecode, `/DCT` = DCTDecode), `/D` for `/DecodeParms`, `/DP` for `/DecodeParms`. Finding the `EI` marker is non-trivial because the image data itself may contain the bytes `EI` — the parser must track the expected data length (from Width × Height × BPC × components, accounting for filters) to know where the data ends.
+
+**Image rendering specifics:**
+
+Image XObjects (`/Subtype /Image`) require:
+1. Decode the image data through the filter chain.
+2. Apply the `/Decode` array: this maps the raw sample values to a range in the color space. For example, a `/Decode [1 0]` on a DeviceGray image inverts it.
+3. Apply the color space conversion: the image's `/ColorSpace` determines how sample values become colors. For Indexed images, look up each sample in the lookup table, then resolve the base color space.
+4. Apply the image matrix: the image is rendered into a 1×1 unit square in user space. The CTM at the time of the `Do` operator maps this to the desired position and size. Common transformation: `width 0 0 height x y cm` before `Do` to place an image at position (x,y) with size (width,height).
+5. Apply interpolation: the `/Interpolate` flag requests smooth interpolation when the image is scaled. When true, use bilinear or bicubic interpolation. When false (default), use nearest-neighbor.
+6. Apply the image mask: if `/ImageMask` is true, the image is a stencil mask (1-bit, no color space). Painted pixels use the current fill color; unpainted pixels are transparent.
+7. Apply soft mask from `/SMask`: the soft mask image (another image XObject, typically DeviceGray) provides per-pixel alpha values.
+8. Apply the Matte array: if the image has been pre-multiplied with a matte color (indicated by the `/Matte` entry in the soft mask), the renderer must un-premultiply before compositing.
+
+9. **Marked content operators** (`BMC`, `BDC`, `EMC`, `MP`, `DP`): semantic markers for tagged PDF and optional content. In render mode, these control optional content visibility (layers). In extraction mode, these provide structure hints.
+
+10. **Compatibility operators** (`BX`, `EX`): allow skipping unknown operators. Between `BX` and `EX`, any operator not recognized by the interpreter is silently skipped along with its operands (operand count inferred from the stack).
+
+**State inheritance across content streams:**
+
+When a form XObject is invoked via `Do`, a new sub-interpretation context is created:
+1. The graphics state is saved (implicit `q`).
+2. The form's `/Matrix` is concatenated to the CTM.
+3. The form's `/Resources` override the page's resources for the duration of the form.
+4. The form's content stream is interpreted.
+5. The graphics state is restored (implicit `Q`).
+
+For tiling patterns, the process is similar but the content stream is interpreted repeatedly (once per tile), with the pattern matrix applied. Color state within a tiling pattern depends on the pattern's paint type: PaintType 1 (colored) uses its own colors; PaintType 2 (uncolored) inherits the current color from the invoking context.
+
+### Annotation contract
+
+Annotations must be resolved with their appearance streams. If an appearance stream exists, use it. If not, generate one. Annotation geometry is in the annotation's coordinate space, mapped to page space via the annotation's Rect and optional matrix. The annotate crate must use the shared geometry pipeline from core. Round-trip preservation means: the original annotation survives save/reload without geometry drift or content loss.
+
+**Appearance stream resolution:**
+
+1. Check the annotation's `/AP` (appearance) dictionary.
+2. `/AP` contains up to three entries: `/N` (normal), `/R` (rollover), `/D` (down). Each can be either a single stream (form XObject) or a dictionary mapping state names to streams (for annotations with multiple states, like checkbox widgets).
+3. For rendering, use `/N` for the normal appearance. If `/N` is a dictionary, use the entry matching the annotation's `/AS` (appearance state) value.
+4. If `/AP` is absent or the needed entry is missing, generate an appearance stream. The generation requirements are annotation-type-specific.
+
+**Appearance stream generation requirements per annotation type:**
+
+*Text (sticky note):* Generate a small icon at the annotation's `/Rect` position. The icon style depends on the `/Name` entry (Comment, Key, Note, Help, NewParagraph, Paragraph, Insert). The appearance is a form XObject containing vector art for the icon, colored with the annotation's `/C` (color) entry.
+
+*FreeText:* Generate a text block within the annotation's `/Rect`. The text content is from `/Contents` (or `/RC` for rich text). The `/DA` (default appearance) string provides the font and size (parsed as a content stream fragment, typically `"/FontName size Tf color rg"`). The `/Q` entry controls alignment (0=left, 1=center, 2=right). Border style from `/BS` or `/Border`.
+
+*Line:* Generate a line from `/L` [x1 y1 x2 y2] with optional line endings (`/LE` — e.g., OpenArrow, ClosedArrow, Circle, Diamond, Square, Butt, None). The appearance stream must draw the line and any ending shapes, using the annotation's color and border width.
+
+*Square / Circle:* Generate a rectangle/ellipse within `/Rect`. Apply `/IC` (interior color) for fill and `/C` for stroke. Border from `/BS`.
+
+*Polygon / PolyLine:* Generate a path from the `/Vertices` array. For Polygon, close the path. Apply interior and border colors.
+
+*Highlight / Underline / Squiggly / StrikeOut (text markup annotations):* The `/QuadPoints` array defines the quadrilaterals covering the marked text. Each group of 8 numbers defines 4 points (x1 y1 x2 y2 x3 y3 x4 y4). The appearance stream must draw the appropriate markup within each quadrilateral: highlight = semi-transparent fill; underline = line along the bottom edge; squiggly = wavy line along the bottom; strikeout = line through the vertical center.
+
+*Stamp:* Generate the stamp content. For standard stamps (`/Name` = Approved, Experimental, NotApproved, AsIs, Expired, NotForPublicRelease, Confidential, Final, Sold, Departmental, ForComment, TopSecret, Draft, ForPublicRelease), render the stamp text with appropriate styling. Custom stamps may include an appearance stream; if provided, use it.
+
+*Ink:* Generate paths from the `/InkList` array. Each entry in the array is a series of coordinate pairs defining a freehand stroke. The appearance stream draws each stroke using the annotation's color and width.
+
+*Redact:* The redaction annotation has two visual states: before application (shows the region to be redacted, typically with a red outline or crosshatch) and after application (fills the region with the overlay color, removes underlying content). Before-application appearance: draw the region outline. After-application appearance: fill the `/RO` (redaction overlay) area with `/IC` and optional `/OverlayText`.
+
+Redaction application (burning redactions into the page) is a critical workflow that must be separate from merely creating the annotation. When a redaction is applied:
+1. Remove all content (text, images, vectors) underneath the redaction rectangle from the page's content streams. This requires content stream rewriting: parsing the content stream, identifying operators that paint within the redacted region (using the graphics state to track coordinates), and removing those operators.
+2. Optionally remove any text content from the page's text extraction (removing references to characters within the redacted area from any ToUnicode mappings is not necessary — the content stream removal is sufficient).
+3. Replace the redaction annotation with its "applied" appearance (a filled rectangle with optional overlay text burned into the page content).
+4. The applied redaction must be irreversible — the original content must not be recoverable from the saved file. This means: do not merely cover the content with an opaque rectangle (the content would still be extractable). Actually remove the underlying content stream operators.
+
+*Widget (form field):* Appearance depends on the field type. Text fields: render the field value text within the widget rect using `/DA`. Checkboxes: render a check mark or empty box. Radio buttons: render a filled or empty circle. Choice fields: render the selected value or a dropdown indicator. Button fields: render the button label. The `/MK` (appearance characteristics) dictionary provides rotation, border color, background color, caption, and icon information.
+
+**Tagged PDF awareness:**
+
+Tagged PDFs contain a structure tree (`/StructTreeRoot` in the catalog) that maps content to logical elements (paragraphs, headings, tables, figures, lists). While Monkeybee v1 does not perform accessibility remediation (generating tags for untagged PDFs), it must:
+
+1. **Preserve existing tags** during round-trip operations. The structure tree, its elements, and the marked content references in content streams must survive load-modify-save cycles.
+2. **Extract tagged structure** when present. The extraction pipeline should report the structure tree as part of the document inspection output: element types, nesting, associated content, and alt text.
+3. **Use tagged structure for extraction hints.** When a structure tree is present, use it to improve reading order accuracy and table detection (table elements have `TR`/`TH`/`TD` structure elements).
+4. **Not corrupt tags during annotation.** When adding annotations to tagged PDFs, the annotations should be added outside the existing structure tree (annotations have their own structure element type). The existing tagged content must not be disrupted.
+
+**Annotation geometry invariants:**
+
+- The annotation's `/Rect` is in default user space (same as the page's coordinate system before any page rotation).
+- For text markup annotations, `/QuadPoints` are also in default user space.
+- When a page has a `/Rotate` value, the annotation's visual position must be consistent with the rotated page. This means: the annotation's rect and quad points are in the unrotated coordinate system, but the rendering must rotate them to match the page rotation.
+- Annotations added by Monkeybee must correctly account for the page's CropBox offset (if CropBox origin is not at [0,0]) and Rotate value.
+
+### Serialization contract
+
+The write path must produce bytes that are valid PDF. Cross-references must be correct. Object offsets must be accurate. Stream lengths must match. The output must be parseable by Monkeybee's own parser (self-consistency) and by reference implementations. Incremental saves must produce a valid append that does not corrupt the existing data.
+
+**Self-consistency invariant:** Monkeybee must be able to parse its own output without errors in strict mode. This is a hard test requirement, not a soft aspiration. Every generated PDF is round-tripped through Monkeybee's strict-mode parser as part of the write-path test suite.
+
+**Serialization ordering:** Objects may be serialized in any order, but the cross-reference must correctly point to each object's starting offset. For human-readability and debugging, prefer: header → body objects (in object-number order) → cross-reference → trailer → `%%EOF`.
+
+**String encoding:** PDF strings in output should use the most compact representation: literal strings for ASCII-safe content (with appropriate escaping of `(`, `)`, `\`, and non-printable bytes), hex strings when the content is mostly non-printable. UTF-16BE with BOM for Unicode text strings.
+
+**Object stream packing:** For PDF 1.5+ output, small non-stream objects (dictionaries, arrays, numbers, strings) can be packed into object streams (compressed containers holding multiple objects). This significantly reduces file size. The write path should pack objects into object streams by default for full-rewrite mode. Object streams must not contain: stream objects (streams cannot be nested inside object streams), the encryption dictionary, the document catalog, or the cross-reference stream itself.
+
+**Cross-reference stream output:** For PDF 1.5+ output, prefer cross-reference streams over cross-reference tables. Cross-reference streams are more compact and support object streams (which require cross-reference streams). The stream uses predictors for better compression: each entry is a fixed-size record with `/W [type_size offset_size gen_size]`, and PNG predictor applied before FlateDecode compression.
+
+### AcroForm contract
+
+The engine must handle AcroForm (interactive form) fields for both reading and basic writing. AcroForm is distinct from XFA; it is the standard PDF form mechanism and is fully Tier 1.
+
+**Field hierarchy:** Form fields form a tree rooted at the document catalog's `/AcroForm` → `/Fields` array. Fields can be organized hierarchically (parent fields with child fields). Inheritable field attributes: `/FT` (field type), `/V` (value), `/DV` (default value), `/Ff` (field flags), `/DA` (default appearance), `/Q` (quadding/alignment).
+
+**Field types:**
+- **Text fields** (`/FT /Tx`): single-line or multi-line text. The value (`/V`) is a text string. The appearance stream must render the text using the font and size from `/DA`, within the widget's rect, respecting `/Q` alignment and `/MaxLen` limits.
+- **Button fields** (`/FT /Btn`): push buttons, checkboxes, and radio buttons. Checkboxes have two states: the "on" state (named in `/AS`) and `/Off`. Radio buttons share a parent field; exactly one child can be "on" at a time.
+- **Choice fields** (`/FT /Ch`): combo boxes (dropdown) and list boxes. The `/Opt` array lists available choices. Each choice can be a simple string or a two-element array `[export_value display_value]`.
+- **Signature fields** (`/FT /Sig`): contain digital signature dictionaries. The signature dictionary (`/V` in the signature field) contains:
+  - `/Filter` and `/SubFilter`: identify the signature format. Common: `/adbe.pkcs7.detached` (CMS/PKCS#7 detached signature), `/adbe.pkcs7.sha1` (legacy), `/ETSI.CAdES.detached` (CAdES — used by PAdES), `/ETSI.RFC3161` (timestamp).
+  - `/ByteRange`: an array of 4 integers `[offset1 length1 offset2 length2]` defining the two byte ranges of the file that are signed (everything except the signature value hex string itself). The engine must understand this structure to verify that preserve-mode saves do not modify signed bytes.
+  - `/Contents`: the actual signature value (a hex string containing the DER-encoded CMS/PKCS#7 signature).
+  - `/Cert`: the signing certificate (for some signature types).
+  - `/M`: signing date. `/Reason`, `/Location`, `/ContactInfo`: human-readable metadata.
+
+  The engine reads and validates the structural integrity of signature dictionaries but does not implement full cryptographic signature verification in v1 (verifying the CMS/PKCS#7 structure, certificate chain validation, OCSP/CRL checking, and timestamp verification are complex PKI operations — Tier 2 capability). The engine must preserve signature fields and their byte ranges during incremental-save operations. Specifically:
+  - The engine must track the exact byte offsets specified in `/ByteRange` and guarantee that incremental-append operations do not modify any bytes within those ranges.
+  - When inspecting a document, the engine should report: number of signatures, signing dates, signature coverage (what percentage of the document is signed), and whether the document has been modified after signing (by checking if objects outside the signed byte range differ from those within it).
+
+**Form appearance regeneration:** When a form field's value changes (e.g., the user fills in a text field), the widget annotation's appearance stream must be regenerated to reflect the new value. The `/NeedAppearances` flag in the AcroForm dictionary signals whether appearances need regeneration. If true, the engine must generate appearances for all widgets. For round-trip safety, the engine should always regenerate appearances when field values are modified, regardless of the flag.
+
+**Field calculations and actions:** PDF forms support JavaScript-based calculations and trigger actions (e.g., calculate the sum of other fields). Full JavaScript execution is not a v1 goal. The engine should: (a) detect and report the presence of calculation scripts in the compatibility ledger, (b) preserve them during round-trip operations, (c) not evaluate them.
+
+---
+
+## Part 6 — Proof doctrine
+
+### Pathological corpus
+
+The project must maintain a curated corpus of ugly, hard, and pathological PDFs. This corpus must span:
+
+- Scanned documents (various qualities, DPI, preprocessing states)
+- Form-heavy documents (AcroForm, XFA detection)
+- Encrypted documents (various security handlers, permission levels)
+- Embedded fonts with broken metadata
+- Missing or invalid ToUnicode maps
+- Transparency and blend edge cases
+- CJK documents (Chinese, Japanese, Korean)
+- RTL documents (Arabic, Hebrew)
+- Very large files (100+ pages, large embedded resources)
+- Malformed cross-references (missing entries, wrong offsets, hybrid tables)
+- Adversarial inputs (fuzzed, hand-crafted to trigger parser bugs)
+- Complex vector art (intricate path constructions, gradient meshes)
+- Files from many different producers (Acrobat, Word, LaTeX, Chrome, LibreOffice, InDesign, Quartz, etc.)
+- Incremental-update chains with complex histories
+- Linearized files (intact and damaged)
+- Files with unusual page structures (non-standard boxes, rotations, user units)
+
+The corpus must be indexed, categorized, and continuously exercised by CI.
+
+**Specific test case classes and what each proves:**
+
+*Class: xref-repair*
+Test cases: wrong startxref offset, corrupted xref table entries, missing entries, hybrid xref with conflicts, circular /Prev chains, truncated xref streams, wrong /Size values.
+Proves: tolerant parser can recover document structure from corrupted cross-references. Verifies every repair strategy in Part 2.
+
+*Class: font-fallback*
+Test cases: missing ToUnicode CMap, broken Type 1 PFB headers, TrueType with invalid loca table, CIDFont with no embedded font data, non-standard glyph names not in AGL, Identity-H CIDFont with incomplete ToUnicode, Type 3 font with complex content streams.
+Proves: the font/encoding fallback chain produces correct text extraction and acceptable glyph rendering across all failure modes.
+
+*Class: transparency-compositing*
+Test cases: isolated group over opaque background, non-isolated group over semi-transparent background, knockout group with multiple elements, isolated knockout group, luminosity soft mask, alpha soft mask, nested groups with different blend modes, overprint mode 1 with CMYK, stacked blend modes (e.g., Multiply inside a ColorDodge group).
+Proves: the transparency compositing pipeline handles all combinations of isolation, knockout, soft masks, and blend modes. Each test has a known-correct reference rendering from at least two external renderers.
+
+*Class: producer-quirks*
+Test cases: at least one representative file from each major producer (Acrobat, Word, Chrome, LibreOffice, InDesign, LaTeX/pdfTeX, Quartz/Preview, Ghostscript, Foxit, Nitro). Each file should exercise a known quirk of that producer.
+Proves: the quirk-shim layer correctly compensates for producer-specific deviations.
+
+*Class: incremental-update*
+Test cases: single incremental update, multiple chained updates, update that deletes objects, update that modifies the page tree, update that adds annotations, update that changes encryption, conflicting object definitions across updates.
+Proves: incremental update chain parsing correctly resolves to the latest state, and incremental save produces a valid appended section that other readers accept.
+
+*Class: encryption*
+Test cases: V1/R2 (40-bit RC4), V2/R3 (128-bit RC4), V4/R4 (AES-128), V5/R5 (AES-256), V5/R6 (AES-256 with revised password handling), empty passwords, non-ASCII passwords, permission restrictions.
+Proves: decryption works for all standard security handler versions. Encryption of output files produces files that reference renderers can decrypt.
+
+*Class: annotation-roundtrip*
+Test cases: each annotation type created by Monkeybee, saved, and reopened. Annotations on pages with non-identity rotation. Annotations on pages with CropBox offset. Annotations added to files from different producers. Annotations with rich text content. Reply chains. Annotations that reference page resources.
+Proves: annotation creation, serialization, and deserialization are geometrically and semantically correct.
+
+*Class: page-mutation*
+Test cases: add a blank page, remove a page from the middle, reorder pages, copy pages between documents, merge documents, split documents, change page rotation, change page MediaBox.
+Proves: page tree manipulation produces valid structure, and the resulting document renders correctly.
+
+*Class: generation*
+Test cases: generate documents with text, images, vector graphics, annotations, multiple pages, embedded fonts, transparency, color spaces (at least DeviceRGB, DeviceCMYK, ICCBased).
+Proves: generated output is valid PDF that renders correctly under Monkeybee and at least two reference renderers.
+
+*Class: adversarial*
+Test cases: fuzz-generated inputs, inputs with extreme nesting depth, inputs with very large objects, inputs with many cross-references, inputs designed to trigger integer overflow in offset calculations, inputs with contradictory metadata, zip-bomb-style stream compression.
+Proves: the parser does not panic, does not allocate unbounded memory, does not enter infinite loops, and produces structured error diagnostics for all adversarial inputs.
+
+*Class: color-space*
+Test cases: documents using each color space type (DeviceRGB, DeviceCMYK, DeviceGray, CalRGB, CalGray, Lab, ICCBased with v2 and v4 profiles, Indexed, Separation, DeviceN, Pattern with tiling and shading). Documents with color space nesting (Indexed over ICCBased, DeviceN with ICCBased alternate). Documents with default color space overrides.
+Proves: color space resolution produces correct color values at every stage of the chain.
+
+*Class: content-stream-stress*
+Test cases: pages with 500,000+ operators (Chrome print-to-PDF of complex web pages), deeply nested form XObjects (10+ levels), content streams with invalid operators inside BX/EX compatibility regions, content streams with interleaved path construction and text operations.
+Proves: the content stream interpreter handles scale and edge cases without performance degradation or incorrect state.
+
+*Class: signature-preserve*
+Test cases: signed documents modified with incremental-append save, verification that byte ranges are preserved, verification that existing signatures validate after Monkeybee's modifications.
+Proves: preserve-mode write path does not corrupt existing signatures.
+
+### External references
+
+Monkeybee does not treat any single external renderer as ground truth. Instead, it uses consensus-style reference testing:
+
+- **PDFium** as primary reference
+- **MuPDF** as secondary reference
+- **pdf.js** as tertiary reference (browser-native perspective)
+- **Ghostscript** as strict canary
+
+Where references disagree, the disagreement itself is recorded and investigated.
+
+### Arlington-model conformance validation
+
+The Arlington PDF Model is a machine-readable description of the entire PDF specification's object structure: which dictionary keys are required, optional, or deprecated for each object type; what types and value ranges are legal for each key; which keys are mutually exclusive or conditionally required. Monkeybee integrates the Arlington model as a structural validation oracle:
+
+1. **Code generation from Arlington:** At build time, parse the Arlington TSV data files and generate Rust validation functions for each PDF object type. Each function checks: required keys present, no unknown keys (in strict mode), value types correct, value ranges valid, conditional requirements satisfied (e.g., "/Subtype required when /Type is /Font").
+2. **Integration with the tolerant parser:** After parsing each object, run the Arlington validator. In strict mode, violations are errors. In tolerant mode, violations are diagnostics recorded in the compatibility ledger with the specific Arlington rule that was violated.
+3. **Integration with the write path:** Before serializing any object, validate it against the Arlington model. The write path must not emit objects that violate the spec — this is a hard invariant, not a best-effort check.
+4. **Profile-specific validation:** When the target output is a specific profile (PDF/A-4, PDF/X-6, PDF/UA-2), the Arlington model encodes the additional constraints of that profile. The validator checks both base PDF conformance and profile-specific requirements. This is the foundation for the downlevel write mode.
+5. **Coverage metric:** Track which Arlington rules are exercised by the pathological corpus. Rules that are never exercised represent document structures the engine has never encountered — these are blind spots that should drive corpus acquisition.
+
+### Round-trip requirements
+
+The following round-trip chains must pass on representative documents from the pathological corpus:
+
+1. **Load → render → save → reload → render → compare** (visual stability)
+2. **Load → annotate → save → reload → verify annotations** (annotation integrity)
+3. **Load → edit (page ops, metadata) → save → reload → validate structure** (mutation integrity)
+4. **Generate → render (Monkeybee) → render (reference) → compare** (generation correctness)
+5. **Load → extract → verify against known ground truth** (extraction accuracy)
+6. **Load (preserve mode) → annotate → save (incremental) → reload → verify signatures** (signature preservation)
+7. **Load → save (full rewrite) → reload → render → compare to original render** (rewrite fidelity)
+
+**Specific failure modes each chain is designed to catch:**
+
+*Chain 1 (visual stability):* Detects: graphics state leaks across save/reload (state not properly serialized), font metric drift (widths change after round-trip), transparency compositing differences due to lost group attributes, color space information loss, clipping path corruption.
+
+*Chain 2 (annotation integrity):* Detects: geometry drift from coordinate system misunderstanding (especially with rotated pages), appearance stream generation errors, annotation property loss (colors, border styles, contents), broken annotation-to-page associations, popup annotation disconnection.
+
+*Chain 3 (mutation integrity):* Detects: page tree corruption after insert/delete, broken parent references, incorrect page count, orphaned resources (resources referenced by removed pages still present), missing resources (resources needed by surviving pages removed), xref corruption after object renumbering.
+
+*Chain 4 (generation correctness):* Detects: structural invalidity in generated output (missing required dictionary keys, wrong object types), font embedding errors (incomplete subsetting, wrong metrics), color space specification errors, content stream operator errors.
+
+*Chain 5 (extraction accuracy):* Detects: text decoding errors (wrong Unicode values), position inaccuracy (characters placed at wrong coordinates), missing characters (encoding failures), wrong reading order, font name misreporting.
+
+*Chain 6 (signature preservation):* Detects: byte-range corruption (existing bytes modified), structural changes to signed content, incremental-append errors that invalidate the document structure.
+
+*Chain 7 (rewrite fidelity):* Detects: lossy canonicalization (information destroyed during save that affects rendering), stream re-encoding errors, object serialization bugs, font re-embedding errors.
+
+### Compatibility ledger schema
+
+The compatibility ledger is a structured, machine-readable record produced for every document processed. It is the backbone of the proof infrastructure and the primary mechanism for tracking what the engine can and cannot handle.
+
+**Schema:**
+
+```
+CompatibilityLedger {
+  document_id: string,          // hash of input file
+  file_name: string,
+  file_size: u64,
+  pdf_version: string,          // e.g., "1.7", "2.0"
+  producer: Option<string>,     // /Producer metadata value
+  creator: Option<string>,      // /Creator metadata value
+  parse_mode: "strict" | "tolerant" | "preserve",
+  timestamp: ISO8601,
+
+  features: [FeatureEntry],     // one per detected feature category
+  repairs: [RepairEntry],       // one per repair action taken
+  diagnostics: [DiagnosticEntry], // warnings, notes, errors
+  summary: LedgerSummary,
+}
+
+FeatureEntry {
+  category: string,             // e.g., "font.type1", "transparency.softmask",
+                                // "encryption.aes256", "xfa.dynamic"
+  tier: 1 | 2 | 3,
+  status: "supported" | "partial" | "degraded" | "unsupported",
+  detail: string,               // human-readable description
+  objects: [ObjectRef],         // which objects triggered this entry
+  impact: "visual" | "structural" | "metadata" | "interactive",
+}
+
+RepairEntry {
+  category: string,             // e.g., "xref.wrong_offset", "stream.wrong_length"
+  original_value: string,       // what the file said
+  repaired_value: string,       // what the engine determined
+  strategy: string,             // which repair strategy succeeded
+  object: Option<ObjectRef>,
+  confidence: "high" | "medium" | "low",
+}
+
+DiagnosticEntry {
+  severity: "error" | "warning" | "info",
+  category: string,
+  message: string,
+  object: Option<ObjectRef>,
+  byte_offset: Option<u64>,
+}
+
+LedgerSummary {
+  total_pages: u32,
+  tier1_features: u32,         // count of features fully supported
+  tier2_features: u32,         // count of features partially handled
+  tier3_features: u32,         // count of features detected but unsupported
+  repairs_applied: u32,
+  errors: u32,
+  warnings: u32,
+  overall_confidence: "high" | "medium" | "low",
+}
+
+ObjectRef {
+  object_number: u32,
+  generation_number: u16,
+}
+```
+
+**Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
+
+### Failure accounting
+
+Every test run produces a structured failure report: what failed, on which document, in which subsystem, with what error category, and what the compatibility tier is. Failures are not hidden. They are categorized, tracked, and reduced over time.
+
+### Release gates
+
+v1 may not be released until:
+- The pathological corpus passes at a defined threshold across all subsystem harnesses.
+- Round-trip chains pass on representative documents from every corpus category.
+- The compatibility ledger accounts for all known feature categories with correct tier assignments.
+- Performance benchmarks on representative hard workloads are within defined bounds.
+- No silent failures exist: every degradation is detected and reported.
+- The proof harness runs in CI and produces machine-readable evidence.
+
+---
+
+## Part 7 — Performance and safety doctrine
+
+### Memory safety rules
+
+- All public APIs are safe Rust. No `unsafe` in public interfaces.
+- Internal `unsafe` is permitted only when: (a) it provides a measurable and significant performance improvement on a proven hot path, (b) it is minimal and isolated behind a safe abstraction, (c) it is explicitly documented with a safety justification, and (d) it is covered by aggressive testing including fuzzing.
+- Parser code that handles untrusted input must be especially scrutinized. Buffer overflows, integer overflows, and unbounded allocations in parser code are treated as critical bugs.
+- All `unsafe` blocks are tagged and auditable.
+
+### Targeted formal verification
+
+Monkeybee does not require "formal methods theater" everywhere. But for a small number of critical invariants where bugs would be catastrophic (security-relevant parser paths, preserve-mode byte integrity), formal verification provides stronger assurance than testing alone:
+
+**Kani proof harnesses for parser safety:**
+- **Bounded allocation proof:** For each parser entry point (`parse_object`, `parse_xref`, `parse_content_stream`), prove via Kani that the parser cannot allocate more than `MAX_ALLOCATION_LIMIT` bytes for any input of bounded size. This is a proof that the parser is not vulnerable to zip-bomb or allocation-bomb attacks.
+- **No-panic proof:** For the core lexer and tokenizer, prove via Kani that no input sequence (up to a bounded length) can trigger a panic. This covers index-out-of-bounds, integer overflow, and unwrap-on-None paths.
+- **Reference resolution termination:** Prove that the indirect reference resolver terminates for all inputs (no infinite loops from circular references). The proof formalizes the visited-set invariant.
+
+**Preserve-mode byte integrity proof:**
+- The preserve-mode write path's central invariant is: bytes within the signed byte ranges of existing signatures are never modified. This can be formalized as a post-condition on the `write_incremental` function: for all (offset, length) pairs in the signature's `/ByteRange`, `output[offset..offset+length] == input[offset..offset+length]`. A Kani harness for bounded document sizes can verify this property exhaustively.
+
+These are not aspirational targets. They are specific, scoped verification goals with concrete proof harness designs. The engine can ship v1 without them complete, but the proof harness infrastructure must support them, and at least the no-panic and bounded-allocation proofs for the lexer should be delivered in v1.
+
+### Performance doctrine
+
+- Performance is part of the definition of seriousness, not a post-v1 garnish.
+- Efficient parsing: avoid unnecessary allocations, use zero-copy where practical, stream processing where possible.
+- Disciplined allocation: arena allocation for document objects where appropriate, avoid per-object heap allocation in hot paths.
+- Caching: resource cache, font cache, decoded stream cache, with explicit eviction policy.
+- Parallelism: page-level parallelism for rendering and extraction where the document model supports it.
+- Benchmark classes: small simple PDFs (latency), large complex PDFs (throughput), pathological PDFs (robustness under stress).
+
+**Benchmark class specifics:**
+
+*Latency class (small simple PDFs):* Documents of 1-5 pages with text and simple graphics. Target: first-page render under 50ms at 150 DPI on a modern desktop CPU. This class measures startup overhead, parser initialization, font cache cold-start, and single-page rendering pipeline latency. Representative files: a 1-page letter, a 3-page report with a table, a 2-page form.
+
+*Throughput class (large complex PDFs):* Documents of 50-500 pages with mixed content (text, images, vector graphics, fonts). Target: sustained throughput of 10+ pages/second at 150 DPI using page-level parallelism. This class measures parallel rendering efficiency, cache effectiveness, and memory management under sustained load. Representative files: a 200-page technical manual with diagrams, a 100-page scanned document, a 500-page novel with embedded fonts.
+
+*Stress class (pathological PDFs):* Documents designed to stress specific subsystems: pages with 1M+ content stream operators, deeply nested transparency groups (20+ levels), documents with 10,000+ fonts, files with 100+ incremental updates. Target: no operation takes more than 10x the expected time for the content size; no operation causes unbounded memory growth. This class validates that resource limits and algorithmic complexity are under control.
+
+*Round-trip class:* Measures the overhead of load-save-reload cycles. Target: save time under 2x the initial parse time for full-rewrite mode; save time under 0.1x parse time for incremental-append mode (since only changed objects are written). This class measures writer efficiency and change-tracking overhead.
+
+*Memory class:* Peak memory usage during parsing and rendering. Target: peak memory under 5x the file size for typical documents; under 2x file size for parsing-only (no rendering). This class measures allocation discipline, cache sizing, and stream buffering behavior.
+
+**WASM compilation target:**
+
+The engine's core crates (monkeybee-core, monkeybee-parser, monkeybee-render, monkeybee-extract) must be compilable to WebAssembly for browser-native use. This constraint influences architecture:
+
+- No system font fallback in WASM: the engine must support an explicit font-provision API where the caller supplies font data. The Base 14 font metrics must be compiled in.
+- No filesystem access in WASM: all input/output is via byte buffers. The API must support `parse_from_bytes(&[u8])` and `write_to_bytes() -> Vec<u8>`.
+- No threads in single-threaded WASM: page-level parallelism must gracefully degrade to sequential execution. Use `cfg(target_arch = "wasm32")` to disable thread pool initialization.
+- SIMD: WASM SIMD (128-bit) is available in modern browsers and can be used for compositing and color conversion hot paths. The engine should have SIMD paths for both native (SSE2/AVX2/NEON) and WASM SIMD, with scalar fallbacks.
+- Binary size: the WASM binary should be under 5 MiB compressed for the core rendering pipeline. This constrains the use of large lookup tables (CJK CMap data, ICC profiles) — these should be loadable on demand rather than compiled in.
+
+The WASM surface is a live proof artifact: a browser demo where users can load a PDF and see Monkeybee render it, inspect its structure, and add annotations. This is not a v1 shipping product surface, but the architecture must not preclude it.
+
+**Caching strategy:**
+
+The engine maintains several layered caches, each with explicit eviction policy:
+
+1. **Parsed object cache:** After an object is parsed from bytes, its structured representation is cached keyed on (object_number, generation_number). Eviction: LRU with a configurable maximum count (default: 50,000 objects). For small documents, everything fits in cache. For very large documents (millions of objects), the LRU ensures recently accessed objects are hot.
+
+2. **Decoded stream cache:** Decoded stream bytes (after filter-chain decompression) are cached keyed on (object_number, generation_number, filter_chain_hash). Eviction: LRU with a configurable maximum total size (default: 256 MiB). Large image streams are the primary consumers. For pages with shared resources (e.g., a logo image used on every page), the cache avoids repeated decompression.
+
+3. **Font cache:** Parsed font data (glyph outlines, metrics, encoding tables, CMap data) is cached keyed on font dictionary object ID. Fonts are typically small relative to the document and used across many pages; the font cache has no size limit in practice (fonts are never evicted until the document is closed). The font cache is the single largest contributor to multi-page rendering performance.
+
+4. **Glyph rasterization cache:** Rasterized glyph bitmaps, keyed on (font_id, glyph_id, quantized_size, quantized_subpixel_position). Eviction: LRU with configurable maximum count (default: 100,000 entries). Size is quantized to 0.5pt buckets; subpixel position to 1/4 pixel. This prevents cache explosion from continuous-size fonts while maintaining sufficient visual quality.
+
+5. **Color space cache:** Parsed ICC profiles and precomputed LUTs, keyed on the ICC profile stream's object ID. ICC profile parsing and LUT construction are expensive (especially for CMYK→RGB with large cLUT tables); caching is essential.
+
+6. **Resource resolution cache:** Per-page resolved resource dictionaries (the result of page tree inheritance resolution). Avoids repeated tree traversal for multi-pass operations (render + extract on the same page).
+
+**Parallelism model:**
+
+PDF documents are naturally parallelizable at the page level: pages are independent rendering units with independent content streams, resources, and output buffers. The engine exploits this:
+
+1. **Page-level rendering parallelism:** When rendering multiple pages (e.g., a 100-page document for print), pages are distributed across a thread pool. Each page renders independently. Shared resources (fonts, ICC profiles) are read-only after initial parsing, enabling safe concurrent access.
+
+2. **Page-level extraction parallelism:** Text extraction, image extraction, and diagnostic generation can be parallelized across pages with the same model as rendering.
+
+3. **Stream decompression parallelism:** For documents with many large streams (e.g., scanned documents with one image per page), stream decompression can be parallelized across streams. This provides significant speedup for image-heavy documents.
+
+4. **Limitations on parallelism:** Object parsing from the file is inherently sequential (objects are at fixed byte offsets, and the parser needs random access). For linearized files, pages can be parsed in page order without seeking. The object cache must be thread-safe (concurrent reads, exclusive writes); a read-write lock per cache entry is acceptable given the read-heavy access pattern.
+
+5. **Work-stealing:** Use Rayon or a similar work-stealing thread pool for page-level parallelism. The number of worker threads defaults to the number of available CPU cores. For benchmarking, expose a way to fix the thread count for deterministic measurements.
+
+### Hot-path constraints
+
+The following paths must be profiled and optimized:
+- PDF parsing (tokenization, object construction, xref lookup)
+- Content stream interpretation (operator dispatch, graphics state updates)
+- Text rendering (font lookup, encoding resolution, glyph positioning)
+- Image decoding and color space conversion
+- Transparency compositing
+- Object serialization
+
+**Mathematical hot-path optimization — alien artifact doctrine:**
+
+Monkeybee does not settle for "correct but naive." Where mathematically stronger techniques materially improve correctness, performance, or both, the engine uses them. This is not decorative cleverness — it is the application of genuinely advanced methods to genuinely hard problems that competing PDF engines solve with brute force or hand-waving. The techniques below are selected because they compound: each one improves a hot path that is exercised millions of times per document, and the cumulative effect is an engine that feels qualitatively different from anything else in the open-source PDF ecosystem.
+
+#### Exact analytic area coverage for path rasterization
+
+The naive approach to anti-aliased path rasterization is supersampling: render at Nx resolution and downsample. This is slow and produces quality proportional to the supersampling factor. Monkeybee uses exact analytic area coverage instead.
+
+The core idea is Green's theorem: the area integral over a region bounded by a closed curve can be converted to a line integral along the boundary. For each pixel that a path edge crosses, the engine computes the exact fraction of the pixel covered by the path boundary, not an approximation. For cubic Bézier segments (the fundamental curve type in PDF), this means:
+
+1. For each scanline row, find all T-values where the cubic Bézier crosses the pixel row boundaries. This is a cubic polynomial root-finding problem — solve using the depressed cubic formula (Cardano's formula for the discriminant, then the appropriate real-root branch).
+2. For each pixel column intersected by the curve segment within the row, compute the signed area contribution using the exact integral of the parametric cubic over the T-interval. The signed area for a cubic Bézier P(t) = (x(t), y(t)) over [t0, t1] within a pixel is: `∫[t0,t1] (x(t) - x_pixel_left) · y'(t) dt`, which expands to a degree-6 polynomial integral that can be evaluated analytically in closed form (the coefficients are precomputed from the control points).
+3. Accumulate signed area contributions using a winding-number accumulator per pixel column. After all path segments are processed, each pixel's coverage is the clamped absolute value of the accumulated signed area (for even-odd fill) or the clamped winding number mapped to [0, 1] (for nonzero fill).
+
+This produces mathematically exact anti-aliasing with zero supersampling overhead. The result is provably correct to floating-point precision.
+
+**Fast paths that compose with exact coverage:**
+- Axis-aligned rectangles (>60% of all PDF paths: table cells, form fields, backgrounds): detected by checking that all segments are horizontal or vertical. Coverage computation degenerates to simple arithmetic on pixel-edge intersections. No root-finding, no polynomial integration.
+- Horizontal/vertical lines: single-pixel-row or single-pixel-column coverage with trivial area computation.
+- Quadratic Bézier segments (from TrueType fonts): the signed area integral is a degree-4 polynomial — cheaper than the cubic case.
+
+**Winding number accumulation with SIMD:** The per-pixel winding accumulation across a scanline row is a prefix sum (each pixel's final value is the sum of all contributions from the left). Prefix sums are SIMD-friendly: use SSE2/AVX2 for 4/8-wide parallel prefix sums. For a 1000-pixel-wide scanline, this reduces the accumulation step to ~125 SIMD operations instead of 1000 scalar additions.
+
+#### Robust geometric predicates for clipping and intersection
+
+PDF clipping paths require computing the intersection of arbitrary path regions. Floating-point arithmetic introduces catastrophic errors at geometric degeneracies: near-parallel lines, near-tangent curves, points near edge boundaries. These errors produce visible artifacts — missing pixels, incorrect clipping, spurious regions.
+
+Monkeybee uses Jonathan Shewchuk's robust geometric predicates for all critical geometric decisions:
+- **Orientation test:** For three points (a, b, c), determine whether c is to the left, right, or exactly on the line through a and b. Uses the standard 2×2 determinant, but with adaptive-precision floating-point expansion that produces the exact sign even when the determinant is smaller than the rounding error of naive evaluation. The fast filter (simple floating-point evaluation) handles >99% of cases in O(1); the slow path (exact arithmetic via error-free transformations) fires only for near-degenerate configurations.
+- **In-circle test:** For point-in-region queries needed during clipping region construction.
+- **Segment intersection:** For path-path intersection (needed when clipping paths intersect the content paths), use the robust predicates to classify intersection topology before computing the intersection point itself.
+
+This eliminates an entire class of rendering artifacts that plague every PDF renderer that uses naive floating-point geometry.
+
+#### Spectral-aware color science pipeline
+
+Most PDF renderers treat color conversion as a black box: look up the ICC profile, interpolate in the CLUT, done. Monkeybee goes deeper.
+
+**Tetrahedral interpolation for 3D→3D ICC transforms:** The standard approach (trilinear) interpolates in a cube. Tetrahedral interpolation partitions each cube into 6 tetrahedra and interpolates within the containing tetrahedron. This is more accurate for color (the error is bounded by the second derivative of the color mapping within each tetrahedron, which is tighter than the cube bound) and is actually faster because it requires 4 vertex lookups and 3 multiplications instead of 8 lookups and 7 multiplications. The tetrahedron selection is branchless: compare the fractional coordinates and use a lookup table of the 6 possible orderings.
+
+**Precomputed spectral LUTs for known profiles:** For the most common ICC profiles (sRGB IEC 61966-2-1, Adobe RGB 1998, FOGRA39 CMYK, Japan Color 2001 Coated), precompute high-resolution LUTs at initialization (33³ grid points for 3-component, 17⁴ for 4-component). The LUT construction evaluates the full ICC pipeline (Bradford chromatic adaptation → PCS → matrix/TRC or cLUT → output) once per grid point. Runtime conversion is then pure interpolation — zero profile parsing per pixel.
+
+**Chromatic adaptation via Bradford transform:** When converting between color spaces with different white points (common when mixing sRGB content with CMYK proofing), use the Bradford chromatic adaptation matrix rather than the simpler von Kries or XYZ scaling. Bradford's cone-response-domain adaptation is the industry standard (used by ICC v4) and produces visually superior results for saturated colors.
+
+**Perceptual gamut mapping for out-of-gamut colors:** When rendering CMYK content to an RGB output, colors near the gamut boundary of the target space require mapping. Use a minimum-ΔE₀₀ algorithm (CIE DE2000 color difference formula) to find the nearest in-gamut color. This is more perceptually accurate than simple clipping, which can produce hue shifts. Precompute the gamut boundary descriptor as a convex hull in CIELAB and use a k-d tree for fast nearest-boundary-point queries.
+
+**Default color space override with proper fall-through:** When a page defines `/DefaultRGB`, `/DefaultCMYK`, or `/DefaultGray` in its resources, all device color space references implicitly map to the specified CIE-based spaces. The color pipeline must insert this indirection at the correct point — after color space name resolution but before color value interpretation. This is a common source of subtle color errors in PDF renderers.
+
+#### Algebraic blend mode optimization
+
+The 16 PDF blend modes can be partitioned by algebraic properties:
+- **Commutative modes** (Multiply, Screen, Difference, Exclusion): B(Cb, Cs) = B(Cs, Cb). For these, the compositing order within a group does not affect the blending result (though it affects alpha compositing). This enables reordering optimizations in tile-based rendering.
+- **Idempotent modes** (Darken, Lighten): B(C, C) = C. Consecutive elements with the same color in these modes can be collapsed.
+- **Identity-on-white** (Multiply): B(1, Cs) = Cs. Elements composited over a white backdrop in Multiply mode can skip the blending step entirely.
+- **Identity-on-black** (Screen): B(0, Cs) = Cs. Similarly for black backdrops.
+- **Non-separable modes** (Hue, Saturation, Color, Luminosity): These require conversion to HSL-like space. Implement using the exact formulas from ISO 32000-2 Annex B, which define SetLum() and SetSat() in terms of min/max/mid component extraction. The non-separable modes are 3-5x more expensive than separable modes per pixel — flag them during content stream interpretation so the compositing pipeline can select the fast (separable) or slow (non-separable) inner loop per span.
+
+**Tile-based lazy compositing:** Instead of materializing a full-page RGBA buffer for each transparency group, divide the page into tiles (default 256×256 pixels). Only allocate and composite tiles that are actually touched by the group's content. For documents where transparency groups affect only a small region of the page (common for watermarks, stamps, and overlays), this reduces memory usage and compositing work by 10-100x. The tile grid also enables parallel compositing across tiles.
+
+#### Signed distance field glyph rendering
+
+For text rendering at typical document DPI (150-300), traditional glyph rasterization (rasterize at target size, cache the bitmap) is adequate. But for the WASM/browser surface and for high-quality zoom, Monkeybee supports an optional signed distance field (SDF) path:
+
+1. For each glyph, precompute a low-resolution SDF grid (typically 48×48 or 64×64) where each grid cell stores the signed distance to the nearest glyph outline edge (positive outside, negative inside).
+2. At render time, bilinearly interpolate the SDF at each pixel's subpixel position. The interpolated distance value directly gives a smooth coverage estimate: `coverage = smoothstep(-0.5/scale, 0.5/scale, distance)` where scale is the ratio of pixel size to SDF texel size.
+3. The SDF representation is resolution-independent: the same 48×48 grid produces crisp text at any size from 6pt to 600pt, with zero re-rasterization.
+4. SDF computation for cubic Bézier outlines uses exact closest-point-on-cubic distance: solve the distance-minimization polynomial (degree 5 for cubic curves) using Sturm chain root isolation followed by Newton refinement. This is computed once during SDF construction, not per pixel.
+
+The SDF path is optional (controlled by a rendering mode flag) because it trades memory (one SDF grid per unique glyph in the font cache) for rendering flexibility. For the WASM browser demo, SDFs are the correct approach because they enable GPU-accelerated text rendering via a simple fragment shader.
+
+#### Adaptive curvature-aware mesh subdivision for shading types 4-7
+
+The mesh-based shading types (Coons patch, tensor-product patch, Gouraud triangle mesh) require subdivision into triangles for rasterization. Fixed-depth subdivision wastes work on flat regions and produces artifacts on highly curved regions.
+
+Monkeybee uses adaptive subdivision driven by actual geometric curvature:
+
+1. **Curvature estimation:** For a Bézier patch P(s,t), estimate the maximum curvature κ over the patch using the second partial derivatives: `κ ≈ max(||∂²P/∂s²||, ||∂²P/∂t²||, ||∂²P/∂s∂t||)`. For cubic Bézier patches, the second derivatives are linear in (s,t), so the maximum is at one of the parameter corners — evaluate at all four corners and take the max.
+2. **Screen-space error bound:** Compute the maximum screen-space deviation of a linear approximation from the true patch surface: `error_pixels = κ · (patch_screen_size)² / 8`. This is the standard curvature-based flatness criterion.
+3. **Recursive subdivision:** If error_pixels > threshold (default: 0.5 pixels), subdivide the patch at the parameter midpoint using de Casteljau splitting. This produces 4 sub-patches for surface subdivision or 2 sub-curves for boundary subdivision. The recursion terminates when all sub-patches are flat enough.
+4. **Color interpolation accuracy:** Separately check whether bilinear color interpolation across the patch is adequate by comparing the interpolated midpoint color to the true parametric midpoint color. If the ΔE₀₀ difference exceeds a threshold (default: 1.0 — just noticeable difference), subdivide even if the geometry is flat. This prevents color banding in regions where the geometry is flat but the color gradient is steep.
+
+This produces the minimum number of triangles needed for a given visual quality, with provable error bounds.
+
+#### Information-theoretic repair confidence scoring
+
+When the tolerant parser must choose between multiple recovery strategies (e.g., multiple candidate xref offsets, ambiguous encoding interpretations, conflicting incremental updates), it scores each candidate using a Bayesian confidence framework:
+
+1. **Prior probability:** Based on historical frequency of each failure mode across the pathological corpus. For example, "wrong startxref offset by exactly N bytes" has a known distribution of N values clustered around small offsets — a candidate at offset +3 is more likely than one at offset +4096.
+2. **Likelihood:** The structural plausibility of the recovered result. A repaired xref table where every entry's offset points to a valid `N 0 obj` header has higher likelihood than one where some entries point to midstream positions. A font encoding where the decoded text contains valid Unicode codepoints in a single script has higher likelihood than one producing random symbols.
+3. **Posterior confidence:** Combine prior and likelihood to produce a normalized confidence score. The repair entry in the compatibility ledger records this score. When multiple strategies succeed, the engine selects the highest-confidence result and records all alternatives with their scores.
+
+This transforms repair from "try things until something works" into a principled selection process with auditable reasoning. The confidence scores feed back into the proof harness: low-confidence repairs are flagged for manual review, and the distribution of confidence scores across the corpus becomes a meta-diagnostic of the engine's robustness.
+
+#### Multi-scale structural similarity (MS-SSIM) for render comparison
+
+The proof harness's render comparison pipeline must distinguish between genuine rendering errors and inconsequential differences (rounding, anti-aliasing, sub-pixel positioning). Pixel-wise comparison (RMSE, PSNR) fails at this: a 1-pixel shift in a thin line registers as a massive error in pixel space but is visually imperceptible.
+
+Monkeybee's render comparison uses multi-scale structural similarity (MS-SSIM):
+
+1. **Compute SSIM at multiple resolutions:** Downsample both images (Monkeybee output and reference output) by factors of 2, 4, 8, 16. At each scale, compute the SSIM index using a Gaussian window (σ=1.5). SSIM combines luminance comparison `l(x,y)`, contrast comparison `c(x,y)`, and structure comparison `s(x,y)`.
+2. **Multi-scale combination:** The final MS-SSIM score weights the components across scales: use the luminance comparison only at the finest scale (human luminance sensitivity is scale-dependent), but use contrast and structure comparisons at all scales. The weighting coefficients are from Wang et al. (2003): {0.0448, 0.2856, 0.3001, 0.2363, 0.1333} for 5 scales.
+3. **Per-region error localization:** When MS-SSIM drops below threshold (indicating a genuine rendering difference), the engine produces a spatial error map showing exactly which regions differ. This map is the heatmap visualization in the render diff report.
+4. **Perceptual significance filtering:** Small MS-SSIM drops in regions of high visual complexity (dense text, detailed images) are less perceptually significant than equal MS-SSIM drops in smooth regions. Weight the error map by local visual complexity (estimated from the Laplacian of the reference image) to filter out perceptually insignificant differences.
+
+This produces render comparison results that correlate with human perception rather than with pixel-level arithmetic, dramatically reducing false positives in the proof harness while catching genuine rendering bugs.
+
+#### Entropy-optimal stream encoding for the write path
+
+The write path must choose compression parameters that minimize output file size. For FlateDecode (the dominant filter), the zlib compression level is a quality-speed tradeoff. But the more interesting optimization is the predictor selection:
+
+1. **PNG predictor selection per row:** PNG predictors (Sub, Up, Average, Paeth) prepend a filter byte to each row before compression. Different rows benefit from different predictors. The optimal strategy: for each row, try all four predictors, compress each with a fast entropy estimate (sum of absolute values of the filtered bytes — this approximates the Shannon entropy without actually running Deflate), and select the predictor with the lowest estimate. This per-row adaptive selection typically reduces file size by 5-15% compared to fixed predictor selection, at negligible CPU cost.
+2. **Object stream packing order:** When packing objects into object streams, the order affects compression ratio (similar objects adjacent in the stream compress better). Use a greedy clustering: sort objects by type (dictionaries together, arrays together), then by size, before packing. For font descriptor dictionaries (which share many common keys), this can improve compression by 10-20%.
+3. **Cross-reference stream compression:** Use the PNG Up predictor on cross-reference stream entries (each entry's delta from the previous entry is typically small). This reduces the cross-reference stream size by 40-60% compared to raw encoding.
+
+#### Probabilistic layout analysis for text extraction
+
+The text extraction pipeline's reading order inference (Part 3, extraction section) can be significantly improved with probabilistic methods:
+
+1. **Line detection via DBSCAN clustering on Y-coordinates:** Instead of a fixed tolerance for grouping characters into lines, use density-based clustering (DBSCAN with the Y-coordinate as the feature and ε estimated from the median font size). This adapts automatically to documents with mixed font sizes and irregular line spacing.
+2. **Column detection via kernel density estimation:** Estimate the probability density of character X-positions across the page. Columns appear as modes (peaks) in this density, separated by valleys (low-density gaps). The number and positions of columns are detected automatically without assuming a grid layout.
+3. **Table detection via spatial autocorrelation:** Tables produce regular spatial patterns in character positions. Detect tables by computing the Moran's I spatial autocorrelation statistic on the character position grid. High autocorrelation in both X and Y directions indicates tabular structure. This detects tables even when they lack visible grid lines.
+4. **Reading order via topological sort on spatial constraints:** Once lines, columns, and tables are detected, construct a directed graph where edges encode "block A should be read before block B" based on: column assignment (left columns before right in LTR scripts), vertical position within a column (top before bottom), and table structure (row-by-row, left-to-right within each row). Topologically sort this graph to produce the final reading order. When the graph has ambiguities (e.g., floating figures), use the geometric centroid as a tiebreaker.
+
+### Resource limits and adversarial input protection
+
+The engine must enforce configurable resource limits to prevent adversarial inputs from consuming unbounded resources:
+
+- **Maximum nesting depth** for arrays, dictionaries, and page tree traversal (default: 256).
+- **Maximum object count** (default: 10,000,000). Documents claiming more objects than this limit are rejected with a diagnostic.
+- **Maximum stream decompressed size** (default: 1 GiB). Prevents zip-bomb attacks. The decompression pipeline monitors output size and aborts if the limit is exceeded.
+- **Maximum content stream operator count** per page (default: 5,000,000). Pages with more operators than this are truncated with a diagnostic.
+- **Maximum page count** (default: 100,000).
+- **Timeout** for any single-page operation (configurable, no default — the caller sets this).
+
+All limits are configurable by the caller. The defaults are chosen to handle all legitimate PDFs while rejecting pathological adversarial inputs.
+
+---
+
+## Part 8 — Release gates for v1
+
+v1 is the point where Monkeybee PDF publicly claims engine reality. The following must be true:
+
+### Functional gates
+
+- [ ] Parser handles all corpus categories with correct Tier 1/2/3 classification.
+- [ ] Renderer produces trustworthy visual output on representative hard documents.
+- [ ] Text extraction with positions works on representative documents.
+- [ ] Annotation creation, save, and round-trip work on representative documents.
+- [ ] Document generation produces valid, renderable output.
+- [ ] Page-level editing (add, remove, reorder) works with structural validity.
+- [ ] Metadata inspection and modification work.
+- [ ] CLI exposes all major workflows.
+- [ ] All three parse modes (Strict/Tolerant/Preserve) are functional.
+- [ ] Both write modes (full rewrite, incremental append) are functional.
+- [ ] Incremental-append save preserves existing digital signatures on representative signed documents.
+
+### Proof gates
+
+- [ ] Pathological corpus is curated, indexed, and CI-exercised.
+- [ ] Render comparison harness runs against at least PDFium and MuPDF.
+- [ ] Multi-oracle rendering arbitration is operational (disagreements recorded and triaged).
+- [ ] Round-trip harness covers all seven chain types on representative documents.
+- [ ] Annotation round-trip harness passes on representative documents.
+- [ ] Compatibility ledger is complete and machine-readable per the schema in Part 6.
+- [ ] Performance benchmarks exist for all benchmark classes.
+- [ ] Fuzz testing covers parser and content stream interpreter.
+- [ ] Arlington-model validation is integrated for at least document catalog, page tree, and font dictionaries.
+
+**Fuzz testing strategy:**
+
+Fuzz testing is the primary mechanism for discovering parser crashes, panics, infinite loops, and unbounded allocations on adversarial input.
+
+*Fuzz targets:* Each parser entry point is a separate fuzz target:
+1. `fuzz_parse_document`: full document parsing from arbitrary bytes.
+2. `fuzz_parse_object`: single object parsing from arbitrary bytes.
+3. `fuzz_parse_xref`: cross-reference parsing from arbitrary bytes.
+4. `fuzz_parse_content_stream`: content stream interpretation from arbitrary bytes (with a minimal valid document wrapper).
+5. `fuzz_decode_stream`: filter chain decompression from arbitrary bytes (testing each filter individually and in combination).
+6. `fuzz_parse_font`: font data parsing (Type 1, TrueType, CFF) from arbitrary bytes.
+7. `fuzz_parse_cmap`: CMap parsing from arbitrary bytes.
+8. `fuzz_parse_icc`: ICC profile parsing from arbitrary bytes.
+
+*Fuzz corpus seeding:* Each fuzz target is seeded with valid examples from the pathological corpus (real document fragments, real font files, real ICC profiles). The fuzzer mutates these seeds to explore error-handling paths.
+
+*Fuzz invariants (properties that must hold for all inputs):*
+- No panics (all fuzz targets catch panics and treat them as failures).
+- No undefined behavior (verified by running with address sanitizer and memory sanitizer).
+- Memory usage bounded by the configured resource limits.
+- Execution time bounded (each fuzz iteration must complete within a timeout, default 10 seconds).
+- For `fuzz_parse_document`: if parsing succeeds, the result must be serializable without panics (round-trip sanity).
+
+*Tooling:* cargo-fuzz with libFuzzer backend for continuous fuzzing. AFL++ as a secondary fuzzer for diversity. Integration with OSS-Fuzz for continuous community-driven fuzzing after open-source release.
+
+### Quality gates
+
+- [ ] Zero silent failures in the proof harness.
+- [ ] All errors use the shared error taxonomy.
+- [ ] All `unsafe` blocks are documented and tested.
+- [ ] Public API is documented with examples.
+- [ ] README accurately reflects proven capabilities (no roadmap theater).
+- [ ] Resource limits are enforced for all adversarial-input-facing code paths.
+
+---
+
+## Part 9 — Bead conversion appendix
+
+When this spec stabilizes through APR refinement, it should be decomposed into beads. The following is the anticipated bead decomposition structure. Each bead will be self-contained, dependency-aware, and carry its own test/E2E/logging obligations.
+
+### Foundation beads
+- B-CORE-001: PDF object types and object graph
+- B-CORE-002: Cross-reference table/stream parsing and repair
+- B-CORE-003: Page tree and inherited attribute resolution
+- B-CORE-004: Resource dictionary resolution chain
+- B-CORE-005: Shared coordinate geometry and transformation pipeline
+- B-CORE-006: Incremental update tracking and merge
+- B-CORE-007: Change tracking and mutation model
+- B-CORE-008: Reference integrity index (forward and reverse lookups)
+
+### Parser beads
+- B-PARSE-001: Lexer and tokenizer
+- B-PARSE-002: Object parser (all types)
+- B-PARSE-003: Stream decompression and filter chains
+- B-PARSE-004: Content stream parser
+- B-PARSE-005: Encryption/decryption support
+- B-PARSE-006: Tolerant mode and repair strategies
+- B-PARSE-007: Parser diagnostics and error recovery
+- B-PARSE-008: Strict mode and conformance validation
+- B-PARSE-009: Preserve mode and raw byte span retention
+- B-PARSE-010: Producer quirk detection and shim layer
+
+### Render beads
+- B-RENDER-001: Graphics state machine
+- B-RENDER-002: Path rendering (stroke, fill, clip)
+- B-RENDER-003: Text rendering pipeline (font → encoding → glyph → position)
+- B-RENDER-004: Image rendering and color space conversion
+- B-RENDER-005: Transparency compositing
+- B-RENDER-006: Pattern rendering (tiling and shading)
+- B-RENDER-007: Page assembly and output backend
+- B-RENDER-008: Color space resolution chain (all types including ICC)
+- B-RENDER-009: Font type handlers (Type 1, TrueType, CFF, CIDFont, Type 3)
+- B-RENDER-010: Shading types 4-7 (mesh-based gradient rendering)
+- B-RENDER-011: Overprint and overprint mode implementation
+- B-RENDER-012: SIMD-optimized compositing inner loops
+
+### Write beads
+- B-WRITE-001: Object serialization
+- B-WRITE-002: Cross-reference generation
+- B-WRITE-003: Stream compression
+- B-WRITE-004: Full document rewrite (deterministic mode)
+- B-WRITE-005: Incremental save (append mode)
+- B-WRITE-006: Content stream generation
+- B-WRITE-007: Self-consistency validation (parse own output in strict mode)
+- B-WRITE-008: Signature-safe preserve write path
+- B-WRITE-009: Font embedding and subsetting for generated content
+- B-WRITE-010: Output encryption (AES-256)
+
+### Annotation beads
+- B-ANNOT-001: Annotation model and type support
+- B-ANNOT-002: Geometry-aware placement (with rotation and CropBox handling)
+- B-ANNOT-003: Appearance stream generation (per-type, per Part 5 contract)
+- B-ANNOT-004: Annotation flattening
+- B-ANNOT-005: Annotation round-trip validation
+- B-ANNOT-006: Form field (AcroForm widget) interaction
+
+### Extraction beads
+- B-EXTRACT-001: Text extraction with positions
+- B-EXTRACT-002: Metadata extraction
+- B-EXTRACT-003: Structure and resource inspection
+- B-EXTRACT-004: Image and asset extraction
+- B-EXTRACT-005: Diagnostic report generation
+
+### Proof beads
+- B-PROOF-001: Pathological corpus acquisition and indexing
+- B-PROOF-002: Render comparison harness
+- B-PROOF-003: Round-trip validation harness (all seven chains)
+- B-PROOF-004: Compatibility ledger system (per schema in Part 6)
+- B-PROOF-005: Performance benchmark harness
+- B-PROOF-006: Fuzz testing harness
+- B-PROOF-007: CI integration and evidence artifact pipeline
+- B-PROOF-008: Multi-oracle rendering arbitration
+- B-PROOF-009: Arlington-model conformance validation integration
+- B-PROOF-010: Corpus-level compatibility aggregation and regression tracking
+
+### CLI beads
+- B-CLI-001: Render command
+- B-CLI-002: Extract command
+- B-CLI-003: Inspect command
+- B-CLI-004: Annotate command
+- B-CLI-005: Edit command
+- B-CLI-006: Generate command
+- B-CLI-007: Validate command
+- B-CLI-008: Diagnose command
+- B-CLI-009: Proof command
+- B-CLI-010: Conformance command
+
+### Checkpoint beads
+- B-CHECK-001: Post-foundation Come-to-Jesus checkpoint (core + parser done, verify against North Star)
+- B-CHECK-002: Post-render checkpoint (renderer working, verify closed-loop progress)
+- B-CHECK-003: Post-writeback checkpoint (round trips working, verify bidirectionality claim)
+- B-CHECK-004: Pre-release checkpoint (all gates, verify proof surfaces are externally legible)
+
+### Alien artifact beads
+- B-ALIEN-001: Exact analytic area coverage rasterizer (Green's theorem, signed area accumulation, SIMD prefix sums)
+- B-ALIEN-002: Robust geometric predicates (Shewchuk-style adaptive precision for orientation, intersection, clipping)
+- B-ALIEN-003: Spectral-aware color science pipeline (tetrahedral interpolation, Bradford adaptation, perceptual gamut mapping)
+- B-ALIEN-004: Algebraic blend mode optimization (commutativity/idempotency classification, tile-based lazy compositing)
+- B-ALIEN-005: SDF glyph rendering path (exact cubic distance, resolution-independent text, WASM-compatible)
+- B-ALIEN-006: Adaptive curvature-aware mesh subdivision (curvature estimation, screen-space error bounds, color-accuracy subdivision)
+- B-ALIEN-007: Information-theoretic repair confidence scoring (Bayesian prior/likelihood/posterior framework)
+- B-ALIEN-008: MS-SSIM render comparison pipeline (multi-scale, perceptual significance filtering, spatial error localization)
+- B-ALIEN-009: Entropy-optimal stream encoding (per-row predictor selection, object stream packing order, xref compression)
+- B-ALIEN-010: Probabilistic layout analysis for extraction (DBSCAN line detection, KDE column detection, Moran's I table detection)
+- B-ALIEN-011: Arlington-model conformance validation (codegen from TSV, strict/tolerant integration, profile-specific checking)
+- B-ALIEN-012: Kani proof harnesses (bounded allocation, no-panic lexer, reference termination, preserve-mode byte integrity)
