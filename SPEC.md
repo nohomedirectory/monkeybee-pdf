@@ -71,12 +71,15 @@ The mode is not a global singleton. A single session can parse in tolerant mode,
 
 ### Execution context doctrine
 
-Every top-level API accepts an `ExecutionContext` carrying:
+Every top-level API accepts an operation-scoped `ExecutionContext` carrying:
 - Resource budgets (objects, decompressed bytes, operators, recursion depth)
 - Cooperative cancellation / deadline
 - Determinism settings for CI and proof
 - Provider registry
 - Trace / metrics sink
+
+`ExecutionContext` is never stored on `OpenSession`.
+Sessions are long-lived document handles; execution contexts are per-call control planes.
 
 ### Diagnostic streaming model
 
@@ -236,6 +239,15 @@ a "completeness" flag so refined tiles replace partial ones.
 A user loads an AcroForm-heavy PDF, reads or updates field values, regenerates widget appearances, saves, and reopens without breaking the field tree or signed byte ranges outside the edited scope.
 
 Proof surfaces: field round trips, appearance regeneration tests, signature-preserving form fills.
+
+### Workflow 10: Explain compatibility and diff revisions
+
+A user opens a PDF and immediately receives a `CapabilityReport` summarizing: signatures,
+encryption, tagged-structure presence, XFA/JS/risky-decoder presence, edit-safety class,
+preserve-mode constraints, and expected degradation zones.
+
+A user compares two PDFs or two snapshots and receives a unified diff: structural changes,
+text changes, render deltas, signature impact, and compatibility-tier changes.
 
 ---
 
@@ -516,6 +528,10 @@ The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 
 ### Workspace layout
 
+`monkeybee` is the only semver-stable public library crate.
+All other workspace crates are implementation crates unless explicitly re-exported by `monkeybee`.
+The workspace layout is not itself the public API contract.
+
 Monkeybee is a Cargo workspace with four explicit strata:
 1. **Byte/revision layer** — immutable source bytes plus appended revisions.
 2. **Syntax/COS layer (`monkeybee-syntax`)** — immutable parsed objects, token/span provenance,
@@ -534,8 +550,24 @@ All open paths operate on a `ByteSource` trait so the architecture supports mmap
 
 - `MonkeybeeEngine` owns global policy: providers, caches, worker pools, oracle manifests, and security defaults.
 - `OpenSession` binds a byte source and revision chain to that engine.
-- `PdfSnapshot` is immutable, shareable across threads, and identified by `snapshot_id`.
+- `PdfSnapshot` is immutable, shareable across threads, and structurally shared by default.
+  Snapshot creation must be copy-on-write / persistent-data-structure based; full-document cloning
+  is a fallback of last resort, not the baseline design.
 - `EditTransaction` consumes a snapshot and produces a new snapshot plus a serializable delta.
+
+```
+pub struct CapabilityReport {
+    pub signed: bool,
+    pub encrypted: bool,
+    pub tagged: bool,
+    pub has_xfa: bool,
+    pub has_javascript: bool,
+    pub risky_decoder_set: Vec<DecoderType>,
+    pub edit_safety: EditSafetyClass,
+    pub preserve_constraints: Vec<PreserveConstraint>,
+    pub expected_degradations: Vec<FeatureCode>,
+}
+```
 
 **API surface:**
 
@@ -615,6 +647,11 @@ Engine-level caches are bounded by configurable memory budgets. The default budg
   page. LRU eviction. Invalidated when any object in the page's dependency subgraph changes.
 - **Raster tile cache:** Configurable, default 512 MB. Keyed by (snapshot_id, page_index, tile_id,
   dpi). LRU eviction. Used by the tile/band scheduler for progressive and region rendering.
+- **Scratch spill store:** bounded local store for oversized decoded streams, raster tiles,
+  isolated-decoder outputs, and other large intermediate artifacts.
+
+When memory pressure exceeds in-memory cache budgets, eligible artifacts may spill to the
+scratch store instead of being dropped outright.
 
 Cache budgets are exposed in `ExecutionContext` so proof runs can use smaller budgets to stress
 eviction paths. The cache reports hit/miss/eviction statistics through the trace/metrics sink.
@@ -692,6 +729,7 @@ Byte sources, mmap/in-memory/range-backed access, revision chain, and raw span o
 Key responsibilities:
 - `ByteSource` trait implementations (mmap, in-memory, range-backed)
 - Fetch scheduler and prefetch planning for remote/lazy byte sources
+- Persistent range cache keyed by source URL + validator (ETag/Last-Modified/content hash)
 
 ### Fetch scheduler contract
 
@@ -767,9 +805,13 @@ Key responsibilities:
 
 ### Dependency graph contract
 
-The dependency graph is a directed acyclic graph (cycles are detected and reported as errors)
-mapping objects to the objects they transitively depend on. It is computed lazily and cached
-per snapshot.
+Monkeybee maintains three related graph views:
+1. `ReferenceGraph`: the raw directed object-reference graph; cycles are legal.
+2. `OwnershipGraph`: semantic ownership/inheritance edges with stronger invariants.
+3. `CondensedDependencyGraph`: a strongly-connected-components condensation DAG used for
+   invalidation, page-impact, and resource-GC planning.
+
+The graph is computed lazily and cached per snapshot.
 
 **Nodes:** Every indirect object is a potential node. In practice, only objects reachable from
 the page tree, catalog, or AcroForm root are tracked.
@@ -791,6 +833,8 @@ the page tree, catalog, or AcroForm root are tracked.
 4. `edit_impact(changed_ids: Set<ObjRef>) -> EditImpact`: given a set of changed objects, report
    which pages are affected, which caches must be invalidated, and which other objects may need
    regeneration (e.g., widget appearances after field value change).
+5. `scc_of(obj_id) -> SccId`
+6. `ownership_violations() -> Vec<OwnershipViolation>`
 
 **Computation:** The graph is built by walking the object store from known roots (catalog, page
 tree nodes, AcroForm fields). Dictionary values and array elements are scanned for indirect
@@ -841,7 +885,8 @@ Key responsibilities:
 - Worker isolation / kill-on-overrun for risky decoders
 - Risky-decoder allow/deny policy
 - Hostile-input policy enforcement
-- All high-risk decode jobs execute through `monkeybee-security` with explicit memory/time budgets and optional worker isolation
+- All high-risk decode jobs and all optional native bridges execute through `monkeybee-security`
+  and `monkeybee-native`, with explicit memory/time budgets and optional worker isolation
 
 **Security-gated decoder invocation flow:**
 
@@ -1659,6 +1704,8 @@ Key responsibilities:
 - `monkeybee generate [--template] -o <o>`
 - `monkeybee validate <file> [--roundtrip|--structure|--render-compare|--conformance]`
 - `monkeybee diagnose <file>` — full compatibility report
+ - `monkeybee diagnose <file> [--html]` — JSON or self-contained HTML dossier
+ - `monkeybee diff <before> <after> [--render|--text|--structure|--save-impact]`
 - `monkeybee plan-save <file> [--incremental|--rewrite]` — preview ownership, rewritten regions,
   signature impact, and fallback reasons before saving
 - `monkeybee proof <corpus-dir>` — run the full proof harness
@@ -1771,6 +1818,14 @@ preventing dangling references to snapshot data.
 ### Object identity
 
 Every PDF object in the document model has a stable identity (object number + generation number for indirect objects). Object identity is preserved across parse → manipulate → serialize cycles. Reference resolution is explicit and traceable.
+
+Object identity is layered:
+- `ObjRef` is document-local identity only.
+- `DocumentId + ObjRef` is cross-session object identity.
+- `SnapshotId` identifies semantic state.
+- `ResourceFingerprint` identifies immutable reusable artifacts across snapshots/documents.
+
+No cache may key cross-document data by `ObjRef` alone.
 
 ### Provenance preservation
 
@@ -2861,7 +2916,8 @@ Monkeybee distinguishes memory safety from execution safety.
 - `Strict` — disable risky or non-native features with explicit degradation reporting
 
 High-risk domains include JBIG2Decode, JPXDecode, native font/image bridges, XFA XML packet handling, and Type 4 calculator functions.
-All high-risk decode jobs execute through `monkeybee-security` with explicit memory/time budgets and optional worker isolation; no crate outside `monkeybee-codec` may invoke them directly.
+All high-risk decode jobs and all optional native bridges execute through `monkeybee-security`
+and `monkeybee-native`, with explicit memory/time budgets and optional worker isolation; no crate outside `monkeybee-codec` may invoke them directly.
 In hardened mode these run in isolated workers or are disabled; no external-entity XML resolution is ever permitted.
 
 ### Targeted formal verification
@@ -3242,6 +3298,13 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 
 ### Quality gates
 
+- [ ] Architectural gate: identity model (`DocumentId`, cache-key rules, snapshot/resource identity)
+  is finalized before parallel subsystem implementation begins.
+- [ ] Architectural gate: dependency graph semantics (raw graph vs condensed DAG) are finalized
+  before edit/invalidation/writeback work begins.
+- [ ] Architectural gate: session policy and per-operation `ExecutionContext` precedence rules are
+  finalized before API stabilization.
+- [ ] Architectural gate: annotation/widget appearance generation no longer depends on render.
 - [ ] Zero silent failures in the proof harness.
 - [ ] All errors use the shared error taxonomy.
 - [ ] All `unsafe` blocks are documented and tested.
@@ -3259,7 +3322,7 @@ The following table consolidates the baseline/experimental classification from a
 | Cross-reference streams | Baseline (read), Post-baseline (write) | Must read; write deferred |
 | Object stream packing | Post-baseline | Requires xref streams, adds complexity |
 | All standard filters (Flate, LZW, ASCII85, etc.) | Baseline | Required for real-world PDFs |
-| JBIG2 decode | Baseline (via openjpeg-sys) | Common in scanned docs |
+| JBIG2 decode | Baseline (via isolated JBIG2-capable decoder path) | Common in scanned docs |
 | JPEG 2000 decode | Baseline (via openjpeg-sys) | Common in print-quality PDFs |
 | Encryption V1-V5 (read) | Baseline | Required for real-world PDFs |
 | Encryption (write) | Post-baseline | Not needed for v1 proof |

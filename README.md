@@ -30,6 +30,7 @@ v1 has two explicit lanes:
 - **Extraction usefulness**: text with positions, metadata, structure, resource inspection, diagnostics.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, and surfaced — never silently swallowed.
+- **Operational explainability**: the engine can explain edit safety, signature impact, and revision-to-revision deltas in a way users can act on.
 
 ## Compatibility doctrine
 
@@ -47,6 +48,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 
 | Crate | Responsibility |
 |---|---|
+| `monkeybee` | Stable public facade: semver-governed `Engine`, `Session`, `Snapshot`, `EditTransaction`, `WritePlan`, `CapabilityReport`, and high-level open/render/extract/edit/save APIs |
 | `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets, diagnostic streaming (DiagnosticSink), PDF version tracking, StreamHandle contract, provider traits (CryptoProvider, OracleProvider) |
 | `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduler (FetchScheduler trait), prefetch planning, revision chain, raw span ownership |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
@@ -57,7 +59,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit; consumer sink adapters (RenderSink, ExtractSink, InspectSink, EditSink) |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline (existing PDF text) and authoring pipeline (shaping/bidi/layout), subsetting, search/hit-test primitives |
 | `monkeybee-render` | Page rendering via content events/PagePlan: positioned glyphs, images, transparency, vector graphics, masks, blending; tile/band raster surface; cooperative cancellation; progressive rendering |
-| `monkeybee-compose` | High-level authoring and composition: document/page builders, resource naming, appearance generation, font embedding planning |
+| `monkeybee-compose` | High-level authoring and composition: document/page builders, resource naming, annotation/widget appearance synthesis, font embedding planning |
 | `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, WritePlan classification, xref format decision rules, xref/trailer emission, structural validity, final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content stream rewrite pipeline |
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, widget/signature bridge |
@@ -65,6 +67,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | `monkeybee-extract` | Multi-surface text extraction, metadata, structure inspection, asset extraction, diagnostics |
 | `monkeybee-validate` | Arlington/profile validation, write preflight, signature byte-range checks |
 | `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility accounting |
+| `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, subprocess-friendly broker hooks |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, conversion, diagnostics |
 
 The architecture has four explicit strata: byte/revision, syntax/COS (`monkeybee-syntax` -- the preservation boundary), semantic document (`monkeybee-document`), and content. All crates share `monkeybee-core` for primitives. The syntax layer preserves what the parser saw; the semantic layer builds meaning from it. Rendering, extraction, annotation, editing, and writeback all operate on the same document model, not parallel dead-end parse trees. Core library crates are runtime-agnostic; async orchestration is an adapter concern at the CLI/proof edge.
@@ -79,6 +82,7 @@ monkeybee-pdf/
 ├── AGENTS.md                     ← agent/swarm coordination
 ├── Cargo.toml
 ├── crates/
+│   ├── monkeybee/
 │   ├── monkeybee-core/
 │   ├── monkeybee-bytes/
 │   ├── monkeybee-codec/

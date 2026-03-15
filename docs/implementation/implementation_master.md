@@ -204,6 +204,7 @@ monkeybee-pdf/
 │   │   │   ├── fuzz.rs           # fuzz testing coordination
 │   │   │   └── evidence.rs       # artifact generation
 │   │   └── Cargo.toml
+│   ├── monkeybee-native/         # all optional FFI/native bridges and broker adapters
 │   └── monkeybee-cli/            # command-line interface
 │       ├── src/
 │       │   └── main.rs
@@ -234,7 +235,7 @@ monkeybee-compose       (depends on: core, document, text, content)  ← authori
 monkeybee-write         (depends on: core, bytes, document, codec)   ← pure serializer
 monkeybee-edit          (depends on: core, document, content, compose, write)
 monkeybee-forms         (depends on: core, document, text, compose)
-monkeybee-annotate      (depends on: core, document, content, compose, forms, render)
+monkeybee-annotate      (depends on: core, document, content, compose, forms)
 monkeybee-extract       (depends on: core, content, document, text)
 monkeybee-validate      (depends on: core, document)
 monkeybee-proof         (depends on: core, bytes, codec, security, parser, syntax, document, content, text, render, compose, write, edit, forms, annotate, extract, validate)
@@ -243,9 +244,10 @@ monkeybee-cli           (depends on: all above)
 
 Note: `monkeybee-syntax` sits between parser and document as the preservation boundary. `monkeybee-compose` sits between edit/annotate/forms and write, owning authoring/builder semantics while write remains a pure serializer.
 
-Note: monkeybee-annotate depends on monkeybee-render for appearance stream generation —
-specifically for rendering text and graphics within annotation appearance form XObjects.
-The compose crate handles the builder API; render provides the actual glyph/path realization.
+Note: annotation/widget appearance streams are authored PDF content, not raster output.
+Appearance synthesis lives in `monkeybee-compose` via `AppearanceBuilder`, `TextEmit`,
+and graphics-state-aware content emission. `monkeybee-render` consumes the resulting streams
+but is not a dependency of annotate/forms.
 
 Note: monkeybee-proof already lists security in its dependency list. Verified.
 
@@ -334,6 +336,27 @@ Rayon remains the CPU-bound parallel execution layer. The architectural split is
 
 ## Core data structures
 
+### Identity model
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DocumentId(pub u128);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ObjectKey {
+    pub document_id: DocumentId,
+    pub obj_ref: ObjRef,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ResourceFingerprint(pub [u8; 32]);
+
+pub enum BlobHandle {
+    InMemory(Arc<[u8]>),
+    Spill(ScratchBlobId),
+}
+```
+
 ### Engine and session model (`monkeybee-document`)
 
 ```rust
@@ -346,7 +369,7 @@ pub struct MonkeybeeEngine {
     pub color_profile_provider: Box<dyn ColorProfileProvider>,
     pub crypto_provider: Option<Box<dyn CryptoProvider>>,
     pub oracle_provider: Option<Box<dyn OracleProvider>>,
-    pub security_profile: SecurityProfile,
+    pub engine_policy: EnginePolicy,
 }
 
 /// An open document session: binds a byte source to the engine.
@@ -356,17 +379,29 @@ pub struct OpenSession {
     pub byte_source: Box<dyn ByteSource>,
     pub revision_chain: RevisionChain,
     pub current_snapshot: Arc<PdfSnapshot>,
-    pub open_strategy: OpenStrategy,  // eager, lazy, or remote
-    pub exec_ctx: ExecutionContext,
+    pub session_config: SessionConfig,
+}
+
+pub struct EnginePolicy {
+    pub default_security_profile: SecurityProfile,
+    pub provider_policy: ProviderPolicy,
+}
+
+pub struct SessionConfig {
+    pub open_strategy: OpenStrategy,
+    pub password: Option<SecretString>,
+    pub session_overrides: SessionOverrides,
 }
 
 /// Immutable, shareable document state. Identified by snapshot_id.
 /// Send + Sync — safe for concurrent page-parallel operations.
 pub struct PdfSnapshot {
     pub snapshot_id: SnapshotId,
-    pub document: PdfDocument,
-    pub syntax_snapshot: SyntaxSnapshot,  // from monkeybee-syntax
-    pub dep_graph: DependencyGraph,
+    pub document: Arc<PersistentPdfDocument>,
+    pub syntax_snapshot: Arc<SyntaxSnapshot>,
+    pub dep_graph: Arc<CondensedDependencyGraph>,
+    pub parent_snapshot: Option<SnapshotId>,
+    pub delta_from_parent: Option<SnapshotDelta>,
 }
 
 pub enum OpenStrategy {
@@ -683,6 +718,13 @@ pub struct TextState {
 ### Change tracking (`monkeybee-document::transaction`)
 
 ```rust
+pub struct SnapshotDelta {
+    pub changed_objects: Vec<ObjectChange>,
+    pub changed_pages: Vec<usize>,
+    pub invalidated_cache_keys: Vec<CacheKey>,
+    pub regenerated_artifacts: Vec<ArtifactId>,
+}
+
 /// Journal-based change tracking (replaces HashSet-based ChangeTracker)
 pub struct ChangeJournal {
     pub entries: Vec<ChangeEntry>,
@@ -895,7 +937,10 @@ pub struct CacheConfig {
 pub struct CacheManager {
     pub config: CacheConfig,
     pub decoded_streams: DashMap<(SnapshotId, ObjRef, u64), Arc<[u8]>>,
-    pub fonts: DashMap<ObjRef, Arc<ParsedFont>>,
+    pub doc_fonts: DashMap<(SnapshotId, ObjRef), Arc<ParsedFontInstance>>,
+    pub shared_font_programs: DashMap<ResourceFingerprint, Arc<ParsedFontProgram>>,
+    pub shared_icc_profiles: DashMap<ResourceFingerprint, Arc<ParsedIccProfile>>,
+    pub shared_cmaps: DashMap<ResourceFingerprint, Arc<ParsedCMap>>,
     pub page_plans: DashMap<(SnapshotId, usize), Arc<PagePlan>>,
     pub raster_tiles: DashMap<(SnapshotId, usize, TileId, u32), Arc<TileData>>,
 }
@@ -976,11 +1021,19 @@ pub enum EdgeType {
     InheritedRef,  // page inherits an attribute from an ancestor
 }
 
-/// Dependency graph: DAG mapping objects to their transitive dependencies.
+/// Raw directed reference graph; cycles are legal.
 /// Computed lazily, cached per snapshot, stored as adjacency lists in DashMap.
-pub struct DependencyGraph {
+pub struct ReferenceGraph {
     pub forward: DashMap<ObjRef, Vec<(ObjRef, EdgeType)>>,  // A -> [B, C, ...]
     pub reverse: DashMap<ObjRef, Vec<(ObjRef, EdgeType)>>,  // B -> [A, ...]
+    pub snapshot_id: SnapshotId,
+}
+
+/// SCC-condensed DAG used by invalidation and GC.
+pub struct CondensedDependencyGraph {
+    pub scc_nodes: DashMap<SccId, Vec<ObjRef>>,
+    pub dag_forward: DashMap<SccId, Vec<SccId>>,
+    pub dag_reverse: DashMap<SccId, Vec<SccId>>,
     pub snapshot_id: SnapshotId,
 }
 
@@ -1019,6 +1072,15 @@ pub struct FetchStatistics {
     pub requests_issued: u64,
     pub bytes_fetched: u64,
     pub avg_latency_ms: f64,
+    pub cache_hits: u64,
+    pub validator_reuses: u64,
+}
+
+pub struct RangeCacheKey {
+    pub source_id: SourceId,
+    pub offset: u64,
+    pub length: u64,
+    pub validator: SourceValidator,
 }
 ```
 
@@ -1163,8 +1225,9 @@ PdfDocument
 - **`flate2`** — DEFLATE compression/decompression (FlateDecode)
 - **`image`** — image decoding (JPEG, PNG, TIFF baseline)
 - **`jpeg-decoder`** — DCTDecode
-- **`openjpeg-sys` or `jpeg2k`** — JPXDecode (JPEG 2000)
-- **`freetype-rs` or `ttf-parser` + `ab_glyph`** — font parsing and glyph rasterization
+- **`openjpeg-sys` or `jpeg2k`** — JPXDecode, isolated behind `monkeybee-native`
+- **`lcms2`** — ICC evaluation, isolated behind `monkeybee-native`
+- **`freetype-rs`** — optional hinted rasterization, isolated behind `monkeybee-native`
 - **`indexmap`** — ordered dictionaries
 - **`once_cell` / `std::sync::OnceLock`** — lazy initialization
 - **`asupersync`** — async runtime, structured concurrency, cancellation, and orchestration
