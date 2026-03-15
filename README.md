@@ -18,7 +18,11 @@ This loop is the thesis. Every subsystem exists to make this loop real on ugly d
 
 ## What v1 must prove
 
-Monkeybee v1 is not a demo or a roadmap. It must ship with automated, repeatable evidence of the closed loop on ugly documents using a correct baseline engine. Advanced algorithmic backends are welcome, but they are not v1 blockers until they outperform the baseline under proof.
+Monkeybee v1 is not a demo or a roadmap. It must ship with automated, repeatable evidence of the closed loop on ugly documents using a correct baseline engine.
+
+v1 has two explicit lanes:
+- **Baseline v1 (release-gating):** the smallest coherent engine that proves the closed loop on ugly documents with simple, auditable implementations.
+- **Experimental backends (non-gating):** advanced algorithms, compact encoders, and specialized optimizations that remain optional until they beat the baseline under proof.
 
 - **Rendering correctness** on hard, pathological, real-world PDFs that simpler engines mishandle or refuse.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent drift.
@@ -44,15 +48,19 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | Crate | Responsibility |
 |---|---|
 | `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets |
-| `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, revision chain, raw span ownership |
+| `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduler, prefetch planning, revision chain, raw span ownership |
+| `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
+| `monkeybee-security` | Security profiles, worker isolation, budget broker, hostile-input policy |
 | `monkeybee-parser` | PDF syntax parsing, repair, tolerant/strict modes, raw token/span retention |
 | `monkeybee-document` | Semantic document graph, page tree, inherited state, resource resolution, ownership classes |
 | `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit |
-| `monkeybee-render` | Page rendering: content streams, text, fonts, images, transparency, vector graphics, masks, blending |
+| `monkeybee-text` | Font programs, CMaps, Unicode mapping, shaping/bidi, subsetting, search/hit-test primitives |
+| `monkeybee-render` | Page rendering: content streams, positioned glyphs, images, transparency, vector graphics, masks, blending |
 | `monkeybee-write` | Serialization, generation, incremental save, full rewrite, structural validity |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application |
-| `monkeybee-annotate` | Annotation creation, modification, flattening, geometry-aware placement |
-| `monkeybee-extract` | Text extraction with positions, metadata, structure inspection, asset extraction, diagnostics |
+| `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, widget/signature bridge |
+| `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
+| `monkeybee-extract` | Multi-surface text extraction, metadata, structure inspection, asset extraction, diagnostics |
 | `monkeybee-validate` | Arlington/profile validation, write preflight, signature byte-range checks |
 | `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility accounting |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, conversion, diagnostics |
@@ -71,12 +79,16 @@ monkeybee-pdf/
 ├── crates/
 │   ├── monkeybee-core/
 │   ├── monkeybee-bytes/
+│   ├── monkeybee-codec/
+│   ├── monkeybee-security/
 │   ├── monkeybee-parser/
 │   ├── monkeybee-document/
 │   ├── monkeybee-content/
+│   ├── monkeybee-text/
 │   ├── monkeybee-render/
 │   ├── monkeybee-write/
 │   ├── monkeybee-edit/
+│   ├── monkeybee-forms/
 │   ├── monkeybee-annotate/
 │   ├── monkeybee-extract/
 │   ├── monkeybee-validate/

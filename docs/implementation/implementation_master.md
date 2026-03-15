@@ -24,17 +24,35 @@ monkeybee-pdf/
 │   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── source.rs         # ByteSource implementations (mmap, in-memory)
+│   │   │   ├── source.rs         # ByteSource implementations (mmap, in-memory, range-backed)
+│   │   │   ├── fetch.rs          # fetch scheduler and prefetch planning for remote/lazy sources
 │   │   │   ├── revision.rs       # revision chain tracking
 │   │   │   └── span.rs           # raw span ownership for preserve mode
 │   │   └── Cargo.toml
-│   ├── monkeybee-parser/         # PDF syntax parsing, repair, decryption
+│   ├── monkeybee-codec/          # filter chains, image decode/encode, predictor logic
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── filters.rs        # stream filter implementations (Flate, LZW, ASCII85, etc.)
+│   │   │   ├── predictor.rs      # PNG/TIFF predictor logic
+│   │   │   ├── image.rs          # image decode/encode adapters (JPEG, JPEG2000, JBIG2)
+│   │   │   ├── pipeline.rs       # bounded decode pipelines
+│   │   │   └── telemetry.rs      # decode telemetry for proof and diagnostics
+│   │   └── Cargo.toml
+│   ├── monkeybee-security/       # security profiles, worker isolation, budget broker
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── profile.rs        # security profiles (Compatible, Hardened, Strict)
+│   │   │   ├── budget.rs         # budget broker and enforcement
+│   │   │   ├── isolation.rs      # worker isolation / kill-on-overrun
+│   │   │   └── policy.rs         # risky-decoder allow/deny, hostile-input policy
+│   │   └── Cargo.toml
+│   ├── monkeybee-parser/         # PDF syntax parsing, repair (delegates codec/security)
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── lexer.rs          # tokenization
 │   │   │   ├── object_parser.rs  # object parsing
 │   │   │   ├── xref_parser.rs    # xref table/stream parsing + repair
-│   │   │   ├── stream.rs         # stream decompression, filter chains
+│   │   │   ├── stream.rs         # stream dispatch (delegates to monkeybee-codec)
 │   │   │   ├── content.rs        # content stream parsing
 │   │   │   ├── crypt.rs          # encryption/decryption
 │   │   │   ├── repair.rs         # tolerant mode, recovery strategies
@@ -49,7 +67,9 @@ monkeybee-pdf/
 │   │   │   ├── resource.rs       # resource resolution
 │   │   │   ├── ownership.rs      # Owned/ForeignPreserved/OpaqueUnsupported classification
 │   │   │   ├── update.rs         # incremental update tracking
-│   │   │   └── transaction.rs    # EditTransaction, change tracking
+│   │   │   ├── depgraph.rs       # dependency graph and derived-artifact invalidation
+│   │   │   ├── snapshot.rs       # PdfSnapshot (immutable, shareable, keyed by snapshot_id)
+│   │   │   └── transaction.rs    # EditTransaction, change tracking, snapshot-in/snapshot-out
 │   │   └── Cargo.toml
 │   ├── monkeybee-content/        # content-stream IR and event interpreter
 │   │   ├── src/
@@ -60,13 +80,23 @@ monkeybee-pdf/
 │   │   │   ├── pageplan.rs       # PagePlan immutable display list IR
 │   │   │   └── marked.rs         # marked content span tracking
 │   │   └── Cargo.toml
+│   ├── monkeybee-text/           # shared text subsystem: fonts, CMaps, shaping, search
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── font.rs           # font program parsing and caching
+│   │   │   ├── cmap.rs           # CMap / ToUnicode handling
+│   │   │   ├── unicode.rs        # Unicode fallback chain
+│   │   │   ├── shaping.rs        # shaping, bidi, font fallback
+│   │   │   ├── subset.rs         # subsetting and ToUnicode generation
+│   │   │   └── search.rs         # search, hit-testing, selection primitives
+│   │   └── Cargo.toml
 │   ├── monkeybee-render/         # page rendering
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── interpreter.rs    # content stream interpreter
 │   │   │   ├── state.rs          # graphics state machine
-│   │   │   ├── text.rs           # text rendering pipeline
-│   │   │   ├── font.rs           # font handling
+│   │   │   ├── text.rs           # text rendering (delegates to monkeybee-text)
+│   │   │   ├── font.rs           # font dispatch (delegates to monkeybee-text)
 │   │   │   ├── image.rs          # image rendering
 │   │   │   ├── color.rs          # color space management
 │   │   │   ├── path.rs           # vector path rendering
@@ -94,19 +124,32 @@ monkeybee-pdf/
 │   │   │   ├── redaction.rs      # high-assurance redaction application
 │   │   │   └── optimize.rs       # compaction, recompression
 │   │   └── Cargo.toml
-│   ├── monkeybee-annotate/       # annotation operations
+│   ├── monkeybee-forms/          # AcroForm field tree, value model, appearance regen
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── model.rs          # annotation type model
+│   │   │   ├── field_tree.rs     # field tree parsing and inheritance resolution
+│   │   │   ├── value.rs          # field value model (text, button, choice, signature)
+│   │   │   ├── appearance.rs     # appearance regeneration for widget annotations
+│   │   │   ├── calc_order.rs     # calculation order detection and preservation
+│   │   │   ├── widget.rs         # widget/annotation bridge
+│   │   │   └── signature.rs      # signature-field helpers
+│   │   └── Cargo.toml
+│   ├── monkeybee-annotate/       # non-form annotation operations
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── model.rs          # annotation type model (non-form)
 │   │   │   ├── placement.rs      # geometry-aware placement
 │   │   │   ├── appearance.rs     # appearance stream generation
 │   │   │   ├── flatten.rs        # annotation flattening
 │   │   │   └── roundtrip.rs      # round-trip validation helpers
 │   │   └── Cargo.toml
-│   ├── monkeybee-extract/        # extraction and inspection
+│   ├── monkeybee-extract/        # multi-surface extraction and inspection
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── text.rs           # text extraction with positions
+│   │   │   ├── physical.rs       # PhysicalText: exact glyph geometry
+│   │   │   ├── logical.rs        # LogicalText: reading-order with confidence
+│   │   │   ├── tagged.rs         # TaggedText: structure-tree-driven extraction
+│   │   │   ├── search.rs         # SearchIndex, SelectionQuads, HitTest primitives
 │   │   │   ├── metadata.rs       # metadata extraction
 │   │   │   ├── structure.rs      # structure inspection
 │   │   │   ├── asset.rs          # image/font/embedded file extraction
@@ -143,20 +186,25 @@ monkeybee-pdf/
 monkeybee-core          (no internal deps — shared primitives)
     ↑
 monkeybee-bytes         (depends on: core)
+monkeybee-security      (depends on: core)
     ↑
-monkeybee-parser        (depends on: core, bytes)
+monkeybee-codec         (depends on: core, security)
+    ↑
+monkeybee-parser        (depends on: core, bytes, codec, security)
     ↑
 monkeybee-document      (depends on: core, bytes, parser)
     ↑
 monkeybee-content       (depends on: core, document)
+monkeybee-text          (depends on: core, document, codec)
     ↑
-monkeybee-render        (depends on: core, content, document)
-monkeybee-write         (depends on: core, bytes, document)
+monkeybee-render        (depends on: core, content, document, text, codec)
+monkeybee-write         (depends on: core, bytes, document, text, codec)
 monkeybee-edit          (depends on: core, document, content, write)
-monkeybee-annotate      (depends on: core, document, content, render, write)
-monkeybee-extract       (depends on: core, content, document)
+monkeybee-forms         (depends on: core, document, text, render, write)
+monkeybee-annotate      (depends on: core, document, content, render, write, forms)
+monkeybee-extract       (depends on: core, content, document, text)
 monkeybee-validate      (depends on: core, document)
-monkeybee-proof         (depends on: core, bytes, parser, document, content, render, write, edit, annotate, extract, validate)
+monkeybee-proof         (depends on: core, bytes, codec, security, parser, document, content, text, render, write, edit, forms, annotate, extract, validate)
 monkeybee-cli           (depends on: all above)
 ```
 
@@ -460,10 +508,24 @@ PdfDocument
 - Unit tests: ByteSource implementations (mmap, in-memory), revision chain construction, span tracking.
 - Property tests: span ownership invariants preserved across revision appends.
 
+### monkeybee-codec
+- Unit tests: each filter implementation (FlateDecode, LZW, ASCII85, etc.) on known input/output pairs.
+- Property tests: encode → decode round-trip identity for all filters.
+- Fuzz tests: arbitrary bytes through each decoder — no panics, bounded memory.
+- Predictor tests: PNG and TIFF predictor logic on known image data.
+- Pipeline tests: cascaded filter chains, including reversed-order recovery.
+
+### monkeybee-security
+- Unit tests: security profile selection, budget enforcement, allow/deny policy.
+- Integration tests: risky decoder invocation through security gate — verify budgets enforced and isolation works.
+- Property tests: no decoder invocation bypasses the security boundary.
+
 ### monkeybee-document
 - Unit tests: document model construction, page tree inheritance, resource resolution, reference integrity.
 - Property tests: ownership classification consistency, EditTransaction commit/rollback semantics.
 - Invariant tests: change tracker consistency, reverse reference index accuracy.
+- Dependency graph tests: invalidation correctness — edit an object, verify only dependents invalidated.
+- Snapshot tests: PdfSnapshot immutability, snapshot_id uniqueness, cache keying correctness.
 
 ### monkeybee-content
 - Unit tests: content stream interpretation, graphics state machine, event dispatch.
@@ -475,6 +537,13 @@ PdfDocument
 - Corpus tests: parse every file in the pathological corpus, verify no panics, collect diagnostics.
 - Fuzz tests: random bytes → parser → no panics, no UB, bounded memory.
 - Repair tests: known malformed inputs → verify repair produces usable output.
+
+### monkeybee-text
+- Unit tests: font program parsing (Type 1, TrueType, CFF, CIDFont, Type 3), CMap parsing, ToUnicode resolution.
+- Unicode fallback chain tests: known fonts with broken/missing ToUnicode — verify fallback produces correct mappings.
+- Shaping/bidi tests: complex scripts (Arabic, Hebrew, Devanagari), ligatures, bidi reordering.
+- Subsetting tests: subset → re-embed → verify glyph coverage and metrics round-trip.
+- Search/hit-test tests: known text at known positions — verify search finds it, hit-test returns correct quads.
 
 ### monkeybee-render
 - Unit tests: graphics state operations, individual operator handling, color space conversions.
@@ -493,6 +562,13 @@ PdfDocument
 - Redaction tests: text-only, image-only, mixed, reused XObjects, canary-text leakage.
 - Optimization tests: compaction produces smaller valid output, recompression round-trips.
 
+### monkeybee-forms
+- Unit tests: field tree parsing, inheritance resolution, field value model for each type.
+- Appearance regeneration tests: change field value → regenerate appearance → verify rendered appearance matches value.
+- Round-trip tests: fill form → save → reload → verify field values and appearances preserved.
+- Signature-field tests: incremental-append after form fill preserves signed byte ranges.
+- Calculation order tests: detection and preservation of calculation order across round-trips.
+
 ### monkeybee-annotate
 - Unit tests: annotation creation, geometry calculations, appearance stream generation.
 - Round-trip tests: annotate → save → reload → verify annotations preserved.
@@ -506,6 +582,8 @@ PdfDocument
 
 ### monkeybee-extract
 - Unit tests: text extraction on known documents with ground-truth positions.
+- Multi-surface tests: PhysicalText matches exact glyph geometry, LogicalText produces correct reading order with confidence, TaggedText uses structure tree when present.
+- Search/hit-test tests: SearchIndex finds known text, SelectionQuads returns correct regions, HitTest resolves correct characters.
 - Metadata tests: extraction accuracy on documents with known metadata.
 - Coverage tests: extraction runs on entire corpus without panics.
 
@@ -518,12 +596,16 @@ PdfDocument
 
 Each of the following should be authored as the spec matures. They are design-to-code contracts for their respective subsystems:
 
-- `docs/implementation/document-model.md` — core object model, object store, reference resolution
+- `docs/implementation/document-model.md` — core object model, object store, reference resolution, dependency graph, snapshots
 - `docs/implementation/parser-and-repair.md` — parser architecture, repair strategies, tolerant mode
-- `docs/implementation/rendering.md` — render pipeline, graphics state, output backends
+- `docs/implementation/codec.md` — filter chains, image decode/encode, bounded pipelines, decode telemetry
+- `docs/implementation/security.md` — security profiles, budget broker, worker isolation, hostile-input policy
+- `docs/implementation/text.md` — font programs, CMaps, Unicode mapping, shaping/bidi, subsetting, search/hit-test
+- `docs/implementation/rendering.md` — render pipeline, graphics state, output backends, region/thumbnail render
+- `docs/implementation/forms.md` — AcroForm field tree, value model, appearance regeneration, widget bridge, signature helpers
 - `docs/implementation/annotation.md` — annotation model, placement, appearance, flattening
 - `docs/implementation/writeback.md` — serialization, save modes, structural validation
-- `docs/implementation/extraction.md` — text extraction, metadata, diagnostics
+- `docs/implementation/extraction.md` — multi-surface text extraction, search primitives, metadata, diagnostics
 
 ## Open questions
 
