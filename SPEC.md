@@ -649,7 +649,17 @@ The object model must faithfully represent the nine fundamental PDF object types
 - **String:** Two forms — literal strings (parenthesis-delimited, with escape sequences) and hexadecimal strings (angle-bracket-delimited). The internal representation stores raw bytes. Text interpretation (PDFDocEncoding vs. UTF-16BE, detected by BOM) is layered above.
 - **Name:** `/`-prefixed atoms. Name objects use `#XX` hex encoding for bytes outside the printable ASCII range. The internal representation is the decoded byte sequence; the serializer re-encodes as needed.
 - **Array:** Ordered heterogeneous collections. Arrays may contain any object type, including other arrays and indirect references. No inherent size limit, but the engine should enforce a configurable maximum nesting depth to prevent stack overflow on adversarial input.
-- **Dictionary:** Key-value maps where keys are names and values are any object type. Duplicate keys are technically malformed; the engine uses last-definition-wins semantics in tolerant mode and reports a diagnostic.
+- **Dictionary:** Key-value maps where keys are names and values are any object type. Duplicate
+  keys are technically malformed. Handling depends on the parse mode:
+  - **Tolerant mode:** Last-definition-wins. A diagnostic (`parse.object.duplicate_key`) is
+    emitted with both the kept and discarded values.
+  - **Strict mode:** Duplicate keys are a validation error. The parser still produces a result
+    (using last-definition-wins) but the diagnostic is Error severity, which will cause
+    Arlington validation to fail.
+  - **Preserve mode:** Both entries are retained in the raw syntax layer
+    (`monkeybee-syntax`), preserving their byte spans and ordering. The semantic layer
+    (`monkeybee-document`) applies last-definition-wins when resolving the dictionary. This
+    ensures that preserve-mode round-trip emits the same bytes even if duplicates exist.
 - **Stream:** A dictionary plus a byte sequence. The dictionary contains at least `/Length`. The raw bytes are the encoded form; the decoded form is obtained by applying the filter chain. The core stores both the raw bytes (for preserve-mode round-trip) and provides lazy-decoded access.
 - **Null:** The null object. Represents absence. References to free objects resolve to null.
 - **Indirect reference:** A pair of (object number, generation number) pointing to an indirect object elsewhere in the file. The object graph resolves these on demand.
@@ -978,7 +988,18 @@ A page is rendered by:
 2. Apply the page rotation (`/Rotate`). Rotation is applied as a coordinate transform: for 90° rotation, the rendering origin shifts and axes swap. The content stream itself is not rotated — the rendering pipeline applies the rotation.
 3. Apply UserUnit scaling if present (multiply all dimensions by the UserUnit value).
 4. Initialize the graphics state: CTM to the identity (plus any rotation/scaling from steps 2-3), clip to CropBox, color to DeviceGray black, line width 1.0, and all other state parameters to their defaults (per ISO 32000-2 Table 52).
-5. If the page has multiple content streams (an array of stream references), concatenate them logically with a space separator. This is important: the graphics state persists across stream boundaries within a page. A `q` in stream 1 can be matched by a `Q` in stream 2. (A common producer bug is leaving unmatched `q`/`Q` across stream boundaries — the renderer must handle this gracefully, restoring to a sane default state if `Q` underflows.)
+5. If the page has multiple content streams (an array of stream references), concatenate them
+   logically with a space separator. Specifically:
+   - Decode each stream independently through its filter chain.
+   - Concatenate the decoded bytes with a single SPACE (0x20) byte between each stream.
+   - The space separator prevents token merging: without it, the last token of stream N and the
+     first token of stream N+1 could merge into a single malformed token.
+   - The graphics state is NOT reset between streams. A `q` in stream 1 can be matched by `Q`
+     in stream 2. Fonts, colors, and all other state persist across stream boundaries.
+   - The content stream array may contain null references (some producers leave gaps). Null
+     entries are skipped without inserting a separator.
+   - An empty content stream array means the page has no content (blank page). This is legal.
+   - A single stream reference (not in an array) is treated identically to a one-element array.
 6. Interpret the concatenated content stream through the shared graphics state machine and emit
    commands into a tile/band scheduler that can materialize either a full page or only the requested region.
 7. Render annotations on top of the page content (annotations are painted after the page's content stream, in the order they appear in the page's `/Annots` array).
@@ -1197,6 +1218,28 @@ PDF documents carry metadata in two locations:
 
 2. **XMP metadata** (`/Metadata` stream on the catalog, page objects, or individual resource objects): An XML packet using the Extensible Metadata Platform format. The engine must parse enough XMP to extract: Dublin Core properties (dc:title, dc:creator, dc:description, dc:subject), XMP basic properties (xmp:CreateDate, xmp:ModifyDate, xmp:CreatorTool), PDF-specific properties (pdf:Producer, pdf:Keywords), and PDF/A identification (pdfaid:part, pdfaid:conformance). Full XMP schema validation is not required for v1, but the engine must preserve XMP metadata byte-perfectly during round-trip operations (XMP packets often contain padding whitespace that must be preserved).
 
+**XMP stream preservation rules:**
+
+1. **Byte-perfect preservation:** The XMP metadata stream must be preserved byte-for-byte during
+   round-trip operations unless the user explicitly modifies metadata. This includes the XML
+   declaration, processing instructions, padding whitespace, and the packet wrapper
+   (`<?xpacket begin="..." id="..."?>` ... `<?xpacket end="w"?>`).
+
+2. **Padding preservation:** XMP packets typically include trailing whitespace padding (often
+   2048+ bytes of spaces) to allow in-place metadata updates without rewriting the stream. The
+   writer must preserve this padding. In incremental-append mode, the XMP stream is not touched
+   unless metadata was modified.
+
+3. **XMP modification:** When the user modifies metadata (title, author, etc.), the engine
+   updates the XMP packet in-place if there is sufficient padding. If not, a new XMP stream is
+   generated with fresh padding. The new stream must maintain the packet wrapper and include at
+   least 2048 bytes of padding.
+
+4. **Info dictionary synchronization:** When XMP is modified, the engine should also update the
+   corresponding Info dictionary entries to maintain consistency. When Info dictionary entries are
+   modified, the engine should also update XMP. The engine logs a diagnostic when the two
+   sources are already inconsistent on input.
+
 When Info dictionary and XMP metadata disagree (common — many producers update one but not the other), the engine reports both and lets the consumer decide which to trust. For PDF/A conformance, XMP is authoritative.
 
 **Transparency compositing model:**
@@ -1284,6 +1327,24 @@ API layers:
    - Annotation operations: `add_annotation(type, rect, properties)` — delegates to the annotate crate.
 4. **Resource management:** The builder automatically tracks which fonts, images, and ExtGState dictionaries are used and generates the appropriate resource dictionaries. The caller does not manually manage resource names.
 
+**Resource naming convention for generated content:**
+
+When the content builder assigns names to resources in the resource dictionary:
+
+- **Fonts:** `/F1`, `/F2`, `/F3`, ... (incrementing integer suffix). For pages that reference
+  existing resources (e.g., annotation flattening), the builder checks existing font names and
+  continues from the highest existing number to avoid collisions.
+- **Images:** `/Im1`, `/Im2`, `/Im3`, ...
+- **Form XObjects:** `/Fm1`, `/Fm2`, `/Fm3`, ...
+- **ExtGState:** `/GS1`, `/GS2`, `/GS3`, ...
+- **Color spaces:** `/CS1`, `/CS2`, `/CS3`, ...
+- **Patterns:** `/P1`, `/P2`, `/P3`, ...
+- **Shadings:** `/Sh1`, `/Sh2`, `/Sh3`, ...
+
+The naming convention follows the common PDF producer practice. Names must be unique within a
+single resource dictionary. The builder maintains a name-to-object map and deduplicates: if the
+same font/image/ExtGState is used multiple times on the same page, it gets one resource name.
+
 The content builder emits content stream operators directly, tracking the graphics state to avoid redundant operator emission. The builder validates state consistency: `stroke()` without a preceding path produces an error, `end_text()` without `begin_text()` produces an error, unbalanced `save_state()`/`restore_state()` produces a warning.
 
 **Structural validity requirements for well-formed PDF output:**
@@ -1314,6 +1375,36 @@ For preserve-mode / incremental-append workflows that must not invalidate existi
 - The new cross-reference section references only new or modified objects. Unchanged objects retain their original byte offsets.
 - Byte ranges covered by existing signatures (the `/ByteRange` values in signature dictionaries) must remain untouched.
 - The writer must track which objects were modified and ensure the incremental update correctly supersedes only those objects.
+
+**Incremental save byte-range accounting:**
+
+When writing an incremental update to a file with existing digital signatures:
+
+1. **Determine the append point:** The new content starts at the current end-of-file offset.
+   All previous bytes (0 to EOF-1) are immutable. The writer must not modify or rewrite any
+   byte before the append point.
+
+2. **Write new/modified objects:** Each object is serialized and its byte offset (relative to
+   file start) is recorded for the new xref. The offset = append_point + bytes_written_so_far.
+
+3. **Write the new cross-reference:** The new xref section covers only the new/modified objects.
+   Each entry's offset is computed as described above. Objects not in the new xref retain their
+   original offsets from the previous xref chain.
+
+4. **Write the new trailer:** The trailer's `/Prev` entry points to the byte offset of the
+   previous xref section (which is before the append point and therefore immutable). The
+   `/Size` covers the full object number space.
+
+5. **Signature byte-range verification post-write:** After writing, the engine verifies that
+   all existing signature byte ranges (`/ByteRange` arrays) are entirely within the immutable
+   region (before the append point). If any byte range extends to or beyond the append point,
+   this is an error — it means the original file was malformed or truncated.
+
+6. **`startxref` at end:** The new `startxref` value points to the byte offset of the new
+   xref section (within the appended region).
+
+This accounting ensures that no existing byte is modified, all new byte offsets are correct,
+and the incremental update chain is structurally valid.
 
 #### `monkeybee-edit`
 
@@ -1750,7 +1841,15 @@ The underlying change tracking model:
 - Every mutation is recorded as a `ChangeEntry { object_id, old_fingerprint, new_value, reason,
   ownership_before, ownership_after, dependency_delta }`. This enables incremental save, undo,
   precise cache invalidation, and save-impact explanation.
-- New objects are assigned object numbers from a monotonically increasing allocator. Generation numbers for new objects are 0.
+- New objects are assigned object numbers from a monotonically increasing allocator.
+  The allocator starts at `max_existing_object_number + 1` for the current snapshot.
+  In incremental-append mode, new object numbers must not collide with any existing object
+  (including objects in the free list). In full-rewrite mode, object numbers may be reassigned
+  (compacted) starting from 1, since the entire xref is rebuilt. However, compaction changes
+  all internal references and must update every indirect reference in the document. The
+  baseline v1 writer does not compact object numbers in full-rewrite mode — it preserves
+  existing numbers and adds new objects at higher numbers. Compaction is an explicit
+  optimization operation in `monkeybee-edit`. Generation numbers for new objects are 0.
 - Deleted objects are recorded in the free list. Their generation number is incremented.
 - Reference integrity is maintained by a reference index: the model knows which objects reference which other objects, enabling orphan detection and referential integrity checks before save.
 
@@ -1999,6 +2098,34 @@ cloning the full object store.
 
 **Edge cases:**
 - Object streams (PDF 1.5+): multiple objects packed into a single compressed stream object. The parser must extract individual objects from the stream. Object numbers within object streams do not have independent generation numbers (always 0).
+
+**Object stream extraction contract:**
+
+An object stream is a stream object with `/Type /ObjStm`. It contains:
+- `/N`: the number of objects in the stream
+- `/First`: the byte offset within the decoded stream data where the first object begins
+  (everything before `/First` is the index)
+- The decoded stream data contains: first an index of N pairs of (object_number, byte_offset)
+  as space-separated integers, then the objects themselves starting at byte offset `/First`
+
+**Extraction algorithm:**
+1. Decode the stream through its filter chain (typically FlateDecode).
+2. Parse the first `/First` bytes as the index: read N pairs of (object_number, byte_offset).
+   Each byte_offset is relative to `/First` (not to the start of the stream data).
+3. For each object, seek to `/First` + byte_offset and parse the object value. Objects in
+   object streams do NOT have the `N G obj ... endobj` wrapper — they are bare values.
+4. Register each extracted object in the cross-reference with its object number and generation
+   number 0 (objects in object streams always have generation 0).
+
+**Edge cases:**
+- Index corruption: if the index cannot be parsed (wrong number of entries, non-numeric values),
+  the entire object stream is skipped and all its objects are treated as missing. Record
+  diagnostic `parse.objstream.corrupt_index`.
+- Offset out of range: if a byte_offset points beyond the stream data, that individual object
+  is skipped. Other objects in the same stream are still extracted.
+- Nested object streams: an object stream containing another object stream is malformed per
+  spec. Detect and report; do not attempt recursive extraction.
+- The xref stream itself cannot be in an object stream.
 - Self-referencing objects: a dictionary that references itself (directly or indirectly). Must not cause infinite loops during traversal, serialization, or garbage collection.
 - Extremely large arrays or dictionaries (100,000+ entries): the model must handle these without O(n²) behavior on lookup. Use efficient data structures (hash maps for dictionaries, vectors for arrays).
 
@@ -2133,6 +2260,34 @@ The PDF path model is built on cubic Bézier curves and straight-line segments. 
 7. **XObject and shading operators** (`Do`, `sh`): invoke external resources. `Do` requires resolving the named XObject from resources and dispatching based on its subtype (Image, Form, or PS). Form XObjects require recursive content stream interpretation with the form's own matrix and resources. `sh` paints the current area with a shading pattern.
 
 8. **Inline image operators** (`BI`, `ID`, `EI`): define and render an inline image. The image dictionary is between `BI` and `ID`; the raw image data is between `ID` and `EI`. Inline image dictionaries use abbreviated key names: `/W` for `/Width`, `/H` for `/Height`, `/BPC` for `/BitsPerComponent`, `/CS` for `/ColorSpace` (with abbreviations: `/G` = DeviceGray, `/RGB` = DeviceRGB, `/CMYK` = DeviceCMYK, `/I` = Indexed), `/F` for `/Filter` (with abbreviations: `/AHx` = ASCIIHexDecode, `/A85` = ASCII85Decode, `/LZW` = LZWDecode, `/Fl` = FlateDecode, `/RL` = RunLengthDecode, `/CCF` = CCITTFaxDecode, `/DCT` = DCTDecode), `/D` for `/DecodeParms`, `/DP` for `/DecodeParms`. Finding the `EI` marker is non-trivial because the image data itself may contain the bytes `EI` — the parser must track the expected data length (from Width × Height × BPC × components, accounting for filters) to know where the data ends.
+
+**EI detection algorithm:**
+
+Finding the `EI` operator that terminates inline image data is non-trivial because the image
+data can contain the bytes `E`, `I` in sequence. The algorithm:
+
+1. **Compute expected data length** from the image parameters: `ceil(W × BPC × components / 8)
+   × H`, where W = width, H = height, BPC = bits per component, components = number of color
+   components. For filtered images, this is the decoded length; the encoded length may differ.
+
+2. **For unfiltered images:** Skip exactly the computed number of bytes after `ID` (plus the
+   mandatory single whitespace byte after `ID`). Verify that the bytes at that position are
+   `EI` preceded by whitespace. If so, accept.
+
+3. **For filtered images (encoded length unknown):** Scan forward from the `ID` data start,
+   looking for the pattern: whitespace + `E` + `I` + (whitespace or end-of-stream). At each
+   candidate position, verify:
+   a. The byte before `E` is whitespace (SP, LF, CR, TAB, NUL, FF)
+   b. The byte after `I` is whitespace or triggers the next operator parse
+   c. The data between `ID` and the candidate `EI` is a valid encoded stream (attempt a trial
+      decode — if decompression succeeds and produces a plausible image, accept this position)
+
+4. **Fallback:** If no valid `EI` is found within a bounded scan (default: 1 MiB of data after
+   `ID`), the inline image is abandoned. The interpreter emits an error diagnostic and attempts
+   to resynchronize by scanning for the next known operator keyword.
+
+5. **Edge case — empty inline images:** An inline image with W=0 or H=0 has zero data bytes.
+   The `EI` immediately follows the whitespace after `ID`.
 
 **Image rendering specifics:**
 
@@ -2289,6 +2444,38 @@ proof gates are satisfied.
 The engine must handle AcroForm (interactive form) fields for both reading and basic writing. AcroForm is distinct from XFA; it is the standard PDF form mechanism and is fully Tier 1.
 
 **Field hierarchy:** Form fields form a tree rooted at the document catalog's `/AcroForm` → `/Fields` array. Fields can be organized hierarchically (parent fields with child fields). Inheritable field attributes: `/FT` (field type), `/V` (value), `/DV` (default value), `/Ff` (field flags), `/DA` (default appearance), `/Q` (quadding/alignment).
+
+**Field inheritance resolution algorithm:**
+
+Field attributes propagate from parent to child in the field hierarchy. Unlike page inheritance
+(where the first ancestor with the attribute provides it), field inheritance has additional
+complexities:
+
+1. **Walk from field to root:** For each inheritable attribute, walk up the field hierarchy
+   via `/Parent` references. The first ancestor that defines the attribute provides its value.
+
+2. **`/FT` (field type):** Required on every terminal field. If a terminal field lacks `/FT`,
+   inherit from the nearest ancestor. If no ancestor defines it, the field is malformed —
+   report a diagnostic and skip the field.
+
+3. **`/Ff` (field flags):** Flags are inherited as a complete bitmask, not merged. A child's
+   `/Ff` replaces (not ORs with) the parent's flags. If a child has no `/Ff`, use the parent's.
+
+4. **`/V` (value) and `/DV` (default value):** Inherited normally. A common pattern: the parent
+   field defines `/DV` and each child inherits it unless overridden.
+
+5. **`/DA` (default appearance):** The appearance string (e.g., "/Helv 12 Tf 0 g") is inherited
+   as a complete string. The AcroForm dictionary's `/DA` entry serves as the document-level
+   default, applied when no field in the hierarchy defines `/DA`.
+
+6. **Partial field names:** A field's full name is constructed by concatenating ancestor names
+   with `.` separators. For example, if a field named `zip` has a parent named `address` which
+   has a parent named `form`, the full field name is `form.address.zip`. This is critical for
+   form data import/export — the full name is the unique identifier.
+
+7. **Widget-field relationship:** A widget annotation is the visual representation of a field.
+   A field can have multiple widgets (e.g., a radio button group). Widgets inherit all field
+   attributes from their parent field but can override visual properties via `/MK`.
 
 **Field types:**
 - **Text fields** (`/FT /Tx`): single-line or multi-line text. The value (`/V`) is a text string. The appearance stream must render the text using the font and size from `/DA`, within the widget's rect, respecting `/Q` alignment and `/MaxLen` limits.
