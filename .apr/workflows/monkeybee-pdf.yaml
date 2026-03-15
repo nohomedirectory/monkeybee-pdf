@@ -7,7 +7,8 @@ documents:
   implementation: docs/implementation/implementation_master.md
 
 oracle:
-  model: "o1-pro"
+  model: "gpt-5.4-pro"
+  thinking_time: heavy
 
 rounds:
   output_dir: .apr/rounds/monkeybee-pdf
