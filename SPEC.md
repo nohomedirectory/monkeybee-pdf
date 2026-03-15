@@ -78,6 +78,33 @@ Every top-level API accepts an `ExecutionContext` carrying:
 - Provider registry
 - Trace / metrics sink
 
+### Diagnostic streaming model
+
+All diagnostics flow through a `DiagnosticSink` carried by `ExecutionContext`. The sink is a trait
+with a single method: `emit(diagnostic: Diagnostic)`. Implementations include:
+
+- `VecSink`: collects all diagnostics into a `Vec<Diagnostic>` (default for library use).
+- `CallbackSink`: invokes a user-provided closure per diagnostic (for real-time display).
+- `FilteringSink`: wraps another sink and filters by severity, subsystem, or error code.
+- `CountingSink`: wraps another sink and counts diagnostics by category (for budget enforcement:
+  "abort after 1000 warnings" policies).
+
+Every diagnostic carries:
+- Error code (hierarchical string, e.g., `parse.xref.wrong_offset`)
+- Severity (Fatal, Error, Warning, Info)
+- Subsystem origin (parser, renderer, writer, etc.)
+- Object context (ObjRef, page number, byte offset — whichever are applicable)
+- Human-readable message
+- Machine-readable payload (repair details, original/corrected values, feature classification)
+
+The `DiagnosticSink` is the input side; the compatibility ledger (Part 6) is the aggregated output
+side. All diagnostics emitted during a session are collected into the compatibility ledger at
+session close.
+
+Diagnostics are never silently dropped. If the `ExecutionContext` has no explicit sink configured,
+a default `VecSink` collects them. The API always returns the diagnostic collection alongside the
+operation result.
+
 Provider interfaces include `FontProvider`, `ColorProfileProvider`, `CryptoProvider`, and `OracleProvider`.
 Proof/CI mode must use pinned providers rather than ambient system discovery.
 Deterministic mode fixes serialization order, stable hashers, fallback resources, and oracle manifests so CI evidence is reproducible across hosts.
@@ -133,6 +160,29 @@ Proof surfaces: signature validity checks pre- and post-modification, byte-range
 A user opens a very large or range-backed PDF, renders the first page or a region quickly, and lets the engine fetch additional bytes lazily as needed. Linearization is used when present, but not required.
 
 Proof surfaces: first-page latency benchmarks, prefetch-plan traces, partial-open regression tests, byte-range accounting.
+
+### Progressive rendering contract
+
+When rendering a page from a lazily/partially-loaded document, the renderer operates in
+progressive mode:
+
+1. **Available resources render immediately.** Content stream operators that reference already-fetched
+   resources (fonts, images, XObjects) are rendered normally.
+2. **Unavailable resources produce placeholders.** An image XObject whose stream data hasn't been
+   fetched renders as a gray placeholder rectangle with a loading indicator. A font that hasn't been
+   fetched uses a substitute font with a diagnostic.
+3. **Placeholder metadata.** Each placeholder carries the byte range needed to fetch the missing
+   resource. The caller can use this to prioritize fetches for the visible region.
+4. **Incremental refinement.** When a previously-missing resource becomes available, only the
+   affected tiles in the tile/band scheduler are invalidated and re-rendered. The rest of the page
+   is preserved.
+5. **Prefetch planning.** Before rendering, the render pipeline reports the set of resources needed
+   for the requested page/region. The byte source's fetch scheduler can use this to issue range
+   requests proactively.
+
+Progressive rendering is orthogonal to the tile/band scheduler: a tile may be partially rendered
+(some resources available, some not) and refined later. The cache key for progressive tiles includes
+a "completeness" flag so refined tiles replace partial ones.
 
 ### Workflow 9: Fill, regenerate, and preserve forms
 
@@ -411,6 +461,27 @@ All open paths operate on a `ByteSource` trait so the architecture supports mmap
 
 All caches, proofs, and invalidation logic key off `snapshot_id`, never mutable in-place document state. This lifecycle model makes page-parallel render/extract, stable PagePlan caches, preserve/incremental save correctness, reproducible proof artifacts, and future viewer/editor use all straightforward because nothing mutates in place.
 
+### Cache management doctrine
+
+Engine-level caches are bounded by configurable memory budgets. The default budgets are:
+
+- **Decoded stream cache:** 256 MB. Keyed by (snapshot_id, object_id, filter_chain_hash). LRU
+  eviction. Streams currently being consumed by an active render/extract operation are pinned and
+  cannot be evicted.
+- **Font cache:** 128 MB. Keyed by font dictionary object_id. Parsed font programs, glyph outlines,
+  and CMap tables. LRU eviction. Fonts referenced by the current page's resources are pinned.
+- **PagePlan cache:** 64 MB. Keyed by (snapshot_id, page_index). The immutable display list for a
+  page. LRU eviction. Invalidated when any object in the page's dependency subgraph changes.
+- **Raster tile cache:** Configurable, default 512 MB. Keyed by (snapshot_id, page_index, tile_id,
+  dpi). LRU eviction. Used by the tile/band scheduler for progressive and region rendering.
+
+Cache budgets are exposed in `ExecutionContext` so proof runs can use smaller budgets to stress
+eviction paths. The cache reports hit/miss/eviction statistics through the trace/metrics sink.
+
+When memory pressure exceeds all cache budgets, the engine degrades gracefully: re-decoding streams
+on demand rather than caching, re-interpreting content streams instead of reusing PagePlans. This
+degradation is instrumented (diagnostics report cache pressure events).
+
 ### Crate boundaries
 
 #### `monkeybee-core`
@@ -680,6 +751,26 @@ A page is rendered by:
    commands into a tile/band scheduler that can materialize either a full page or only the requested region.
 7. Render annotations on top of the page content (annotations are painted after the page's content stream, in the order they appear in the page's `/Annots` array).
 8. Apply optional content visibility: if the document has optional content groups (OCGs / layers), evaluate the visibility of each marked content span based on the current OCG state (default, print, or export configuration). Invisible content is skipped during rendering.
+
+### Cooperative cancellation in rendering
+
+The render pipeline checks the `ExecutionContext` cancellation token at the following checkpoints:
+
+1. **Per-operator:** After each content stream operator dispatch. This is the finest granularity and
+   ensures that even a single pathological operator (e.g., a huge mesh shading) can be interrupted.
+2. **Per-tile/band:** Before materializing each tile in the tile/band scheduler. A cancelled tile
+   produces a placeholder (transparent or diagnostic-colored region).
+3. **Per-page:** Before starting each page in a multi-page render. Already-completed pages are
+   retained; the cancelled page and subsequent pages are skipped.
+4. **Per-resource:** Before decoding each image or font resource. Large JPEG 2000 or JBIG2 decodes
+   are interruptible at the codec level (the decode pipeline checks cancellation between data blocks).
+
+When cancellation fires, the render pipeline returns a partial result with metadata indicating
+which pages/tiles completed and which were cancelled. The partial result is usable (not corrupted).
+
+Budget enforcement uses the same checkpoints: if the operator count, memory, or time budget is
+exceeded, the effect is identical to cancellation. The diagnostic carries the specific budget that
+was exhausted.
 
 **Optional content (layers) handling:**
 
@@ -971,6 +1062,35 @@ Key responsibilities:
 - Optimization operations: compaction, recompression, object stream repacking
 - All optimization and cleanup operations are explicit user-triggered actions, not incidental writer side effects
 
+### Content stream rewrite model
+
+Content stream edits (redaction, annotation flattening, content removal) use a filter-and-rewrite
+pipeline:
+
+1. **Parse** the existing content stream into an operator sequence with provenance spans.
+2. **Filter** the operator sequence through an `EditSink` that decides per-operator: keep, drop,
+   or replace. The `EditSink` receives full graphics state context for each operator (not just the
+   raw operator and operands).
+3. **Inject** new operators at specified insertion points (e.g., annotation flattening appends
+   operators wrapped in `q`/`Q`).
+4. **Re-emit** the filtered/modified operator sequence as a new content stream.
+5. **Update** the page's content stream reference(s) to point to the new stream object.
+
+For redaction specifically:
+- The `EditSink` identifies all operators that produce output within the redaction region by
+  evaluating each operator's bounding box against the redaction rectangles.
+- Text operators are split if a `TJ` array partially overlaps a redaction region (individual glyph
+  positions are checked).
+- Image operators that partially overlap are handled per the `RedactionPlan` mode: `SemanticExact`
+  removes fully contained images; `SecureRasterizeRegion` replaces the region; `SecureRasterizePage`
+  replaces the entire page.
+- After rewrite, the old content stream object is marked as deleted in the change journal.
+
+For annotation flattening:
+- The annotation's appearance stream content is extracted, transformed by the annotation's
+  position matrix, wrapped in `q`/`Q`, and appended to the page content.
+- The annotation object is removed from the page's `/Annots` array.
+
 #### `monkeybee-forms`
 
 AcroForm field tree, value model, appearance regeneration, calculation order, widget bridge, and signature-field helpers.
@@ -1186,6 +1306,55 @@ Key responsibilities:
 
 These invariants apply across all crates and all operations. They are the architectural commitments that make the closed loop possible.
 
+### PDF version awareness
+
+The engine tracks the PDF version at three levels:
+
+1. **Input version:** The version declared in the file header (`%PDF-1.N` or `%PDF-2.0`) and
+   optionally overridden by the catalog's `/Version` entry (which takes precedence when present and
+   higher). The parser uses the input version to select appropriate parsing behaviors:
+   - Pre-1.5: no object streams, no cross-reference streams
+   - Pre-1.4: no transparency model
+   - Pre-1.6: no AES encryption, no OpenType/CFF embedding
+   - 2.0: additional encryption revisions (R6), new annotation types, updated color semantics
+
+2. **Feature version:** Each parsed feature is tagged with the minimum PDF version that defines it.
+   In strict mode, features that exceed the declared version produce a diagnostic. In tolerant mode,
+   they are accepted (many producers declare an older version but use newer features).
+
+3. **Output version:** The writer emits the minimum version that covers all features present in the
+   output document. If the user requests a specific output version (e.g., for downlevel
+   compatibility), features incompatible with that version produce a preflight error.
+
+Version tracking feeds into the compatibility ledger: the ledger records the declared version, the
+effective version (minimum version needed for all features actually used), and any version
+mismatches detected.
+
+### Thread-safety model
+
+`PdfSnapshot` is `Send + Sync`. Multiple threads may read from the same snapshot concurrently.
+The following operations are safe to run in parallel on the same snapshot:
+
+- Rendering different pages
+- Extracting text from different pages
+- Inspecting different objects
+- Decoding different streams (via the decode cache, which uses concurrent-safe access)
+
+The following require exclusive access and cannot run in parallel with reads on the same snapshot:
+
+- `EditTransaction::commit()` (produces a new snapshot; does not mutate the source snapshot)
+
+Engine-level caches use lock-free or sharded concurrent data structures:
+- Decoded stream cache: `DashMap<CacheKey, Arc<[u8]>>` or equivalent sharded concurrent map
+- Font cache: `DashMap<ObjRef, Arc<ParsedFont>>` with interior read-through
+- PagePlan cache: `DashMap<(SnapshotId, usize), Arc<PagePlan>>`
+
+The `ExecutionContext` is cloneable per-task (each parallel render task gets its own copy with shared
+budget counters using atomic operations). Cancellation propagates to all clones.
+
+Rayon's scoped parallelism ensures that all parallel tasks complete before the scope exits,
+preventing dangling references to snapshot data.
+
 ### Object identity
 
 Every PDF object in the document model has a stable identity (object number + generation number for indirect objects). Object identity is preserved across parse → manipulate → serialize cycles. Reference resolution is explicit and traceable.
@@ -1311,6 +1480,31 @@ Content stream parsing and interpretation follow a shared contract:
 - Rendering, extraction, and inspection all consume content streams through the same interpretation pipeline.
 - The pipeline supports both "execute for rendering" and "analyze for extraction" modes without duplicated logic.
 - The pipeline emits events (operator dispatched, state changed, text shown, path painted, etc.) that downstream consumers can subscribe to selectively.
+
+**Content stream error recovery:**
+
+When the content interpreter encounters an error in tolerant mode, recovery follows a defined protocol:
+
+1. **Operator-level isolation:** A failing operator does not abort the page. The interpreter emits an
+   Error event, discards the current operator's effects, and advances to the next operator.
+2. **State rollback on failure:** If an operator partially modified the graphics state before failing
+   (e.g., `gs` applied some ExtGState entries before hitting an invalid one), the interpreter rolls
+   back to the state before that operator. This prevents half-applied state from corrupting
+   subsequent rendering.
+3. **Resource resolution failures:** If a `Do`, `Tf`, or `sh` operator references a resource that
+   cannot be resolved, the interpreter skips the operator, emits an Error event with the resource
+   name and type, and continues. For `Tf` (font), a fallback font is substituted so subsequent text
+   operators don't crash.
+4. **Inline image recovery:** If `BI`/`ID`/`EI` parsing fails (corrupted image data, wrong
+   dimensions), the interpreter attempts to find the `EI` marker by scanning forward, skips the
+   inline image, and continues. If `EI` cannot be found within a bounded scan (4096 bytes), the
+   rest of the content stream is abandoned with a diagnostic.
+5. **Stack underflow:** If `Q` is called with an empty graphics state stack, the interpreter resets
+   to the page's initial graphics state and emits a warning. This is common in real-world PDFs with
+   mismatched `q`/`Q` across concatenated content streams.
+6. **Recursion limit:** Form XObject and tiling pattern nesting is bounded (default: 28 levels,
+   matching Acrobat's limit). Exceeding the limit produces an Error event and the nested content
+   is skipped.
 
 The content subsystem exposes two surfaces built from the same interpreter:
 1. **Streaming events** for low-memory, one-shot execution.
@@ -1849,6 +2043,71 @@ RegionRef {
   reason: string,
 }
 ```
+
+### Compatibility ledger JSON schema
+
+The compatibility ledger's canonical serialization format is JSON, with a concrete schema that
+downstream tools (dashboards, CI gates, regression detectors) can consume programmatically:
+
+```json
+{
+  "schema_version": "1.0",
+  "engine_version": "0.1.0",
+  "timestamp": "2026-03-15T12:00:00Z",
+  "input": {
+    "filename": "example.pdf",
+    "sha256": "abc123...",
+    "declared_version": "1.7",
+    "effective_version": "2.0",
+    "size_bytes": 1234567,
+    "page_count": 42,
+    "producer": "Adobe Acrobat 2024",
+    "creator": "Microsoft Word"
+  },
+  "features": [
+    {
+      "code": "transparency.isolated_knockout_group",
+      "tier": 1,
+      "status": "supported",
+      "pages": [3, 7, 12],
+      "details": "Isolated knockout transparency groups on 3 pages"
+    }
+  ],
+  "repairs": [
+    {
+      "code": "parse.xref.wrong_offset",
+      "severity": "warning",
+      "object": "42 0",
+      "original_value": "12345",
+      "corrected_value": "12389",
+      "strategy": "backward_scan",
+      "confidence": 0.95
+    }
+  ],
+  "degradations": [
+    {
+      "code": "compat.xfa.dynamic_no_fallback",
+      "tier": 3,
+      "severity": "error",
+      "pages": [1],
+      "description": "Dynamic XFA form with no AcroForm fallback; pages render as blank"
+    }
+  ],
+  "summary": {
+    "total_features": 156,
+    "tier1_count": 142,
+    "tier2_count": 8,
+    "tier3_count": 6,
+    "repair_count": 3,
+    "degradation_count": 2,
+    "overall_status": "degraded"
+  }
+}
+```
+
+The schema is versioned. Breaking changes increment the major version. The proof harness validates
+ledger output against the schema. Downstream tools (dashboards, CI gates, regression detectors)
+consume the ledger via the schema.
 
 **Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
 

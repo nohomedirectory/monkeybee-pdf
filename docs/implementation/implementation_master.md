@@ -19,6 +19,8 @@ monkeybee-pdf/
 │   │   │   ├── geometry.rs       # coordinate transforms, matrices
 │   │   │   ├── error.rs          # shared error taxonomy
 │   │   │   ├── context.rs        # ExecutionContext (budgets, cancellation, providers)
+│   │   │   ├── diagnostics.rs    # DiagnosticSink trait, Diagnostic type, VecSink, CallbackSink, FilteringSink, CountingSink
+│   │   │   ├── version.rs        # PdfVersion tracking (input, feature, output), version-gated feature registry
 │   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider
 │   │   └── Cargo.toml
 │   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
@@ -80,7 +82,8 @@ monkeybee-pdf/
 │   │   │   ├── update.rs         # incremental update tracking
 │   │   │   ├── depgraph.rs       # dependency graph and derived-artifact invalidation
 │   │   │   ├── snapshot.rs       # PdfSnapshot (immutable, shareable, keyed by snapshot_id)
-│   │   │   └── transaction.rs    # EditTransaction, change tracking, snapshot-in/snapshot-out
+│   │   │   ├── transaction.rs    # EditTransaction, change tracking, snapshot-in/snapshot-out
+│   │   │   └── cache.rs          # CacheManager, CacheConfig, per-cache budgets, LRU eviction, hit/miss/eviction stats
 │   │   └── Cargo.toml
 │   ├── monkeybee-content/        # content-stream IR and event interpreter
 │   │   ├── src/
@@ -116,6 +119,7 @@ monkeybee-pdf/
 │   │   │   ├── pattern.rs        # tiling and shading patterns
 │   │   │   ├── page.rs           # page assembly
 │   │   │   ├── tile.rs           # tile/band surface abstraction and scheduler
+│   │   │   ├── progressive.rs    # ProgressiveRenderState: placeholder tracking, incremental refinement, completeness flags
 │   │   │   └── backend/          # output backends (raster via tile sink, svg)
 │   │   └── Cargo.toml
 │   ├── monkeybee-compose/        # high-level authoring and composition
@@ -147,6 +151,7 @@ monkeybee-pdf/
 │   │   │   ├── transaction.rs    # edit transaction framework
 │   │   │   ├── gc.rs             # resource GC and deduplication
 │   │   │   ├── redaction.rs      # high-assurance redaction application
+│   │   │   ├── rewriter.rs       # ContentStreamRewriter: parse-filter-inject-reemit pipeline for content stream edits
 │   │   │   └── optimize.rs       # compaction, recompression
 │   │   └── Cargo.toml
 │   ├── monkeybee-forms/          # AcroForm field tree, value model, appearance regen
@@ -472,6 +477,150 @@ pub struct ErrorContext {
 }
 ```
 
+### Diagnostic streaming (`monkeybee-core::diagnostics`)
+
+```rust
+/// Unified diagnostic type emitted by all subsystems
+pub struct Diagnostic {
+    pub code: String,                   // hierarchical, e.g., "parse.xref.wrong_offset"
+    pub severity: Severity,             // Fatal, Error, Warning, Info
+    pub subsystem: Subsystem,           // parser, renderer, writer, etc.
+    pub object_ref: Option<ObjRef>,
+    pub page: Option<usize>,
+    pub byte_offset: Option<u64>,
+    pub message: String,
+    pub payload: Option<DiagnosticPayload>, // machine-readable repair details, feature classification, etc.
+}
+
+/// Trait for receiving diagnostics — the unified streaming interface
+pub trait DiagnosticSink: Send + Sync {
+    fn emit(&self, diagnostic: Diagnostic);
+}
+
+/// Collects all diagnostics into a Vec (default for library use)
+pub struct VecSink { /* ... */ }
+
+/// Invokes a user-provided closure per diagnostic (for real-time display)
+pub struct CallbackSink<F: Fn(Diagnostic) + Send + Sync> { /* ... */ }
+
+/// Wraps another sink and filters by severity, subsystem, or error code
+pub struct FilteringSink<S: DiagnosticSink> { /* ... */ }
+
+/// Wraps another sink and counts diagnostics by category (for budget enforcement)
+pub struct CountingSink<S: DiagnosticSink> { /* ... */ }
+```
+
+### PDF version tracking (`monkeybee-core::version`)
+
+```rust
+/// PDF version (major.minor)
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PdfVersion {
+    pub major: u8,  // 1 or 2
+    pub minor: u8,  // 0–9
+}
+
+/// Version tracking for a document session
+pub struct VersionInfo {
+    pub input_version: PdfVersion,         // from file header (%PDF-X.Y)
+    pub catalog_version: Option<PdfVersion>, // from catalog /Version entry (takes precedence when higher)
+    pub effective_version: PdfVersion,     // minimum version needed for all features actually used
+    pub output_version: Option<PdfVersion>, // user-requested output version constraint
+}
+
+/// Feature-to-version association for version gating
+pub struct VersionedFeature {
+    pub code: String,           // e.g., "object_streams", "cross_ref_streams", "aes_encryption"
+    pub min_version: PdfVersion,
+}
+```
+
+### Cache management (`monkeybee-document::cache`)
+
+```rust
+/// Configuration for engine-level caches
+pub struct CacheConfig {
+    pub decoded_stream_budget: usize,  // bytes, default 256 MB
+    pub font_cache_budget: usize,      // bytes, default 128 MB
+    pub page_plan_budget: usize,       // bytes, default 64 MB
+    pub raster_tile_budget: usize,     // bytes, default 512 MB
+}
+
+/// Engine-level cache manager — owns all bounded caches
+/// All cache data structures are thread-safe (DashMap / sharded concurrent maps).
+pub struct CacheManager {
+    pub config: CacheConfig,
+    pub decoded_streams: DashMap<(SnapshotId, ObjRef, u64), Arc<[u8]>>,
+    pub fonts: DashMap<ObjRef, Arc<ParsedFont>>,
+    pub page_plans: DashMap<(SnapshotId, usize), Arc<PagePlan>>,
+    pub raster_tiles: DashMap<(SnapshotId, usize, TileId, u32), Arc<TileData>>,
+}
+
+/// Cache statistics for diagnostics and proof
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+    pub current_bytes: usize,
+    pub budget_bytes: usize,
+}
+```
+
+### Content stream rewriter (`monkeybee-edit::rewriter`)
+
+```rust
+/// Filter-and-rewrite pipeline for content stream edits (redaction, flattening, content removal)
+pub struct ContentStreamRewriter {
+    pub filters: Vec<Box<dyn OperatorFilter>>,
+    pub injections: Vec<Injection>,
+}
+
+/// Per-operator decision: keep, drop, or replace
+pub trait OperatorFilter: Send + Sync {
+    fn filter(&self, op: &Operator, state: &GraphicsState) -> FilterDecision;
+}
+
+pub enum FilterDecision {
+    Keep,
+    Drop,
+    Replace(Vec<Operator>),
+}
+
+/// New operators to inject at a specified position
+pub struct Injection {
+    pub position: InjectionPoint,  // before/after a specific operator index, or append
+    pub operators: Vec<Operator>,
+    pub wrap_in_save_restore: bool, // wrap in q/Q to isolate state
+}
+```
+
+### Progressive render state (`monkeybee-render::progressive`)
+
+```rust
+/// Tracks progressive rendering state for partially-loaded documents
+pub struct ProgressiveRenderState {
+    pub page_index: usize,
+    pub available_resources: HashSet<ObjRef>,
+    pub missing_resources: Vec<MissingResource>,
+    pub completeness: f32,  // 0.0 = nothing rendered, 1.0 = fully complete
+}
+
+/// A resource that is not yet available for rendering
+pub struct MissingResource {
+    pub obj_ref: ObjRef,
+    pub resource_type: ResourceType,  // Image, Font, XObject, etc.
+    pub byte_range: Option<(u64, u64)>, // byte range needed to fetch this resource
+    pub affected_tiles: Vec<TileId>,
+}
+
+/// Placeholder metadata attached to partially-rendered tiles
+pub struct PlaceholderInfo {
+    pub bbox: Rectangle,
+    pub missing_resource: ObjRef,
+    pub fetch_range: Option<(u64, u64)>,
+}
+```
+
 ## Critical data flows
 
 ### Runtime orchestration flow
@@ -576,6 +725,8 @@ PdfDocument
 ### monkeybee-core
 - Unit tests: object type creation, geometry transforms, matrix operations.
 - Property tests: arbitrary object construction → serialize → deserialize → compare.
+- DiagnosticSink tests: VecSink collects all diagnostics, FilteringSink filters by severity/subsystem, CountingSink counts correctly and enforces budget abort policies.
+- PdfVersion tests: version parsing, comparison ordering, version-gated feature lookup, catalog version override precedence.
 
 ### monkeybee-bytes
 - Unit tests: ByteSource implementations (mmap, in-memory), revision chain construction, span tracking.
@@ -607,12 +758,15 @@ PdfDocument
 - Invariant tests: change journal consistency, reverse reference index accuracy.
 - Dependency graph tests: invalidation correctness — edit an object, verify only dependents invalidated.
 - Snapshot tests: PdfSnapshot immutability, snapshot_id uniqueness, cache keying correctness, structural sharing (new snapshot does not clone full object store).
+- Cache management tests: LRU eviction under budget pressure, pinned-entry protection during active operations, cache stats accuracy, graceful degradation when all budgets exceeded (re-decode on demand), concurrent access correctness under DashMap/sharded structures.
+- Thread-safety tests: parallel page renders on shared PdfSnapshot, concurrent decode cache access, atomic budget counter correctness, Rayon scoped parallelism lifetime safety.
 
 ### monkeybee-content
 - Unit tests: content stream interpretation, graphics state machine, event dispatch.
 - Sink adapter tests: RenderSink, ExtractSink, InspectSink, EditSink receive correct events for known content streams.
 - Property tests: PagePlan IR equivalence with streaming events (same content stream, same results).
 - Cache tests: PagePlan cache invalidation on content/resource changes.
+- Error recovery tests: operator-level isolation (failing operator does not abort page), state rollback on partial failure, resource resolution failure handling (missing font/image/XObject), inline image recovery (corrupted BI/ID/EI scanning), Q stack underflow recovery (reset to initial state), recursion limit enforcement (form XObject / tiling pattern nesting at 28 levels).
 
 ### monkeybee-parser
 - Unit tests: lexer on known token sequences, object parsing on all types, xref parsing on well-formed and malformed tables.
@@ -634,6 +788,8 @@ PdfDocument
 - Render comparison tests: render corpus documents → compare against reference renderers.
 - Visual regression tests: golden-image comparisons with perceptual diff thresholds.
 - Edge case tests: transparency stacking, pattern rendering, Type 3 fonts, unusual blend modes.
+- Cooperative cancellation tests: cancel mid-render at each checkpoint type (per-operator, per-tile, per-page, per-resource); verify partial results are usable and not corrupted; verify budget exhaustion triggers same behavior as cancellation.
+- Progressive rendering tests: render with missing resources produces correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles, completeness flag transitions correctly, prefetch planning reports correct resource sets.
 
 ### monkeybee-compose
 - Unit tests: document/page/content builder APIs, resource naming uniqueness, appearance stream generation.
@@ -653,6 +809,7 @@ PdfDocument
 - Unit tests: EditTransaction commit/rollback, resource GC, deduplication.
 - Redaction tests: text-only, image-only, mixed, reused XObjects, canary-text leakage.
 - Optimization tests: compaction produces smaller valid output, recompression round-trips.
+- Content stream rewrite tests: parse-filter-reemit round-trip preserves unfiltered operators exactly, operator drop removes target operators and old stream is deleted from change journal, operator replace substitutes correctly with full graphics state context, injection inserts at correct positions with q/Q wrapping, annotation flattening appends appearance stream with correct coordinate transform, TJ array splitting for partial-overlap redaction.
 
 ### monkeybee-forms
 - Unit tests: field tree parsing, inheritance resolution, field value model for each type.
@@ -683,6 +840,7 @@ PdfDocument
 - Integration tests: full proof harness runs on subset of corpus.
 - Ledger tests: compatibility ledger correctly categorizes known feature encounters.
 - Evidence tests: artifact generation produces valid, parseable output.
+- Ledger JSON schema tests: ledger output validates against the JSON schema (schema_version, input block, features array, repairs array, degradations array, summary block), version tracking fields (declared_version, effective_version) are populated correctly, schema versioning — breaking changes increment major version.
 
 ## Subordinate implementation docs
 

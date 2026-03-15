@@ -47,19 +47,19 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 
 | Crate | Responsibility |
 |---|---|
-| `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets |
+| `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets, diagnostic streaming (DiagnosticSink), PDF version tracking |
 | `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduler, prefetch planning, revision chain, raw span ownership |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
 | `monkeybee-security` | Security profiles, worker isolation, budget broker, hostile-input policy |
 | `monkeybee-parser` | PDF syntax parsing, repair, tolerant/strict modes, raw token/span retention |
 | `monkeybee-syntax` | Syntax/COS preservation layer: immutable parsed objects, token/span provenance, xref provenance, object-stream membership, repair records. The preservation boundary. |
-| `monkeybee-document` | Semantic document graph built from syntax snapshots: page tree, inherited state, resource resolution, ownership classes |
+| `monkeybee-document` | Semantic document graph built from syntax snapshots: page tree, inherited state, resource resolution, ownership classes, bounded cache management |
 | `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit; consumer sink adapters (RenderSink, ExtractSink, InspectSink, EditSink) |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline (existing PDF text) and authoring pipeline (shaping/bidi/layout), subsetting, search/hit-test primitives |
-| `monkeybee-render` | Page rendering via content events/PagePlan: positioned glyphs, images, transparency, vector graphics, masks, blending; tile/band raster surface |
+| `monkeybee-render` | Page rendering via content events/PagePlan: positioned glyphs, images, transparency, vector graphics, masks, blending; tile/band raster surface; cooperative cancellation; progressive rendering |
 | `monkeybee-compose` | High-level authoring and composition: document/page builders, resource naming, appearance generation, font embedding planning |
 | `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, xref/trailer emission, structural validity, final compression/encryption |
-| `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application |
+| `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content stream rewrite pipeline |
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, widget/signature bridge |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
 | `monkeybee-extract` | Multi-surface text extraction, metadata, structure inspection, asset extraction, diagnostics |
