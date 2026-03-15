@@ -45,6 +45,40 @@ Monkeybee keeps the alien-artifact ambition, but v1 is gated on a correct baseli
 3. Baseline v1 must prefer simple, auditable defaults over compact or exotic defaults.
 4. An experimental path becomes default only after it beats the baseline on correctness or cost under the proof harness.
 
+### Delivery spine
+
+Monkeybee defines four release slices:
+
+1. **Slice A — Reader kernel**
+   - open/parse/repair
+   - inspect/extract
+   - baseline raster render
+   - deterministic full rewrite
+   - strict parse-own-output validation
+
+2. **Slice B — Bidirectional preserve loop**
+   - immutable snapshots + EditTransaction
+   - incremental append
+   - annotation add/save/reopen
+   - AcroForm read/fill/appearance regeneration
+   - signature-safe save planning
+
+3. **Slice C — Remote/progressive**
+   - range-backed ByteSource
+   - progressive page/region render
+   - prefetch planning + refinement
+
+4. **Slice D — External proof**
+   - pathological corpus
+   - compatibility ledger
+   - multi-oracle render comparison
+   - CI scorecards and regression gates
+
+**v1 release requirement:** Slice A + Slice B + Slice D.
+**v1 optional beta lane:** Slice C may ship behind a feature flag if it threatens v1 critical path.
+
+Every task in the roadmap must declare its owning slice.
+
 In concrete terms, "alien artifact" for this domain means:
 1. **Mathematical sophistication threaded through every hot path.** Where competing engines use brute force (supersampling for anti-aliasing, linear scan for CMap lookup, pixel-wise comparison for render diffing), Monkeybee uses genuinely stronger methods (exact analytic area coverage via Green's theorem, robust geometric predicates, multi-scale structural similarity, information-theoretic repair scoring, spectral-aware color science). These are not garnishes — they are the techniques that make the engine qualitatively different.
 2. **Correctness that is provable, not merely tested.** Exact area coverage gives mathematically correct anti-aliasing. Robust predicates eliminate floating-point degeneracy artifacts. Bayesian repair confidence gives auditable reasoning for every recovery decision. MS-SSIM gives perceptually valid render comparison. Each technique carries its own correctness proof.
@@ -68,6 +102,24 @@ Monkeybee adopts explicit, named operational modes that encode mutually competin
 - **Downlevel output:** Emit output constrained to an older PDF version or a specific profile (e.g., PDF/A-4, PDF/X-6). The writer validates output against the target profile's constraints and rejects or downgrades features that violate them.
 
 The mode is not a global singleton. A single session can parse in tolerant mode, inspect the result, and then write in incremental-append mode. The modes compose.
+
+### Operation profiles
+
+Modes are low-level contracts. Most callers should start from an `OperationProfile` preset:
+
+- `ViewerFast`
+  - parse=tolerant, write=deterministic, security=compatible, open=eager|lazy
+- `ForensicPreserve`
+  - parse=preserve, write=incremental_append, security=hardened, open=eager
+- `EditorSafe`
+  - parse=tolerant, write=plan_selected, security=hardened, open=eager
+- `BatchProof`
+  - parse=tolerant, write=deterministic, security=strict_or_hardened, open=eager, determinism=on
+- `BrowserWasm`
+  - parse=tolerant, write=deterministic, security=strict, open=in_memory_remote
+
+`ExecutionContext::from_profile(profile)` materializes budgets, cache policy, provider policy,
+determinism, and default write/open behavior from the preset.
 
 ### Execution context doctrine
 
@@ -158,6 +210,30 @@ oracle uses pinned resource packs for reproducibility.
 
 Proof/CI mode must use pinned providers rather than ambient system discovery.
 Deterministic mode fixes serialization order, stable hashers, fallback resources, and oracle manifests so CI evidence is reproducible across hosts.
+
+### Feature module registry
+
+Beyond providers, the engine supports optional `FeatureModule`s for capabilities that are:
+- platform-specific
+- safety-sensitive
+- non-baseline
+- externally versioned
+
+Examples:
+- `jpx_native`
+- `jbig2_isolated`
+- `pki_verify`
+- `xfa_inspect`
+- `postscript_subset_translate`
+
+Each module declares:
+- capability codes
+- supported targets (native/wasm)
+- determinism class
+- safety class
+- version/hash for manifesting
+
+Canonical CI/proof runs record the active feature-module manifest alongside the oracle manifest.
 
 ---
 
@@ -555,6 +631,9 @@ All open paths operate on a `ByteSource` trait so the architecture supports mmap
   is a fallback of last resort, not the baseline design.
 - `EditTransaction` consumes a snapshot and produces a new snapshot plus a serializable delta.
 
+`CapabilityReport` is an early open artifact: it is produced during `OpenProbe` (before full open)
+and refined after full parse. It is not merely a workflow promise.
+
 ```
 pub struct CapabilityReport {
     pub signed: bool,
@@ -568,6 +647,29 @@ pub struct CapabilityReport {
     pub expected_degradations: Vec<FeatureCode>,
 }
 ```
+
+### Open probe contract
+
+Before full open, the engine may perform an `OpenProbe`:
+
+```
+probe = engine.probe(byte_source, probe_opts, &exec_ctx)?;
+```
+
+`OpenProbe` is bounded and cheap. It may inspect:
+- header and declared version
+- tail region (`startxref`, `%%EOF`, update depth estimate)
+- linearization dictionary and first-page hint presence
+- encryption dictionary presence
+- signature field presence and `/ByteRange` inventory
+- `/Catalog` feature hints (AcroForm, XFA, StructTreeRoot, OCGs, JavaScript)
+- likely risky decoder set
+- approximate page count / object count when cheaply knowable
+
+`OpenProbe` returns a preliminary `CapabilityReport`, an estimated complexity class, and a
+recommended `OperationProfile`.
+
+`engine.open(...)` may accept a prior probe result to avoid duplicate work.
 
 **API surface:**
 
@@ -636,18 +738,31 @@ All caches, proofs, and invalidation logic key off `snapshot_id`, never mutable 
 
 ### Cache management doctrine
 
-Engine-level caches are bounded by configurable memory budgets. The default budgets are:
+All caches are governed by a single `CachePolicy`.
 
-- **Decoded stream cache:** 256 MB. Keyed by (snapshot_id, object_id, filter_chain_hash). LRU
-  eviction. Streams currently being consumed by an active render/extract operation are pinned and
-  cannot be evicted.
-- **Font cache:** 128 MB. Keyed by font dictionary object_id. Parsed font programs, glyph outlines,
-  and CMap tables. LRU eviction. Fonts referenced by the current page's resources are pinned.
-- **PagePlan cache:** 64 MB. Keyed by (snapshot_id, page_index). The immutable display list for a
-  page. LRU eviction. Invalidated when any object in the page's dependency subgraph changes.
-- **Raster tile cache:** Configurable, default 512 MB. Keyed by (snapshot_id, page_index, tile_id,
-  dpi). LRU eviction. Used by the tile/band scheduler for progressive and region rendering.
-- **Scratch spill store:** bounded local store for oversized decoded streams, raster tiles,
+`CachePolicy` defines:
+- in-memory byte budget
+- spill-store byte budget
+- per-cache admission rules
+- pinning rules
+- eviction rules
+- deterministic mode behavior
+- wasm/native default profiles
+
+Canonical caches:
+- `ParsedObjectCache`      key=(document_id, revision_id, objref)
+- `DecodedStreamCache`     key=(resource_fingerprint, filter_chain_hash)
+- `ParsedFontCache`        key=(font_fingerprint)
+- `PagePlanCache`          key=(snapshot_id, page_index, dependency_fingerprint, profile_hash)
+- `RasterTileCache`        key=(snapshot_id, page_index, tile_id, dpi, completeness, profile_hash)
+- `ColorTransformCache`    key=(icc_fingerprint, intent, target_space)
+- `ResolvedResourceCache`  key=(snapshot_id, page_index, inheritance_fingerprint)
+
+- No cache is unbounded in any runtime, including native and WASM.
+- WASM uses smaller default budgets, not different cache semantics.
+- Cross-snapshot reuse is allowed only for immutable artifacts identified by fingerprints.
+
+**Scratch spill store:** bounded local store for oversized decoded streams, raster tiles,
   isolated-decoder outputs, and other large intermediate artifacts.
 
 When memory pressure exceeds in-memory cache budgets, eligible artifacts may spill to the
@@ -999,6 +1114,7 @@ Produces visual output from the document model.
 
 Key responsibilities:
 - Consumption of `monkeybee-content` events or `PagePlan` IR through backend adapters
+- Reuse of `monkeybee-paint` primitives where page rendering and appearance composition overlap
 - Text rendering via `monkeybee-text`: font lookup, encoding/CMap resolution, glyph dispatch,
   positioned-glyph realization, and Unicode-aware diagnostics
 - Image rendering: inline and XObject images, color space conversion, interpolation
@@ -1530,6 +1646,18 @@ Key responsibilities:
 
 AcroForm handling is distinct from general annotation handling. Widgets are annotations visually, but the field tree semantics, inherited field properties, appearance regeneration rules, value synchronization, and signature handling justify a dedicated subsystem.
 
+#### `monkeybee-paint`
+
+Shared page-independent painting and appearance primitives:
+- path stroking/filling helpers
+- text run realization for appearance generation
+- color and ExtGState emission helpers
+- form XObject appearance composition primitives
+- paint-side geometry utilities reused by render/compose/annotate
+
+`monkeybee-paint` does not rasterize pages and does not own content-stream interpretation.
+It is the shared kernel for emitted appearance content.
+
 #### `monkeybee-annotate`
 
 Non-form annotation creation, modification, and management.
@@ -1542,7 +1670,7 @@ Key responsibilities:
 - Annotation property modification
 - Reply chains and markup relationships
 - Bridge generic annotation handling to `monkeybee-forms` for Widget annotations
-- Depends on `monkeybee-render` primitives for appearance stream content realization
+- Depends on `monkeybee-paint` for appearance stream content realization
   (glyph positioning, path construction, color setting within form XObjects)
 - Round-trip preservation: add annotation → save → reopen → verify
 
@@ -1627,6 +1755,34 @@ Text extraction reuses the same content stream interpretation pipeline as the re
 - **Text in patterns and form XObjects:** Text appearing inside tiling patterns or form XObjects must be extracted with the correct transformation applied (the pattern matrix or form matrix composed with the invoking CTM).
 - **Marked content for reading order:** Tagged PDFs use marked content sequences (`BMC`/`BDC`/`EMC`) with structure tags that define logical reading order. When available, the extraction pipeline should prefer the tagged reading order over geometric heuristics. However, most real-world PDFs are not tagged; geometric heuristics are the primary path.
 
+#### `monkeybee-diff`
+
+Semantic and multi-surface comparison between documents or snapshots.
+
+Key responsibilities:
+- structural object/page/resource deltas
+- text deltas (physical/logical/tagged surfaces)
+- render deltas (reusing proof metrics and region maps)
+- signature impact deltas
+- capability/compatibility deltas
+- save-plan deltas (`why would this become full rewrite?`)
+
+Canonical output:
+```
+DiffReport {
+  schema_version,
+  left_document_id,
+  right_document_id,
+  structural_delta,
+  text_delta,
+  render_delta,
+  signature_delta,
+  capability_delta,
+  write_impact_delta,
+  diagnostics,
+}
+```
+
 #### `monkeybee-validate`
 
 Conformance validation, profile checking, and structural verification.
@@ -1706,8 +1862,9 @@ Key responsibilities:
 - `monkeybee diagnose <file>` — full compatibility report
  - `monkeybee diagnose <file> [--html]` — JSON or self-contained HTML dossier
  - `monkeybee diff <before> <after> [--render|--text|--structure|--save-impact]`
+   emits a schema-versioned `DiffReport`
 - `monkeybee plan-save <file> [--incremental|--rewrite]` — preview ownership, rewritten regions,
-  signature impact, and fallback reasons before saving
+  signature impact, and fallback reasons before saving; emits a schema-versioned `WritePlanReport`
 - `monkeybee proof <corpus-dir>` — run the full proof harness
 - `monkeybee conformance <file> [--profile pdf-a4|pdf-x6]` — profile-specific validation
 - `monkeybee optimize <file> [--dedup|--gc|--recompress] -o <o>` — full-rewrite compaction and cleanup as an explicit user operation
@@ -1733,6 +1890,7 @@ wraps the primary result in an envelope:
 
 ```json
 {
+  "schema_version": "1.0",
   "status": "success" | "degraded" | "failed",
   "result": { /* command-specific */ },
   "diagnostics": [ /* array of Diagnostic objects */ ],
@@ -1857,6 +2015,22 @@ Transaction flow:
 3. Run validation preflight
 4. Either commit atomically as a delta or roll back
 
+### Edit intent contract
+
+Every `EditTransaction` declares an `EditIntent`:
+
+```
+enum EditIntent {
+  ForensicPreserve,
+  SafeIncremental,
+  SemanticRewrite,
+  CanonicalizeOwned,
+  Optimize,
+}
+```
+
+`EditIntent` constrains ownership escalation and write planning.
+
 ### EditTransaction validation rules
 
 At `commit()` time, the transaction performs the following validations:
@@ -1876,8 +2050,12 @@ At `commit()` time, the transaction performs the following validations:
    transaction is for a generated document (where missing resources are an error).
 
 4. **Ownership constraints:** Edits to `OpaqueUnsupported` objects are rejected unless the edit
-   explicitly takes ownership (transitions to `Owned`). Edits to `ForeignPreserved` objects
-   transition them to `Owned` automatically with a diagnostic.
+   explicitly takes ownership (transitions to `Owned`).
+   - In `ForensicPreserve` and `SafeIncremental`, edits to `ForeignPreserved` objects do **not**
+     auto-escalate. The caller must explicitly call `take_ownership(objref, reason)`.
+   - In `SemanticRewrite` and `CanonicalizeOwned`, ownership escalation is permitted and recorded.
+   - Every ownership escalation produces an `OwnershipTransitionRecord` that is surfaced in the
+     `WritePlan` and compatibility ledger.
 
 5. **Structural cycle detection:** The dependency graph is checked for cycles introduced by the
    transaction (e.g., a form XObject that references itself). Cycles are rejected.
@@ -1963,6 +2141,12 @@ any classified object's original byte span overlaps. If yes, the signature is fl
 invalidated. In incremental-append mode with only `PreserveBytes` and `AppendOnly` objects, no
 existing signatures should be invalidated — if the plan detects otherwise, it reports an error
 before any bytes are written.
+
+`WritePlan` additionally records:
+- `edit_intent`
+- `ownership_transitions`
+- `blocked_preserve_regions`
+- `full_rewrite_reasons`
 
 ### Error taxonomy
 
@@ -2416,7 +2600,7 @@ The applied redaction must be irreversible — the original content must not be 
 
 **Tagged PDF awareness:**
 
-Tagged PDFs contain a structure tree (`/StructTreeRoot` in the catalog) that maps content to logical elements (paragraphs, headings, tables, figures, lists). While Monkeybee v1 does not perform accessibility remediation (generating tags for untagged PDFs), it must:
+Tagged PDFs contain a structure tree (`/StructTreeRoot` in the catalog) that maps content to logical elements (paragraphs, headings, tables, figures, lists). Tagged-structure preservation is a gated sub-feature of preserve mode: any edit that claims not to damage existing semantic structure must preserve the structure tree. While Monkeybee v1 does not perform accessibility remediation (generating tags for untagged PDFs), it must:
 
 1. **Preserve existing tags** during round-trip operations. The structure tree, its elements, and the marked content references in content streams must survive load-modify-save cycles.
 2. **Extract tagged structure** when present. The extraction pipeline should report the structure tree as part of the document inspection output: element types, nesting, associated content, and alt text.
@@ -2843,6 +3027,21 @@ The schema is versioned. Breaking changes increment the major version. The proof
 ledger output against the schema. Downstream tools (dashboards, CI gates, regression detectors)
 consume the ledger via the schema.
 
+### External schema doctrine
+
+The following outputs are schema-versioned external interfaces:
+- `CompatibilityLedger`
+- `CapabilityReport`
+- `WritePlanReport`
+- `DiffReport`
+- `TraceEventStream`
+- CLI JSON envelope
+- `ExpectationManifest`
+- `OracleManifest`
+
+Backward compatibility is guaranteed within a major version for all of the above.
+Breaking changes require a schema major-version bump and fixture updates in CI.
+
 **Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
 
 ### CI integration contract
@@ -3024,7 +3223,7 @@ The engine maintains several layered caches, each with explicit eviction policy:
 
 2. **Decoded stream cache:** Decoded stream bytes (after filter-chain decompression) are cached keyed on (object_number, generation_number, filter_chain_hash). Eviction: LRU with a configurable maximum total size (default: 256 MiB). Large image streams are the primary consumers. For pages with shared resources (e.g., a logo image used on every page), the cache avoids repeated decompression.
 
-3. **Font cache:** Parsed font data (glyph outlines, metrics, encoding tables, CMap data) is cached keyed on font dictionary object ID. Fonts are typically small relative to the document and used across many pages; the font cache has no size limit in practice (fonts are never evicted until the document is closed). The font cache is the single largest contributor to multi-page rendering performance.
+3. **Font cache:** Parsed font data (glyph outlines, metrics, encoding tables, CMap data) is cached keyed on font fingerprint. Fonts are typically small relative to the document and used across many pages. The font cache follows the global `CachePolicy`; referenced fonts may be pinned temporarily, but not unbounded. The font cache is the single largest contributor to multi-page rendering performance.
 
 4. **Glyph rasterization cache:** Rasterized glyph bitmaps, keyed on (font_id, glyph_id, quantized_size, quantized_subpixel_position). Eviction: LRU with configurable maximum count (default: 100,000 entries). Size is quantized to 0.5pt buckets; subpixel position to 1/4 pixel. This prevents cache explosion from continuous-size fonts while maintaining sufficient visual quality.
 
@@ -3304,7 +3503,7 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
   before edit/invalidation/writeback work begins.
 - [ ] Architectural gate: session policy and per-operation `ExecutionContext` precedence rules are
   finalized before API stabilization.
-- [ ] Architectural gate: annotation/widget appearance generation no longer depends on render.
+- [ ] Architectural gate: annotation/widget appearance generation depends on `monkeybee-paint`, not `monkeybee-render`.
 - [ ] Zero silent failures in the proof harness.
 - [ ] All errors use the shared error taxonomy.
 - [ ] All `unsafe` blocks are documented and tested.
@@ -3319,13 +3518,13 @@ The following table consolidates the baseline/experimental classification from a
 | Feature | Classification | Rationale |
 |---|---|---|
 | Classic xref tables | Baseline | Simpler to audit, required for all PDFs |
-| Cross-reference streams | Baseline (read), Post-baseline (write) | Must read; write deferred |
+| Cross-reference streams | Baseline (read), Post-baseline (write) | Must read; write deferred unless forced by compact mode |
 | Object stream packing | Post-baseline | Requires xref streams, adds complexity |
 | All standard filters (Flate, LZW, ASCII85, etc.) | Baseline | Required for real-world PDFs |
 | JBIG2 decode | Baseline (via isolated JBIG2-capable decoder path) | Common in scanned docs |
 | JPEG 2000 decode | Baseline (via openjpeg-sys) | Common in print-quality PDFs |
 | Encryption V1-V5 (read) | Baseline | Required for real-world PDFs |
-| Encryption (write) | Post-baseline | Not needed for v1 proof |
+| Encryption (write) | Post-baseline / out of v1 gating | Not needed for v1 proof; deferred entirely from v1 release gates |
 | Mesh shadings (types 4-7) | Post-baseline | Rare, complex, not v1-gating |
 | Overprint/OPM=1 | Post-baseline | CMYK-specific, not v1-gating |
 | Exact analytic coverage raster | Experimental | Must beat tiny-skia baseline |
@@ -3347,6 +3546,29 @@ The following table consolidates the baseline/experimental classification from a
 | XFA rendering | Not in v1 (Tier 2/3) | Detect and AcroForm fallback only |
 | PostScript XObjects | Not in v1 (Tier 2/3) | Detect and simple subset only |
 | JavaScript execution | Not in v1 | Detect and preserve only |
+
+Experimental algorithm details live in a dedicated annex.
+
+### Experimental annex rule
+
+No baseline subsystem contract may require an experimental algorithm for correctness.
+Each experimental item must declare:
+- baseline implementation it competes with
+- proof metric it must beat
+- cost metric it must beat
+- fallback behavior when disabled
+
+Experimental items:
+- exact analytic area coverage rasterizer
+- robust geometric predicates
+- spectral-aware color pipeline
+- algebraic blend optimization
+- SDF glyph path
+- adaptive mesh subdivision
+- Bayesian repair scoring
+- MS-SSIM enhancements beyond baseline comparison
+- entropy-optimal write encoding
+- probabilistic layout analysis
 
 ---
 
@@ -3431,10 +3653,8 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-PARSE-010: Producer quirk detection and shim layer
 
 ### Render beads
-- B-RENDER-001: Graphics state machine
-Note: B-RENDER-001 duplicates B-CONTENT-002 (graphics state machine). The state machine is
-owned by monkeybee-content, not monkeybee-render. Remove B-RENDER-001 and ensure B-CONTENT-002
-covers the full graphics state contract from Part 5.
+B-PAINT-001: Shared appearance/painter primitives
+B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-RENDER-002: Path rendering (stroke, fill, clip)
 - B-RENDER-003: Text rendering pipeline (font → encoding → glyph → position)
 - B-RENDER-004: Image rendering and color space conversion
