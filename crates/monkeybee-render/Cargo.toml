@@ -1,0 +1,13 @@
+[package]
+name = "monkeybee-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Page rendering for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+monkeybee-parser.workspace = true
+thiserror.workspace = true
+log.workspace = true
+image.workspace = true

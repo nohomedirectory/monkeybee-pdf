@@ -1,0 +1,22 @@
+[package]
+name = "monkeybee-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line interface for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+monkeybee-parser.workspace = true
+monkeybee-render.workspace = true
+monkeybee-write.workspace = true
+monkeybee-annotate.workspace = true
+monkeybee-extract.workspace = true
+monkeybee-proof.workspace = true
+clap.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[[bin]]
+name = "monkeybee"
+path = "src/main.rs"

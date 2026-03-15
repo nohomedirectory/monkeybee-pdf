@@ -1,0 +1,14 @@
+name: monkeybee-pdf
+description: Monkeybee PDF master spec refinement
+
+documents:
+  readme: README.md
+  spec: SPEC.md
+  implementation: docs/implementation/implementation_master.md
+
+oracle:
+  model: "o1-pro"
+
+rounds:
+  output_dir: .apr/rounds/monkeybee-pdf
+  impl_every_n: 3

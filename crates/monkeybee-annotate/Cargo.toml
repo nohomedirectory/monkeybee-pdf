@@ -1,0 +1,13 @@
+[package]
+name = "monkeybee-annotate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Annotation operations for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+monkeybee-render.workspace = true
+monkeybee-write.workspace = true
+thiserror.workspace = true
+log.workspace = true

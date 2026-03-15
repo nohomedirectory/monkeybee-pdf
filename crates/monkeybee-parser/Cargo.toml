@@ -1,0 +1,12 @@
+[package]
+name = "monkeybee-parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "PDF byte parsing, repair, and decryption for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+thiserror.workspace = true
+log.workspace = true
+flate2.workspace = true
