@@ -506,6 +506,35 @@ All open paths operate on a `ByteSource` trait so the architecture supports mmap
 - `PdfSnapshot` is immutable, shareable across threads, and identified by `snapshot_id`.
 - `EditTransaction` consumes a snapshot and produces a new snapshot plus a serializable delta.
 
+**API surface:**
+
+```
+engine = MonkeybeeEngine::new(config)?;
+session = engine.open(byte_source, open_options)?;         // parses, produces first snapshot
+snapshot = session.current_snapshot();                      // Arc<PdfSnapshot>, cheap clone
+
+// Read operations (parallel-safe on snapshot):
+rendered_page = snapshot.render_page(page_index, render_opts, &exec_ctx)?;
+text = snapshot.extract_text(page_index, extract_opts, &exec_ctx)?;
+info = snapshot.inspect_object(obj_ref)?;
+
+// Mutation:
+tx = EditTransaction::new(snapshot.clone());
+tx.add_annotation(page_index, annotation)?;
+tx.set_metadata("Title", "New Title")?;
+new_snapshot = tx.commit()?;                                // produces new snapshot, delta
+
+// Write:
+plan = WritePlan::compute(&new_snapshot, write_mode)?;      // classify, check signatures
+bytes = plan.execute(&engine, &exec_ctx)?;                  // serialize to bytes
+```
+
+This API ensures:
+- No mutable access to live snapshots (all mutation goes through EditTransaction)
+- Read operations are parallelizable
+- Write planning is inspectable before committing bytes
+- The engine's caches survive across snapshots (keyed by snapshot_id)
+
 All caches, proofs, and invalidation logic key off `snapshot_id`, never mutable in-place document state. This lifecycle model makes page-parallel render/extract, stable PagePlan caches, preserve/incremental save correctness, reproducible proof artifacts, and future viewer/editor use all straightforward because nothing mutates in place.
 
 ### Cache management doctrine
@@ -738,6 +767,21 @@ Key responsibilities:
 - Risky-decoder allow/deny policy
 - Hostile-input policy enforcement
 - All high-risk decode jobs execute through `monkeybee-security` with explicit memory/time budgets and optional worker isolation
+
+**Security-gated decoder invocation flow:**
+
+```
+Consumer (render/extract/parse) requests stream decode
+  → monkeybee-codec public API
+  → Checks ExecutionContext.security_profile.policy_for(decoder_type)
+  → Allow: invoke decoder directly with budget
+  → Isolate: spawn bounded worker, invoke decoder in worker, collect result or timeout
+  → Deny: return Err with Tier 3 diagnostic, consumer handles degradation
+```
+
+The security gate is not bypassable. The internal decoder functions in `monkeybee-codec` are
+`pub(crate)` — external crates cannot invoke JBIG2, JPEG 2000, Type 4 calculator, or XFA
+packet handlers directly. They must go through the security-gated public API.
 
 #### `monkeybee-parser`
 
@@ -1264,6 +1308,8 @@ Key responsibilities:
 - Annotation property modification
 - Reply chains and markup relationships
 - Bridge generic annotation handling to `monkeybee-forms` for Widget annotations
+- Depends on `monkeybee-render` primitives for appearance stream content realization
+  (glyph positioning, path construction, color setting within form XObjects)
 - Round-trip preservation: add annotation → save → reopen → verify
 
 **Appearance stream generation requirements per annotation type** are detailed in Part 5 (Subsystem Contracts).
@@ -1695,6 +1741,21 @@ The content subsystem exposes two surfaces built from the same interpreter:
 
 `PagePlan` is an immutable page-scoped display list containing normalized draw ops, text runs/quads, resource dependencies, marked-content spans, degradation annotations, and source-span provenance.
 Render, extract, inspect, diff, and edit subsystems may consume either surface; the interpreter remains the single source of truth.
+
+**PagePlan structure:**
+- `ops: Vec<DrawOp>` — normalized draw operations (FillPath, StrokePath, ClipPath, DrawImage,
+  BeginGroup/EndGroup, BeginMarkedContent/EndMarkedContent) in page painting order.
+- `text_runs: Vec<TextRun>` — positioned text with resolved Unicode, glyph IDs, per-glyph
+  bounding quads, font reference, size, render mode, and color.
+- `resource_deps: Set<ObjRef>` — all objects this page depends on, for cache invalidation.
+- `marked_spans: Vec<MarkedSpan>` — marked content regions with tags and property references.
+- `degradations: Vec<DegradationNote>` — operator-level errors or degradations encountered
+  during interpretation.
+- `provenance: Vec<SourceSpan>` — maps each op back to its byte offset in the content stream.
+
+The PagePlan is the shared currency between subsystems: render consumes DrawOps and TextRuns
+to produce visual output; extract consumes TextRuns for text extraction; inspect consumes
+everything for structure analysis; diff consumes the full plan for page comparison.
 
 **Event model:**
 
