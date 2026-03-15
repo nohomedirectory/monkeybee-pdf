@@ -112,6 +112,18 @@ monkeybee-proof         (depends on: core, parser, render, write, annotate, extr
 monkeybee-cli           (depends on: all above)
 ```
 
+## Runtime and concurrency model
+
+Monkeybee PDF uses `asupersync` as its async runtime and orchestration layer. Per the upstream `asupersync` skill and runtime guidance, Monkeybee should stay native-first: thread `&Cx<'_>` through async I/O workflows, structure child tasks inside explicit scopes, and bootstrap CLI and proof-harness entrypoints with `RuntimeBuilder` plus `LabRuntime` rather than treating Tokio as the ambient runtime.
+
+Rayon remains the CPU-bound parallel execution layer. The architectural split is deliberate:
+
+- `asupersync` owns async file and directory I/O, corpus traversal, artifact streaming, external-process coordination, cancellation, timeout budgeting, and task supervision.
+- Rayon owns page-level rendering fan-out, image and filter transforms, diff computation, extraction batches, compression work, and other bounded in-memory compute kernels.
+- CPU-heavy work should be handed off from an enclosing `asupersync` scope to Rayon and then rejoined in that same structured scope for aggregation, diagnostics, and persistence.
+- Detached background tasks are not the default. Long-lived background activity must remain runtime-supervised and explicitly owned.
+- Tokio compatibility, if ever required for a third-party library, belongs behind a narrow adapter boundary rather than in Monkeybee's core architecture.
+
 ## Core data structures
 
 ### PDF object model (`monkeybee-core::object`)
@@ -298,6 +310,18 @@ pub struct ErrorContext {
 
 ## Critical data flows
 
+### Runtime orchestration flow
+
+```
+CLI / proof / library workflow
+  -> RuntimeBuilder bootstrap
+  -> LabRuntime entry
+  -> Scope owns request region and cancellation budget
+  -> asupersync performs file and artifact I/O, scheduling, and supervision
+  -> Rayon executes CPU-bound kernels over in-memory page/document data
+  -> asupersync aggregates results, emits diagnostics, writes artifacts, and closes the region
+```
+
 ### Parse flow
 
 ```
@@ -361,7 +385,8 @@ PdfDocument
 - **`freetype-rs` or `ttf-parser` + `ab_glyph`** — font parsing and glyph rasterization
 - **`indexmap`** — ordered dictionaries
 - **`once_cell` / `std::sync::OnceLock`** — lazy initialization
-- **`rayon`** — page-level parallelism
+- **`asupersync`** — async runtime, structured concurrency, cancellation, and orchestration
+- **`rayon`** — CPU-bound parallelism composed under `asupersync` orchestration
 - **`clap`** — CLI argument parsing
 - **`serde` + `serde_json`** — structured output, compatibility ledger
 - **`sha2` / `md5`** — PDF encryption handlers
@@ -374,6 +399,7 @@ PdfDocument
 - Prefer pure-Rust where quality and performance are comparable.
 - Accept C/C++ bindings only for capabilities not yet available in pure Rust at required quality (e.g., JPEG 2000, complex font shaping).
 - Pin all dependency versions. Audit for `unsafe` in critical-path dependencies.
+- Keep the async model single-runtime: `asupersync` is the workspace default, and any compatibility layer must stay quarantined at the edge.
 - No dependency may introduce undefined behavior or memory unsafety that escapes its abstraction boundary.
 
 ## Test obligations by crate

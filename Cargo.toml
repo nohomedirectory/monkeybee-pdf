@@ -19,11 +19,14 @@ repository = "https://github.com/nohomedirectory/monkeybee-pdf"
 description = "Memory-safe, high-performance Rust PDF engine for ugly real-world PDFs"
 
 [workspace.dependencies]
-# Shared across crates — pin versions
+# Shared across crates; pin versions where available.
 thiserror = "2"
 indexmap = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Async I/O and orchestration runtime for the workspace.
+asupersync = "0.2.6"
+# CPU-bound parallelism composed under asupersync-owned workflows.
 rayon = "1"
 log = "0.4"
 env_logger = "0.11"
