@@ -52,11 +52,13 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
 | `monkeybee-security` | Security profiles, worker isolation, budget broker, hostile-input policy |
 | `monkeybee-parser` | PDF syntax parsing, repair, tolerant/strict modes, raw token/span retention |
-| `monkeybee-document` | Semantic document graph, page tree, inherited state, resource resolution, ownership classes |
-| `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit |
-| `monkeybee-text` | Font programs, CMaps, Unicode mapping, shaping/bidi, subsetting, search/hit-test primitives |
-| `monkeybee-render` | Page rendering: content streams, positioned glyphs, images, transparency, vector graphics, masks, blending |
-| `monkeybee-write` | Serialization, generation, incremental save, full rewrite, structural validity |
+| `monkeybee-syntax` | Syntax/COS preservation layer: immutable parsed objects, token/span provenance, xref provenance, object-stream membership, repair records. The preservation boundary. |
+| `monkeybee-document` | Semantic document graph built from syntax snapshots: page tree, inherited state, resource resolution, ownership classes |
+| `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit; consumer sink adapters (RenderSink, ExtractSink, InspectSink, EditSink) |
+| `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline (existing PDF text) and authoring pipeline (shaping/bidi/layout), subsetting, search/hit-test primitives |
+| `monkeybee-render` | Page rendering via content events/PagePlan: positioned glyphs, images, transparency, vector graphics, masks, blending; tile/band raster surface |
+| `monkeybee-compose` | High-level authoring and composition: document/page builders, resource naming, appearance generation, font embedding planning |
+| `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, xref/trailer emission, structural validity, final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application |
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, widget/signature bridge |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
@@ -65,7 +67,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility accounting |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, conversion, diagnostics |
 
-The architecture has four explicit strata: byte/revision, syntax, semantic document, and content. All crates share `monkeybee-core` for primitives. Rendering, extraction, annotation, editing, and writeback all operate on the same document model, not parallel dead-end parse trees.
+The architecture has four explicit strata: byte/revision, syntax/COS (`monkeybee-syntax` -- the preservation boundary), semantic document (`monkeybee-document`), and content. All crates share `monkeybee-core` for primitives. The syntax layer preserves what the parser saw; the semantic layer builds meaning from it. Rendering, extraction, annotation, editing, and writeback all operate on the same document model, not parallel dead-end parse trees. Core library crates are runtime-agnostic; async orchestration is an adapter concern at the CLI/proof edge.
 
 ## Repo structure
 
@@ -82,10 +84,12 @@ monkeybee-pdf/
 │   ├── monkeybee-codec/
 │   ├── monkeybee-security/
 │   ├── monkeybee-parser/
+│   ├── monkeybee-syntax/
 │   ├── monkeybee-document/
 │   ├── monkeybee-content/
 │   ├── monkeybee-text/
 │   ├── monkeybee-render/
+│   ├── monkeybee-compose/
 │   ├── monkeybee-write/
 │   ├── monkeybee-edit/
 │   ├── monkeybee-forms/

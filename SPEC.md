@@ -390,11 +390,16 @@ The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 
 Monkeybee is a Cargo workspace with four explicit strata:
 1. **Byte/revision layer** — immutable source bytes plus appended revisions.
-2. **Syntax layer** — token/span preserving PDF syntax and repair provenance.
-3. **Semantic document layer** — resolved page/resource/object graph with ownership classes.
+2. **Syntax/COS layer (`monkeybee-syntax`)** — immutable parsed objects, token/span provenance,
+   xref provenance, object-stream membership, raw formatting retention, and repair records.
+   This is the preservation boundary.
+3. **Semantic document layer (`monkeybee-document`)** — resolved page/resource/object graph built
+   from syntax snapshots; it owns semantic meaning, not raw-byte fidelity.
 4. **Content layer** — parsed content-stream IR and interpreter shared by render/extract/inspect/edit.
 
 `monkeybee-core` is intentionally small; it provides shared primitives rather than becoming a god crate.
+`monkeybee-syntax` is intentionally dumb but durable: it preserves what the parser saw and what the
+repair engine inferred, without forcing the semantic layer to own raw syntax detail.
 All open paths operate on a `ByteSource` trait so the architecture supports mmap files, in-memory buffers, and future range-backed sources.
 
 ### Engine / session / snapshot model
@@ -469,9 +474,24 @@ Key responsibilities:
 - Raw span ownership for preserve-mode byte-perfect write-back
 - No PDF-semantic understanding — purely byte-level
 
+#### `monkeybee-syntax`
+
+First-class syntax/COS layer between the parser and the semantic document model. This is the preservation boundary.
+
+Key responsibilities:
+- Immutable parsed COS object representation (dictionaries, arrays, streams, names, strings, numbers, booleans, null)
+- Token/span provenance: every parsed token retains its source byte range
+- Xref provenance: original vs. repaired cross-reference entries
+- Object-stream membership tracking (which objects lived in which object streams)
+- Raw formatting retention for preserve-mode byte-perfect writeback (whitespace, comment preservation)
+- Repair records: what the parser inferred, what strategy was used, and confidence scores
+- Preservation boundary contract: the syntax layer preserves what the parser saw; the semantic layer above builds meaning from it
+
+The syntax layer is intentionally "dumb but durable." It does not interpret page trees, resolve resources, or understand content streams. It holds the faithful COS-level representation that the semantic document layer builds upon and that the preserve-mode write path can emit byte-for-byte.
+
 #### `monkeybee-document`
 
-Semantic document graph: page tree, inherited state, resource resolution, ownership classes. This is the semantic document layer built on top of parsed syntax.
+Semantic document graph: page tree, inherited state, resource resolution, ownership classes. This is the semantic document layer built on top of syntax snapshots.
 
 Key responsibilities:
 - Document-level model (PdfDocument, ObjectStore, PageTree)
@@ -496,6 +516,8 @@ Key responsibilities:
 - `PagePlan` IR: immutable page-scoped display list for cached/region-aware workflows
 - Marked content span tracking
 - Source-span provenance for content-stream-level debugging
+- Consumer adapters (`RenderSink`, `ExtractSink`, `InspectSink`, `EditSink`) so downstream crates
+  do not reimplement operator semantics
 
 #### `monkeybee-codec`
 
@@ -601,20 +623,26 @@ Key responsibilities:
 - Font program parsing and caching (Type 1, TrueType, OpenType/CFF, CIDFont, Type 3)
 - CMap / ToUnicode handling and resolution
 - Unicode fallback chain (ToUnicode -> predefined CMap -> encoding/differences -> AGL -> cmap table -> identity -> unmappable)
-- Shaping, bidi, and font fallback for generation and FreeText annotation
+- PDF text decode pipeline for existing documents:
+  character code -> font/CMap -> CID/glyph -> Unicode/metrics/selection primitives
+- Authoring layout pipeline for emitted text:
+  Unicode -> shaping/bidi/line breaking/font fallback -> positioned glyph runs
 - Subsetting and ToUnicode generation for emitted PDFs
 - Search, hit-testing, and selection primitives for viewer/editor workflows
 - Text search index construction
 
-All crates that need font resolution, text decoding, shaping, subsetting, or search delegate to `monkeybee-text` so that render, extract, write, annotate, and inspect use one font and text truth.
+All crates that need font resolution, text decoding, subsetting, layout, or search delegate to
+`monkeybee-text`, but they do so through explicit decode-vs-layout APIs so existing PDF text is not
+accidentally "re-shaped" during rendering or extraction.
 
 #### `monkeybee-render`
 
 Produces visual output from the document model.
 
 Key responsibilities:
-- Content stream interpretation (graphics state machine)
-- Text rendering via `monkeybee-text`: font selection, shaping, bidi, fallback, glyph positioning, and Unicode-aware diagnostics
+- Consumption of `monkeybee-content` events or `PagePlan` IR through backend adapters
+- Text rendering via `monkeybee-text`: font lookup, encoding/CMap resolution, glyph dispatch,
+  positioned-glyph realization, and Unicode-aware diagnostics
 - Image rendering: inline and XObject images, color space conversion, interpolation
 - Vector graphics: path construction, stroking, filling, clipping, winding rules
 - Color management: DeviceRGB, DeviceCMYK, DeviceGray, CalRGB, CalGray, Lab, ICCBased, Indexed, Separation, DeviceN, Pattern
@@ -627,9 +655,14 @@ Key responsibilities:
 
 **Output backend architecture:**
 
-The renderer is backend-agnostic: it interprets content streams and emits drawing commands to an abstract backend trait. This enables multiple output formats from a single interpretation pass.
+The renderer is backend-agnostic: it consumes the shared content interpreter's events or `PagePlan`
+and emits drawing commands to an abstract backend trait. This enables multiple output formats from a single interpretation pass.
 
-*Raster backend (PNG/JPEG):* Renders to an in-memory pixel buffer (RGBA, 8 bits per component). The buffer dimensions are determined by the page dimensions and the requested DPI. Anti-aliasing is applied during rasterization (not as a post-process). JPEG output converts from RGBA to RGB (discarding alpha — JPEG does not support transparency) and encodes with configurable quality. PNG output preserves alpha and uses maximum compression.
+*Raster backend (PNG/JPEG):* Renders through a tile/band surface abstraction.
+Full-page RGBA output is one sink, not the only working set.
+Region render, thumbnail render, and remote-first first-paint reuse the same tile scheduler,
+dependency tracking, and caches.
+Anti-aliasing is applied during rasterization (not as a post-process). JPEG output converts from RGBA to RGB (discarding alpha — JPEG does not support transparency) and encodes with configurable quality. PNG output preserves alpha and uses maximum compression.
 
 *SVG backend:* Translates PDF drawing operations to SVG elements. Text is emitted as `<text>` elements with explicit positioning (not as paths, unless the font is not embeddable or the text uses unusual rendering modes). Images are embedded as base64 data URIs. Clipping paths use SVG `<clipPath>` elements. Transparency uses SVG opacity and filter elements. The SVG output is useful for web embedding and as a debugging tool (SVG structure mirrors PDF content stream structure).
 
@@ -643,7 +676,8 @@ A page is rendered by:
 3. Apply UserUnit scaling if present (multiply all dimensions by the UserUnit value).
 4. Initialize the graphics state: CTM to the identity (plus any rotation/scaling from steps 2-3), clip to CropBox, color to DeviceGray black, line width 1.0, and all other state parameters to their defaults (per ISO 32000-2 Table 52).
 5. If the page has multiple content streams (an array of stream references), concatenate them logically with a space separator. This is important: the graphics state persists across stream boundaries within a page. A `q` in stream 1 can be matched by a `Q` in stream 2. (A common producer bug is leaving unmatched `q`/`Q` across stream boundaries — the renderer must handle this gracefully, restoring to a sane default state if `Q` underflows.)
-6. Interpret the concatenated content stream through the shared graphics state machine.
+6. Interpret the concatenated content stream through the shared graphics state machine and emit
+   commands into a tile/band scheduler that can materialize either a full page or only the requested region.
 7. Render annotations on top of the page content (annotations are painted after the page's content stream, in the order they appear in the page's `/Annots` array).
 8. Apply optional content visibility: if the document has optional content groups (OCGs / layers), evaluate the visibility of each marked content span based on the current OCG state (default, print, or export configuration). Invisible content is skipped during rendering.
 
@@ -829,23 +863,32 @@ The renderer must maintain a compositing stack: each transparency group pushes a
 - Different blend modes at each nesting level
 - Soft masks applied to groups
 
+#### `monkeybee-compose`
+
+High-level authoring and appearance composition.
+
+Key responsibilities:
+- Document/page/content builders for new documents
+- Resource naming and assembly
+- Annotation appearance stream generation helpers
+- Form/widget appearance composition
+- Font embedding planning and subsetting requests
+- Content stream emission from high-level drawing/text operations
+
 #### `monkeybee-write`
 
 Serializes the document model back to valid PDF bytes.
 
+`monkeybee-write` serializes a semantically complete document.
+Authoring, page assembly, appearance generation, and builder-style APIs live in `monkeybee-compose`.
+
 Key responsibilities:
+- Deterministic rewrite and incremental append
 - Object serialization (all PDF object types)
-- Cross-reference table/stream generation
+- Cross-reference table/stream generation and xref/trailer emission
 - Stream compression and filter chain application
-- Full document rewrite
-- Incremental save (append-only)
 - Structural validity enforcement
-- Page tree construction and manipulation
-- Resource dictionary management
-- Content stream generation
-- Font embedding and subsetting delegated through `monkeybee-text` so render/extract/write use one font truth
-- Metadata generation and update
-- Encryption for output files
+- Final compression, encryption, and output assembly
 - Linearization for output files (future)
 
 **Content stream generation specifics:**
@@ -1115,6 +1158,8 @@ Key responsibilities:
 - `monkeybee generate [--template] -o <o>`
 - `monkeybee validate <file> [--roundtrip|--structure|--render-compare|--conformance]`
 - `monkeybee diagnose <file>` — full compatibility report
+- `monkeybee plan-save <file> [--incremental|--rewrite]` — preview ownership, rewritten regions,
+  signature impact, and fallback reasons before saving
 - `monkeybee proof <corpus-dir>` — run the full proof harness
 - `monkeybee conformance <file> [--profile pdf-a4|pdf-x6]` — profile-specific validation
 - `monkeybee optimize <file> [--dedup|--gc|--recompress] -o <o>` — full-rewrite compaction and cleanup as an explicit user operation
@@ -1180,7 +1225,9 @@ Resource GC, deduplication, unreachable-object pruning, and rewrite-time compact
 Full-rewrite mode may canonicalize only `Owned` objects. Preserve-mode output must not silently take ownership of foreign or opaque structures.
 
 The underlying change tracking model:
-- Every mutation is recorded as (object_id, old_value_hash, new_value). This enables both incremental save (serialize only changed objects) and undo (restore old values).
+- Every mutation is recorded as a `ChangeEntry { object_id, old_fingerprint, new_value, reason,
+  ownership_before, ownership_after, dependency_delta }`. This enables incremental save, undo,
+  precise cache invalidation, and save-impact explanation.
 - New objects are assigned object numbers from a monotonically increasing allocator. Generation numbers for new objects are 0.
 - Deleted objects are recorded in the free list. Their generation number is incremented.
 - Reference integrity is maintained by a reference index: the model knows which objects reference which other objects, enabling orphan detection and referential integrity checks before save.
@@ -1194,6 +1241,15 @@ Invalidation is exact and versioned by snapshot:
 - Traces report why each cache entry was reused or invalidated
 
 This invariant ensures that the engine never serves stale caches and never grossly over-invalidates after small edits.
+
+### Save planning invariant
+
+Before any write, Monkeybee computes a `WritePlan` that classifies each touched object as one of:
+`PreserveBytes`, `AppendOnly`, `RewriteOwned`, `RegenerateAppearance`, `RequiresFullRewrite`, or
+`Unsupported`.
+
+`WritePlan` is surfaced to the API/CLI and to the compatibility ledger. Signature-safe workflows
+must be explainable before bytes are emitted, not inferred after the fact.
 
 ### Error taxonomy
 
@@ -1289,13 +1345,17 @@ The event model ensures single-pass interpretation: the content stream is parsed
 
 ### Object model contract
 
-The PDF object model in `monkeybee-core` must faithfully represent all PDF 2.0 object types. Indirect objects carry object number + generation number. Streams carry both the dictionary and the raw/decoded data. The object graph supports forward and reverse reference lookups. Object access is zero-copy where practical and always safe.
+The PDF object model in `monkeybee-core` must faithfully represent all PDF 2.0 object types. Indirect objects carry object number + generation number. Streams carry the dictionary plus a byte-backed stream handle; decoded bytes live in engine-managed caches keyed by snapshot and filter chain, not inline in the object graph. The object graph supports forward and reverse reference lookups. Object access is zero-copy where practical, lazy by default for large/remote inputs, and always safe.
 
 **Invariants:**
 - Every indirect object has a unique (object_number, generation_number) pair.
 - Resolving an indirect reference always terminates (no infinite loops). The resolver maintains a visited set per resolution chain and produces an error for circular references.
 - Dictionary key order is preserved (insertion order) for provenance preservation, but semantics are order-independent.
-- Stream data is lazily decoded: raw bytes are always available, decoded bytes are produced on demand and may be cached.
+- Stream data is lazily decoded: raw bytes are always available through byte spans or range-backed
+  sources; decoded bytes are produced on demand and may be cached outside the semantic object graph.
+
+`PdfSnapshot` must use structural sharing. Opening a new snapshot or saving a delta must not imply
+cloning the full object store.
 - The object model is thread-safe for read access. Write access requires exclusive ownership (enforced by Rust's ownership model).
 - Null objects and free-list objects are distinguishable: a reference to a free object resolves to null, but a null value stored directly in a dictionary is a different semantic state.
 
@@ -1843,6 +1903,21 @@ Monkeybee does not require "formal methods theater" everywhere. But for a small 
 
 These are not aspirational targets. They are specific, scoped verification goals with concrete proof harness designs. The engine can ship v1 without them complete, but the proof harness infrastructure must support them, and at least the no-panic and bounded-allocation proofs for the lexer should be delivered in v1.
 
+### Runtime layering doctrine
+
+Core library crates are runtime-agnostic.
+`ExecutionContext` carries budgets, cancellation, determinism, and providers, but parse/render/write/edit
+must not require a specific async runtime.
+
+Async orchestration is an adapter concern used by:
+- range-backed byte acquisition
+- proof harness orchestration
+- artifact streaming
+- external process / oracle coordination
+
+`asupersync` is the default orchestration runtime for CLI and proof, not a semantic dependency of
+the core engine model.
+
 ### Open strategies
 
 The engine supports three open strategies that determine how bytes are acquired and objects are resolved:
@@ -1874,9 +1949,10 @@ The open strategy is set per `OpenSession` and propagates to all downstream cach
 
 *Memory class:* Peak memory usage during parsing and rendering. Target: peak memory under 5x the file size for typical documents; under 2x file size for parsing-only (no rendering). This class measures allocation discipline, cache sizing, and stream buffering behavior.
 
-**WASM compilation target:**
+**WASM-friendly core target:**
 
-The engine's core crates (monkeybee-core, monkeybee-parser, monkeybee-render, monkeybee-extract) must be compilable to WebAssembly for browser-native use. This constraint influences architecture:
+The engine's core crates should remain WASM-friendly. A minimal WASM build is a non-gating proof
+surface until baseline v1 is proven. This constraint influences architecture:
 
 - No system font fallback in WASM: the engine must support an explicit font-provision API where the caller supplies font data. The Base 14 font metrics must be compiled in.
 - No filesystem access in WASM: all input/output is via byte buffers. The API must support `parse_from_bytes(&[u8])` and `write_to_bytes() -> Vec<u8>`.
@@ -1932,7 +2008,7 @@ The following paths must be profiled and optimized:
 
 Monkeybee does not settle for "correct but naive." Where mathematically stronger techniques materially improve correctness, performance, or both, the engine uses them. This is not decorative cleverness — it is the application of genuinely advanced methods to genuinely hard problems that competing PDF engines solve with brute force or hand-waving. The techniques below are selected because they compound: each one improves a hot path that is exercised millions of times per document, and the cumulative effect is an engine that feels qualitatively different from anything else in the open-source PDF ecosystem.
 
-#### Exact analytic area coverage for path rasterization
+#### Exact analytic area coverage for path rasterization (experimental)
 
 The naive approach to anti-aliased path rasterization is supersampling: render at Nx resolution and downsample. This is slow and produces quality proportional to the supersampling factor. Monkeybee uses exact analytic area coverage instead.
 
@@ -1962,7 +2038,7 @@ Monkeybee uses Jonathan Shewchuk's robust geometric predicates for all critical 
 
 This eliminates an entire class of rendering artifacts that plague every PDF renderer that uses naive floating-point geometry.
 
-#### Spectral-aware color science pipeline
+#### Spectral-aware color science pipeline (experimental)
 
 Most PDF renderers treat color conversion as a black box: look up the ICC profile, interpolate in the CLUT, done. Monkeybee goes deeper.
 
@@ -2079,7 +2155,7 @@ v1 is the point where Monkeybee PDF publicly claims engine reality. The followin
 - [ ] Document generation produces valid, renderable output.
 - [ ] Page-level editing (add, remove, reorder) works with structural validity.
 - [ ] Metadata inspection and modification work.
-- [ ] CLI exposes all major workflows.
+- [ ] CLI exposes baseline workflows: render, extract, inspect, annotate, edit-pages, validate, diagnose.
 - [ ] All three parse modes (Strict/Tolerant/Preserve) are functional.
 - [ ] Both write modes (full rewrite, incremental append) are functional.
 - [ ] Incremental-append save preserves existing digital signatures on representative signed documents.
@@ -2094,7 +2170,9 @@ v1 is the point where Monkeybee PDF publicly claims engine reality. The followin
 - [ ] Compatibility ledger is complete and machine-readable per the schema in Part 6.
 - [ ] Baseline parser/render/write paths pass the v1 proof gates without experimental backends.
 - [ ] The baseline writer passes all write/round-trip gates with plain indirect objects and classic cross-reference tables.
-- [ ] Profile validation is v1-gating; profile-constrained emission is non-gating until baseline rewrite and incremental-append paths are proven stable.
+- [ ] Core Arlington validation for catalog/page tree/font/resource/writeback invariants is v1-gating.
+- [ ] PDF/A-4 and PDF/X-6 profile validation is advisory in v1 unless backed by public corpus coverage
+  and pinned oracle evidence.
 - [ ] Experimental backends are optional and benchmarked head-to-head against the baseline.
 - [ ] Performance benchmarks exist for all benchmark classes.
 - [ ] Fuzz testing covers parser, content stream interpreter, and writer (metamorphic + writer fuzzing).
@@ -2200,6 +2278,13 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-TEXT-005: Subsetting and ToUnicode generation for emitted PDFs
 - B-TEXT-006: Search, hit-testing, and selection primitives
 
+### Syntax beads
+- B-SYNTAX-001: Immutable parsed COS object representation
+- B-SYNTAX-002: Token/span provenance and raw formatting retention
+- B-SYNTAX-003: Xref provenance and object-stream membership tracking
+- B-SYNTAX-004: Repair record storage and query
+- B-SYNTAX-005: Preservation boundary contract enforcement
+
 ### Parser beads
 - B-PARSE-001: Lexer and tokenizer
 - B-PARSE-002: Object parser (all types)
@@ -2222,9 +2307,17 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-RENDER-007: Page assembly and output backend
 - B-RENDER-008: Color space resolution chain (all types including ICC)
 - B-RENDER-009: Font type handlers (Type 1, TrueType, CFF, CIDFont, Type 3)
-- B-RENDER-010: Shading types 4-7 (mesh-based gradient rendering)
-- B-RENDER-011: Overprint and overprint mode implementation
+- B-RENDER-010: Shading types 4-7 (mesh-based gradient rendering) [experimental]
+- B-RENDER-011: Overprint and overprint mode implementation [experimental until corpus-backed]
 - B-RENDER-012: SIMD-optimized compositing inner loops
+
+### Compose beads
+- B-COMPOSE-001: Document/page/content builders for new documents
+- B-COMPOSE-002: Resource naming and assembly
+- B-COMPOSE-003: Annotation appearance stream generation helpers
+- B-COMPOSE-004: Form/widget appearance composition
+- B-COMPOSE-005: Font embedding planning and subsetting requests
+- B-COMPOSE-006: Content stream emission from high-level drawing/text operations
 
 ### Write beads
 - B-WRITE-001: Object serialization
@@ -2236,12 +2329,12 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-WRITE-007: Self-consistency validation (parse own output in strict mode)
 - B-WRITE-008: Signature-safe preserve write path
 - B-WRITE-009: Font embedding and subsetting for generated content
-- B-WRITE-010: Output encryption (AES-256)
+- B-WRITE-010: Output encryption (AES-256) [non-gating / post-baseline]
 
 ### Edit beads
 - B-EDIT-001: EditTransaction framework
 - B-EDIT-002: Resource GC and deduplication
-- B-EDIT-003: Redaction application (high-assurance rewrite)
+- B-EDIT-003: Redaction application (high-assurance rewrite) [post-v1 unless separately proven]
 - B-EDIT-004: Optimization operations (compaction, recompression)
 
 ### Validate beads

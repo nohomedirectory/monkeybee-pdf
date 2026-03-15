@@ -58,7 +58,18 @@ monkeybee-pdf/
 │   │   │   ├── repair.rs         # tolerant mode, recovery strategies
 │   │   │   └── diagnostics.rs    # parser diagnostics
 │   │   └── Cargo.toml
-│   ├── monkeybee-document/       # semantic document graph, page tree, resource resolution
+│   ├── monkeybee-syntax/         # syntax/COS preservation layer (between parser and document)
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── cos_object.rs     # immutable COS object representation
+│   │   │   ├── provenance.rs     # token/span provenance, source byte ranges
+│   │   │   ├── xref_prov.rs      # xref provenance: original vs repaired entries
+│   │   │   ├── objstream.rs      # object-stream membership tracking
+│   │   │   ├── formatting.rs     # raw formatting retention (whitespace, comments)
+│   │   │   ├── repair_record.rs  # repair records: strategy, confidence, alternatives
+│   │   │   └── boundary.rs       # preservation boundary contract enforcement
+│   │   └── Cargo.toml
+│   ├── monkeybee-document/       # semantic document graph built from syntax snapshots
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── document.rs       # document-level model (PdfDocument, ObjectStore)
@@ -78,24 +89,25 @@ monkeybee-pdf/
 │   │   │   ├── state.rs          # graphics state machine
 │   │   │   ├── events.rs         # streaming event model
 │   │   │   ├── pageplan.rs       # PagePlan immutable display list IR
-│   │   │   └── marked.rs         # marked content span tracking
+│   │   │   ├── marked.rs         # marked content span tracking
+│   │   │   └── sink.rs           # consumer sink adapters (RenderSink, ExtractSink, InspectSink, EditSink)
 │   │   └── Cargo.toml
-│   ├── monkeybee-text/           # shared text subsystem: fonts, CMaps, shaping, search
+│   ├── monkeybee-text/           # shared text subsystem: fonts, CMaps, decode + authoring pipelines, search
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── font.rs           # font program parsing and caching
 │   │   │   ├── cmap.rs           # CMap / ToUnicode handling
 │   │   │   ├── unicode.rs        # Unicode fallback chain
-│   │   │   ├── shaping.rs        # shaping, bidi, font fallback
+│   │   │   ├── decode.rs         # PDF text decode pipeline: char code -> font/CMap -> CID/glyph -> Unicode/metrics
+│   │   │   ├── layout.rs         # authoring layout pipeline: Unicode -> shaping/bidi/line breaking -> glyph runs
+│   │   │   ├── shaping.rs        # shaping, bidi, font fallback (used by layout pipeline)
 │   │   │   ├── subset.rs         # subsetting and ToUnicode generation
 │   │   │   └── search.rs         # search, hit-testing, selection primitives
 │   │   └── Cargo.toml
-│   ├── monkeybee-render/         # page rendering
+│   ├── monkeybee-render/         # page rendering (consumes content events, not own interpreter)
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── interpreter.rs    # content stream interpreter
-│   │   │   ├── state.rs          # graphics state machine
-│   │   │   ├── text.rs           # text rendering (delegates to monkeybee-text)
+│   │   │   ├── text.rs           # text rendering via decode pipeline (delegates to monkeybee-text)
 │   │   │   ├── font.rs           # font dispatch (delegates to monkeybee-text)
 │   │   │   ├── image.rs          # image rendering
 │   │   │   ├── color.rs          # color space management
@@ -103,17 +115,30 @@ monkeybee-pdf/
 │   │   │   ├── transparency.rs   # transparency compositing
 │   │   │   ├── pattern.rs        # tiling and shading patterns
 │   │   │   ├── page.rs           # page assembly
-│   │   │   └── backend/          # output backends (raster, svg)
+│   │   │   ├── tile.rs           # tile/band surface abstraction and scheduler
+│   │   │   └── backend/          # output backends (raster via tile sink, svg)
 │   │   └── Cargo.toml
-│   ├── monkeybee-write/          # serialization, generation, save
+│   ├── monkeybee-compose/        # high-level authoring and composition
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── doc_builder.rs    # document builder
+│   │   │   ├── page_builder.rs   # page builder
+│   │   │   ├── content_builder.rs # content stream emission from high-level ops
+│   │   │   ├── resource.rs       # resource naming and assembly
+│   │   │   ├── appearance.rs     # annotation/widget appearance stream generation
+│   │   │   ├── font_plan.rs      # font embedding planning and subsetting requests
+│   │   │   └── text_emit.rs      # text emission via authoring layout pipeline
+│   │   └── Cargo.toml
+│   ├── monkeybee-write/          # pure serializer (no composition/authoring)
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── serialize.rs      # object serialization
 │   │   │   ├── xref_writer.rs    # xref generation
 │   │   │   ├── stream_encode.rs  # stream compression
-│   │   │   ├── rewrite.rs        # full document rewrite
+│   │   │   ├── rewrite.rs        # full document rewrite (deterministic mode)
 │   │   │   ├── incremental.rs    # incremental append save
-│   │   │   ├── content_gen.rs    # content stream generation
+│   │   │   ├── plan.rs           # WritePlan computation and classification
+│   │   │   ├── encrypt.rs        # final encryption and output assembly
 │   │   │   └── validate.rs       # output structural validation
 │   │   └── Cargo.toml
 │   ├── monkeybee-edit/           # transactional structural edits
@@ -192,25 +217,44 @@ monkeybee-codec         (depends on: core, security)
     ↑
 monkeybee-parser        (depends on: core, bytes, codec, security)
     ↑
-monkeybee-document      (depends on: core, bytes, parser)
+monkeybee-syntax        (depends on: core, bytes, parser)    ← preservation boundary
     ↑
-monkeybee-content       (depends on: core, document)
-monkeybee-text          (depends on: core, document, codec)
+monkeybee-document      (depends on: core, bytes, syntax)    ← semantic layer built from syntax snapshots
     ↑
-monkeybee-render        (depends on: core, content, document, text, codec)
-monkeybee-write         (depends on: core, bytes, document, text, codec)
-monkeybee-edit          (depends on: core, document, content, write)
-monkeybee-forms         (depends on: core, document, text, render, write)
-monkeybee-annotate      (depends on: core, document, content, render, write, forms)
+monkeybee-content       (depends on: core, document)         ← sink adapters: RenderSink, ExtractSink, InspectSink, EditSink
+monkeybee-text          (depends on: core, document, codec)  ← decode pipeline + authoring layout pipeline
+    ↑
+monkeybee-render        (depends on: core, content, document, text, codec)  ← consumes content events, no own interpreter
+monkeybee-compose       (depends on: core, document, text, content)  ← authoring/builders, appearance gen
+monkeybee-write         (depends on: core, bytes, document, codec)   ← pure serializer
+monkeybee-edit          (depends on: core, document, content, compose, write)
+monkeybee-forms         (depends on: core, document, text, compose)
+monkeybee-annotate      (depends on: core, document, content, compose, forms)
 monkeybee-extract       (depends on: core, content, document, text)
 monkeybee-validate      (depends on: core, document)
-monkeybee-proof         (depends on: core, bytes, codec, security, parser, document, content, text, render, write, edit, forms, annotate, extract, validate)
+monkeybee-proof         (depends on: core, bytes, codec, security, parser, syntax, document, content, text, render, compose, write, edit, forms, annotate, extract, validate)
 monkeybee-cli           (depends on: all above)
 ```
 
+Note: `monkeybee-syntax` sits between parser and document as the preservation boundary. `monkeybee-compose` sits between edit/annotate/forms and write, owning authoring/builder semantics while write remains a pure serializer.
+
 ## Runtime and concurrency model
 
-Monkeybee PDF uses `asupersync` as its async runtime and orchestration layer. Per the upstream `asupersync` skill and runtime guidance, Monkeybee should stay native-first: thread `&Cx<'_>` through async I/O workflows, structure child tasks inside explicit scopes, and bootstrap CLI and proof-harness entrypoints with `RuntimeBuilder` plus `LabRuntime` rather than treating Tokio as the ambient runtime.
+### Runtime layering doctrine
+
+Core library crates (`monkeybee-core`, `monkeybee-syntax`, `monkeybee-document`, `monkeybee-content`, `monkeybee-text`, `monkeybee-render`, `monkeybee-compose`, `monkeybee-write`, `monkeybee-edit`, `monkeybee-forms`, `monkeybee-annotate`, `monkeybee-extract`, `monkeybee-validate`) are runtime-agnostic. `ExecutionContext` carries budgets, cancellation, determinism, and providers, but parse/render/write/edit must not require a specific async runtime.
+
+Async orchestration is an adapter concern used by:
+- range-backed byte acquisition (`monkeybee-bytes` fetch scheduler)
+- proof harness orchestration (`monkeybee-proof`)
+- artifact streaming
+- external process / oracle coordination
+
+`asupersync` is the default orchestration runtime for CLI and proof, not a semantic dependency of the core engine model. A minimal WASM build is a non-gating proof surface that validates this runtime independence.
+
+### Async orchestration layer
+
+Monkeybee PDF uses `asupersync` as its async runtime and orchestration layer at the CLI/proof edge. Per the upstream `asupersync` skill and runtime guidance, Monkeybee should stay native-first: thread `&Cx<'_>` through async I/O workflows, structure child tasks inside explicit scopes, and bootstrap CLI and proof-harness entrypoints with `RuntimeBuilder` plus `LabRuntime` rather than treating Tokio as the ambient runtime.
 
 Rayon remains the CPU-bound parallel execution layer. The architectural split is deliberate:
 
@@ -246,11 +290,12 @@ pub struct ObjRef {
     pub gen: u16,
 }
 
-/// Stream: dictionary + data
+/// Stream: dictionary + byte-backed handle (not inline Vec<u8>)
+/// Decoded bytes live in engine-managed caches, not inline in the object graph.
 pub struct PdfStream {
     pub dict: PdfDictionary,
-    pub raw_data: Vec<u8>,         // as stored in file
-    pub decoded_data: OnceCell<Vec<u8>>,  // lazily decoded
+    pub handle: StreamHandle,      // byte-backed source reference (span, range, or inline)
+    // Decoded data lives in engine/session-level caches keyed by (snapshot_id, filter_chain)
 }
 
 /// Dictionary with insertion-order preservation
@@ -272,7 +317,7 @@ pub struct PdfDocument {
     pub metadata: DocumentMetadata,
     pub encryption: Option<EncryptionState>,
     pub diagnostics: DiagnosticLog,
-    pub change_tracker: ChangeTracker,  // mutation tracking
+    pub change_journal: ChangeJournal,  // journal-based mutation tracking (ChangeEntry records)
 }
 
 /// Object store with reference resolution
@@ -373,11 +418,34 @@ pub struct TextState {
 ### Change tracking (`monkeybee-document::transaction`)
 
 ```rust
-/// Tracks mutations to the document
-pub struct ChangeTracker {
-    pub added: HashSet<ObjRef>,
-    pub modified: HashSet<ObjRef>,
-    pub deleted: HashSet<ObjRef>,
+/// Journal-based change tracking (replaces HashSet-based ChangeTracker)
+pub struct ChangeJournal {
+    pub entries: Vec<ChangeEntry>,
+}
+
+/// Each mutation is a structured change entry with full context
+pub struct ChangeEntry {
+    pub object_id: ObjRef,
+    pub old_fingerprint: Option<u64>,   // hash of previous value
+    pub new_value: Option<PdfValue>,     // None for deletions
+    pub reason: ChangeReason,            // why this change was made
+    pub ownership_before: OwnershipClass,
+    pub ownership_after: OwnershipClass,
+    pub dependency_delta: DependencyDelta, // what refs were added/removed
+}
+
+/// WritePlan computed before any save operation
+pub struct WritePlan {
+    pub classifications: Vec<ObjectClassification>,
+}
+
+pub enum ObjectAction {
+    PreserveBytes,           // emit original bytes verbatim
+    AppendOnly,              // incremental append only
+    RewriteOwned,            // semantically understood, safe to rewrite
+    RegenerateAppearance,    // appearance stream needs regeneration
+    RequiresFullRewrite,     // cannot be incrementally saved
+    Unsupported,             // cannot be safely serialized
 }
 ```
 
@@ -426,7 +494,8 @@ PDF bytes
   → Object parser (construct PdfValue tree)
   → XRef parser (build cross-reference table, repair if needed)
   → Encryption handler (decrypt if needed)
-  → Document builder (construct PdfDocument with ObjectStore, PageTree, etc.)
+  → Syntax layer (monkeybee-syntax: immutable COS objects, provenance, repair records)
+  → Document builder (construct PdfDocument from syntax snapshots with ObjectStore, PageTree, etc.)
   → Diagnostic log (record all warnings, repairs, compatibility notes)
 ```
 
@@ -436,19 +505,23 @@ PDF bytes
 PdfDocument + page index
   → ResolvedPage (materialize inherited attributes)
   → Content stream(s) (decode, concatenate if multiple)
-  → Content stream interpreter (dispatch operators, maintain graphics state stack)
-    → Text operations → Font pipeline → Glyph positions → Backend
+  → Content stream interpreter in monkeybee-content (single implementation)
+    → Events or PagePlan IR dispatched through RenderSink adapter
+    → Text operations → Font decode pipeline → Glyph positions → Backend
     → Path operations → Path builder → Stroke/Fill → Backend
     → Image operations → Image decoder → Color conversion → Backend
     → Transparency → Compositing engine → Backend
-  → Backend produces output (raster buffer, SVG elements, etc.)
+  → Tile/band scheduler materializes full page or requested region
+  → Backend produces output (raster via tile sink, SVG elements, etc.)
 ```
 
 ### Write flow
 
 ```
-PdfDocument (with ChangeTracker)
-  → Mode selection (full rewrite vs. incremental append)
+PdfDocument (with ChangeJournal)
+  → WritePlan computation (classify each touched object: PreserveBytes/AppendOnly/RewriteOwned/etc.)
+  → WritePlan surfaced to API/CLI and compatibility ledger
+  → Mode selection (full rewrite vs. incremental append, informed by WritePlan)
   → Object serializer (PdfValue → bytes)
   → Stream encoder (apply compression filters)
   → XRef writer (build new xref table/stream)
@@ -465,7 +538,7 @@ PdfDocument
   → Create new annotation (type, geometry via shared pipeline, content)
   → Generate appearance stream (via monkeybee-render primitives)
   → Insert into document model (update page annotations, add objects)
-  → Track change (ChangeTracker)
+  → Track change (ChangeJournal)
   → Write (incremental or full rewrite)
   → Reload and validate (annotations present, geometry preserved, content intact)
 ```
@@ -495,7 +568,7 @@ PdfDocument
 - Prefer pure-Rust where quality and performance are comparable.
 - Accept C/C++ bindings only for capabilities not yet available in pure Rust at required quality (e.g., JPEG 2000, complex font shaping).
 - Pin all dependency versions. Audit for `unsafe` in critical-path dependencies.
-- Keep the async model single-runtime: `asupersync` is the workspace default, and any compatibility layer must stay quarantined at the edge.
+- Core library crates are runtime-agnostic. `asupersync` is the CLI/proof default orchestration runtime, not a semantic dependency of the core engine model. Any async compatibility layer must stay quarantined at the edge.
 - No dependency may introduce undefined behavior or memory unsafety that escapes its abstraction boundary.
 
 ## Test obligations by crate
@@ -520,15 +593,24 @@ PdfDocument
 - Integration tests: risky decoder invocation through security gate — verify budgets enforced and isolation works.
 - Property tests: no decoder invocation bypasses the security boundary.
 
+### monkeybee-syntax
+- Unit tests: COS object construction from parser output, provenance round-trip (source spans preserved).
+- Property tests: immutability invariant (syntax objects cannot be mutated after construction).
+- Preservation tests: raw formatting retention (whitespace, comments survive round-trip via syntax layer).
+- Repair record tests: repair records faithfully capture strategy, confidence, and alternatives.
+- Object-stream membership tests: objects correctly track their object-stream provenance.
+- Xref provenance tests: original vs repaired xref entries are distinguishable.
+
 ### monkeybee-document
-- Unit tests: document model construction, page tree inheritance, resource resolution, reference integrity.
+- Unit tests: document model construction from syntax snapshots, page tree inheritance, resource resolution, reference integrity.
 - Property tests: ownership classification consistency, EditTransaction commit/rollback semantics.
-- Invariant tests: change tracker consistency, reverse reference index accuracy.
+- Invariant tests: change journal consistency, reverse reference index accuracy.
 - Dependency graph tests: invalidation correctness — edit an object, verify only dependents invalidated.
-- Snapshot tests: PdfSnapshot immutability, snapshot_id uniqueness, cache keying correctness.
+- Snapshot tests: PdfSnapshot immutability, snapshot_id uniqueness, cache keying correctness, structural sharing (new snapshot does not clone full object store).
 
 ### monkeybee-content
 - Unit tests: content stream interpretation, graphics state machine, event dispatch.
+- Sink adapter tests: RenderSink, ExtractSink, InspectSink, EditSink receive correct events for known content streams.
 - Property tests: PagePlan IR equivalence with streaming events (same content stream, same results).
 - Cache tests: PagePlan cache invalidation on content/resource changes.
 
@@ -540,19 +622,29 @@ PdfDocument
 
 ### monkeybee-text
 - Unit tests: font program parsing (Type 1, TrueType, CFF, CIDFont, Type 3), CMap parsing, ToUnicode resolution.
+- Decode pipeline tests: char code -> font/CMap -> CID/glyph -> Unicode/metrics for each font type; verify existing PDF text is decoded, not re-shaped.
+- Authoring pipeline tests: Unicode -> shaping/bidi/line breaking/font fallback -> positioned glyph runs.
 - Unicode fallback chain tests: known fonts with broken/missing ToUnicode — verify fallback produces correct mappings.
-- Shaping/bidi tests: complex scripts (Arabic, Hebrew, Devanagari), ligatures, bidi reordering.
+- Shaping/bidi tests: complex scripts (Arabic, Hebrew, Devanagari), ligatures, bidi reordering (authoring pipeline only).
 - Subsetting tests: subset → re-embed → verify glyph coverage and metrics round-trip.
 - Search/hit-test tests: known text at known positions — verify search finds it, hit-test returns correct quads.
 
 ### monkeybee-render
-- Unit tests: graphics state operations, individual operator handling, color space conversions.
+- Unit tests: backend drawing operations, color space conversions, tile/band scheduling.
 - Render comparison tests: render corpus documents → compare against reference renderers.
 - Visual regression tests: golden-image comparisons with perceptual diff thresholds.
 - Edge case tests: transparency stacking, pattern rendering, Type 3 fonts, unusual blend modes.
 
+### monkeybee-compose
+- Unit tests: document/page/content builder APIs, resource naming uniqueness, appearance stream generation.
+- Integration tests: compose a document → serialize via monkeybee-write → parse → verify structure.
+- Appearance tests: annotation and widget appearance generation produces valid form XObjects.
+- Font embedding planning tests: subsetting requests match actual glyph usage.
+- Text emission tests: authoring layout pipeline produces correct positioned glyph runs.
+
 ### monkeybee-write
 - Unit tests: object serialization for all types, xref generation, stream encoding.
+- WritePlan tests: classification correctness (PreserveBytes/AppendOnly/RewriteOwned/etc.) on known document states.
 - Round-trip tests: parse → write → re-parse → compare object graphs.
 - Self-consistency tests: write output → parse with monkeybee-parser → verify structural validity.
 - Reference validation: write output → open in PDFium/MuPDF → verify renders correctly.
@@ -596,15 +688,17 @@ PdfDocument
 
 Each of the following should be authored as the spec matures. They are design-to-code contracts for their respective subsystems:
 
-- `docs/implementation/document-model.md` — core object model, object store, reference resolution, dependency graph, snapshots
+- `docs/implementation/document-model.md` — core object model, object store, reference resolution, dependency graph, snapshots, structural sharing
+- `docs/implementation/syntax-layer.md` — COS object representation, provenance model, preservation boundary contract, repair record schema
 - `docs/implementation/parser-and-repair.md` — parser architecture, repair strategies, tolerant mode
 - `docs/implementation/codec.md` — filter chains, image decode/encode, bounded pipelines, decode telemetry
 - `docs/implementation/security.md` — security profiles, budget broker, worker isolation, hostile-input policy
-- `docs/implementation/text.md` — font programs, CMaps, Unicode mapping, shaping/bidi, subsetting, search/hit-test
-- `docs/implementation/rendering.md` — render pipeline, graphics state, output backends, region/thumbnail render
+- `docs/implementation/text.md` — font programs, CMaps, Unicode mapping, decode pipeline, authoring layout pipeline, subsetting, search/hit-test
+- `docs/implementation/rendering.md` — render pipeline via content sink adapters, output backends, tile/band surface, region/thumbnail render
 - `docs/implementation/forms.md` — AcroForm field tree, value model, appearance regeneration, widget bridge, signature helpers
 - `docs/implementation/annotation.md` — annotation model, placement, appearance, flattening
-- `docs/implementation/writeback.md` — serialization, save modes, structural validation
+- `docs/implementation/compose.md` — document/page builders, resource naming, appearance generation, font embedding planning
+- `docs/implementation/writeback.md` — serialization, save modes, WritePlan computation, structural validation
 - `docs/implementation/extraction.md` — multi-surface text extraction, search primitives, metadata, diagnostics
 
 ## Open questions
