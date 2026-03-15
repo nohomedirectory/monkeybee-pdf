@@ -12,19 +12,23 @@ This is not a philosophical essay and not the full codebase. It is the grounding
 monkeybee-pdf/
 ├── Cargo.toml                    # workspace root
 ├── crates/
-│   ├── monkeybee-core/           # document model, object graph, page tree, geometry
+│   ├── monkeybee-core/           # shared primitives: object IDs, geometry, errors, execution context
 │   │   ├── src/
 │   │   │   ├── lib.rs
-│   │   │   ├── object.rs         # PDF object types
-│   │   │   ├── xref.rs           # cross-reference management
-│   │   │   ├── document.rs       # document-level model
-│   │   │   ├── page.rs           # page tree, inheritance
-│   │   │   ├── resource.rs       # resource resolution
+│   │   │   ├── object.rs         # PDF object type definitions
 │   │   │   ├── geometry.rs       # coordinate transforms, matrices
-│   │   │   ├── update.rs         # incremental update tracking
-│   │   │   └── error.rs          # shared error taxonomy
+│   │   │   ├── error.rs          # shared error taxonomy
+│   │   │   ├── context.rs        # ExecutionContext (budgets, cancellation, providers)
+│   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider
 │   │   └── Cargo.toml
-│   ├── monkeybee-parser/         # PDF byte parsing, repair, decryption
+│   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── source.rs         # ByteSource implementations (mmap, in-memory)
+│   │   │   ├── revision.rs       # revision chain tracking
+│   │   │   └── span.rs           # raw span ownership for preserve mode
+│   │   └── Cargo.toml
+│   ├── monkeybee-parser/         # PDF syntax parsing, repair, decryption
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── lexer.rs          # tokenization
@@ -35,6 +39,26 @@ monkeybee-pdf/
 │   │   │   ├── crypt.rs          # encryption/decryption
 │   │   │   ├── repair.rs         # tolerant mode, recovery strategies
 │   │   │   └── diagnostics.rs    # parser diagnostics
+│   │   └── Cargo.toml
+│   ├── monkeybee-document/       # semantic document graph, page tree, resource resolution
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── document.rs       # document-level model (PdfDocument, ObjectStore)
+│   │   │   ├── xref.rs           # cross-reference management
+│   │   │   ├── page.rs           # page tree, inheritance
+│   │   │   ├── resource.rs       # resource resolution
+│   │   │   ├── ownership.rs      # Owned/ForeignPreserved/OpaqueUnsupported classification
+│   │   │   ├── update.rs         # incremental update tracking
+│   │   │   └── transaction.rs    # EditTransaction, change tracking
+│   │   └── Cargo.toml
+│   ├── monkeybee-content/        # content-stream IR and event interpreter
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── interpreter.rs    # content stream interpreter
+│   │   │   ├── state.rs          # graphics state machine
+│   │   │   ├── events.rs         # streaming event model
+│   │   │   ├── pageplan.rs       # PagePlan immutable display list IR
+│   │   │   └── marked.rs         # marked content span tracking
 │   │   └── Cargo.toml
 │   ├── monkeybee-render/         # page rendering
 │   │   ├── src/
@@ -62,6 +86,14 @@ monkeybee-pdf/
 │   │   │   ├── content_gen.rs    # content stream generation
 │   │   │   └── validate.rs       # output structural validation
 │   │   └── Cargo.toml
+│   ├── monkeybee-edit/           # transactional structural edits
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── transaction.rs    # edit transaction framework
+│   │   │   ├── gc.rs             # resource GC and deduplication
+│   │   │   ├── redaction.rs      # high-assurance redaction application
+│   │   │   └── optimize.rs       # compaction, recompression
+│   │   └── Cargo.toml
 │   ├── monkeybee-annotate/       # annotation operations
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -79,6 +111,14 @@ monkeybee-pdf/
 │   │   │   ├── structure.rs      # structure inspection
 │   │   │   ├── asset.rs          # image/font/embedded file extraction
 │   │   │   └── diagnostic.rs     # diagnostic report generation
+│   │   └── Cargo.toml
+│   ├── monkeybee-validate/       # conformance validation
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── arlington.rs      # Arlington-model conformance validation
+│   │   │   ├── profile.rs        # profile-specific validation (PDF/A-4, PDF/X-6)
+│   │   │   ├── preflight.rs      # write preflight checks
+│   │   │   └── signature.rs      # signature byte-range verification
 │   │   └── Cargo.toml
 │   ├── monkeybee-proof/          # validation and evidence harness
 │   │   ├── src/
@@ -100,15 +140,23 @@ monkeybee-pdf/
 ## Crate dependency graph
 
 ```
-monkeybee-core          (no internal deps — foundation)
+monkeybee-core          (no internal deps — shared primitives)
     ↑
-monkeybee-parser        (depends on: core)
+monkeybee-bytes         (depends on: core)
     ↑
-monkeybee-render        (depends on: core, parser [for stream decoding])
-monkeybee-write         (depends on: core)
-monkeybee-annotate      (depends on: core, render [for appearance streams], write)
-monkeybee-extract       (depends on: core, render [for text pipeline reuse])
-monkeybee-proof         (depends on: core, parser, render, write, annotate, extract)
+monkeybee-parser        (depends on: core, bytes)
+    ↑
+monkeybee-document      (depends on: core, bytes, parser)
+    ↑
+monkeybee-content       (depends on: core, document)
+    ↑
+monkeybee-render        (depends on: core, content, document)
+monkeybee-write         (depends on: core, bytes, document)
+monkeybee-edit          (depends on: core, document, content, write)
+monkeybee-annotate      (depends on: core, document, content, render, write)
+monkeybee-extract       (depends on: core, content, document)
+monkeybee-validate      (depends on: core, document)
+monkeybee-proof         (depends on: core, bytes, parser, document, content, render, write, edit, annotate, extract, validate)
 monkeybee-cli           (depends on: all above)
 ```
 
@@ -163,7 +211,7 @@ pub struct PdfDictionary {
 }
 ```
 
-### Document model (`monkeybee-core::document`)
+### Document model (`monkeybee-document::document`)
 
 ```rust
 /// Top-level document
@@ -187,7 +235,7 @@ pub struct ObjectStore {
 }
 ```
 
-### Page model (`monkeybee-core::page`)
+### Page model (`monkeybee-document::page`)
 
 ```rust
 /// Resolved page (all inherited attributes materialized)
@@ -231,7 +279,7 @@ pub struct Point {
 }
 ```
 
-### Graphics state (`monkeybee-render::state`)
+### Graphics state (`monkeybee-content::state`)
 
 ```rust
 /// Full graphics state
@@ -274,7 +322,7 @@ pub struct TextState {
 }
 ```
 
-### Change tracking (`monkeybee-core::update`)
+### Change tracking (`monkeybee-document::transaction`)
 
 ```rust
 /// Tracks mutations to the document
@@ -405,9 +453,22 @@ PdfDocument
 ## Test obligations by crate
 
 ### monkeybee-core
-- Unit tests: object creation, serialization round-trips, reference resolution, page inheritance, geometry transforms.
+- Unit tests: object type creation, geometry transforms, matrix operations.
 - Property tests: arbitrary object construction → serialize → deserialize → compare.
+
+### monkeybee-bytes
+- Unit tests: ByteSource implementations (mmap, in-memory), revision chain construction, span tracking.
+- Property tests: span ownership invariants preserved across revision appends.
+
+### monkeybee-document
+- Unit tests: document model construction, page tree inheritance, resource resolution, reference integrity.
+- Property tests: ownership classification consistency, EditTransaction commit/rollback semantics.
 - Invariant tests: change tracker consistency, reverse reference index accuracy.
+
+### monkeybee-content
+- Unit tests: content stream interpretation, graphics state machine, event dispatch.
+- Property tests: PagePlan IR equivalence with streaming events (same content stream, same results).
+- Cache tests: PagePlan cache invalidation on content/resource changes.
 
 ### monkeybee-parser
 - Unit tests: lexer on known token sequences, object parsing on all types, xref parsing on well-formed and malformed tables.
@@ -427,10 +488,21 @@ PdfDocument
 - Self-consistency tests: write output → parse with monkeybee-parser → verify structural validity.
 - Reference validation: write output → open in PDFium/MuPDF → verify renders correctly.
 
+### monkeybee-edit
+- Unit tests: EditTransaction commit/rollback, resource GC, deduplication.
+- Redaction tests: text-only, image-only, mixed, reused XObjects, canary-text leakage.
+- Optimization tests: compaction produces smaller valid output, recompression round-trips.
+
 ### monkeybee-annotate
 - Unit tests: annotation creation, geometry calculations, appearance stream generation.
 - Round-trip tests: annotate → save → reload → verify annotations preserved.
 - Integration tests: annotate corpus documents → save → open in reference viewers.
+
+### monkeybee-validate
+- Unit tests: Arlington-model rules against known valid/invalid objects.
+- Profile tests: PDF/A-4, PDF/X-6 constraint checking on known-conforming documents.
+- Preflight tests: write preflight catches structural errors before serialization.
+- Signature tests: byte-range verification on signed documents.
 
 ### monkeybee-extract
 - Unit tests: text extraction on known documents with ground-truth positions.

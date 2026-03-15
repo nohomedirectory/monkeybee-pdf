@@ -27,15 +27,22 @@ This loop is not a feature list. It is the proof that the engine owns enough of 
 ### Anti-goals
 
 - Monkeybee is not trying to become a polished desktop PDF suite in v1.
-- Monkeybee is not a giant layout-authoring DSL.
+- Monkeybee is not a giant layout-authoring DSL. It does, however, need correct shaping, bidi handling, and basic line breaking for generated text.
 - Monkeybee is not trying to achieve perfect semantic recovery from every hostile file ever made.
 - Monkeybee is not trying to finish the entire PDF category in one stroke.
 - Monkeybee must not become incoherent because agents can generate enormous quantities of code. Deeper coherence, not decorative sprawl.
-- Monkeybee is not adding 3D PDF support, OCR, document understanding, accessibility remediation, or semantic format conversion to v1. Those are post-v1 lanes.
+- Monkeybee is not adding 3D PDF support, OCR, document understanding, accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1. Those are post-v1 lanes.
 
 ### Alien artifact doctrine
 
 Monkeybee aspires to feel like an alien artifact in the only sense that matters: a disturbing combination of breadth, depth, coherence, and evidence. Not arbitrary exotic cleverness. Not decorative math. A system where the renderer, document model, extraction layer, mutation substrate, generation path, compatibility handling, and proof machinery all feel like manifestations of one underlying idea rather than a pile of features.
+
+Monkeybee keeps the alien-artifact ambition, but v1 is gated on a correct baseline engine, not on landing every advanced algorithm before first release.
+
+**Delivery rule:**
+1. Every gated subsystem ships with a simple, auditable baseline path.
+2. Advanced algorithms land behind pluggable traits / feature flags.
+3. An experimental path becomes default only after it beats the baseline on correctness or cost under the proof harness.
 
 In concrete terms, "alien artifact" for this domain means:
 1. **Mathematical sophistication threaded through every hot path.** Where competing engines use brute force (supersampling for anti-aliasing, linear scan for CMap lookup, pixel-wise comparison for render diffing), Monkeybee uses genuinely stronger methods (exact analytic area coverage via Green's theorem, robust geometric predicates, multi-scale structural similarity, information-theoretic repair scoring, spectral-aware color science). These are not garnishes — they are the techniques that make the engine qualitatively different.
@@ -60,6 +67,19 @@ Monkeybee adopts explicit, named operational modes that encode mutually competin
 - **Downlevel output:** Emit output constrained to an older PDF version or a specific profile (e.g., PDF/A-4, PDF/X-6). The writer validates output against the target profile's constraints and rejects or downgrades features that violate them.
 
 The mode is not a global singleton. A single session can parse in tolerant mode, inspect the result, and then write in incremental-append mode. The modes compose.
+
+### Execution context doctrine
+
+Every top-level API accepts an `ExecutionContext` carrying:
+- Resource budgets (objects, decompressed bytes, operators, recursion depth)
+- Cooperative cancellation / deadline
+- Determinism settings for CI and proof
+- Provider registry
+- Trace / metrics sink
+
+Provider interfaces include `FontProvider`, `ColorProfileProvider`, `CryptoProvider`, and `OracleProvider`.
+Proof/CI mode must use pinned providers rather than ambient system discovery.
+Deterministic mode fixes serialization order, stable hashers, fallback resources, and oracle manifests so CI evidence is reproducible across hosts.
 
 ---
 
@@ -103,7 +123,7 @@ Proof surfaces: inspection accuracy on known-structure documents, diagnostics co
 
 ### Workflow 7: Signature-safe modification
 
-A user loads a signed PDF, adds annotations or form field values using incremental-append save mode, and the existing digital signatures remain valid. The engine does not rewrite bytes it does not own. The user can verify that the signature still validates after the modification.
+A user loads a signed PDF, adds annotations or form field values using incremental-append save mode, and the existing digital signatures remain valid. The engine does not rewrite bytes it does not own. The user can verify that signed byte ranges were preserved and, when a `CryptoProvider` is configured, request full signature verification after the modification.
 
 Proof surfaces: signature validity checks pre- and post-modification, byte-range preservation verification, incremental-update structural integrity.
 
@@ -213,7 +233,7 @@ Font handling in real-world PDFs is where the gap between spec and reality is wi
 
 1. For embedded fonts: extract the glyph program from the embedded font data (Type 1 charstring, TrueType `glyf`/`gvar` table, CFF charstring, or Type 3 content stream). If the embedded font data is corrupt (invalid charstring, broken `glyf` offsets, truncated CFF), attempt partial recovery: render glyphs that are valid, use `.notdef` for broken individual glyphs.
 
-2. For non-embedded fonts: attempt system font substitution based on the font's `/BaseFont` name, font descriptor flags (serif, sans-serif, fixed-pitch, italic, bold), and Panose classification if present. Maintain a substitution table mapping common PDF font names (`Helvetica`, `Times-Roman`, `Courier`, `Symbol`, `ZapfDingbats`, `Arial`, `TimesNewRoman`) to bundled or system font equivalents.
+2. For non-embedded fonts: resolve through the configured `FontProvider`. Ambient system fallback is opt-in and non-canonical; proof runs use a pinned fallback font pack. The default `FontProvider` maintains a substitution table mapping common PDF font names (`Helvetica`, `Times-Roman`, `Courier`, `Symbol`, `ZapfDingbats`, `Arial`, `TimesNewRoman`) to bundled equivalents, consulting font descriptor flags (serif, sans-serif, fixed-pitch, italic, bold) and Panose classification if present.
 
 3. For the 14 standard fonts (the "Base 14"): the engine must ship with metrics for all 14 (Courier, Courier-Bold, Courier-Oblique, Courier-BoldOblique, Helvetica, Helvetica-Bold, Helvetica-Oblique, Helvetica-BoldOblique, Times-Roman, Times-Bold, Times-Italic, Times-BoldItalic, Symbol, ZapfDingbats). Optionally ship with outlines; at minimum, provide glyph widths so text positioning is correct even if the outlines must come from system substitution.
 
@@ -355,26 +375,30 @@ The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 
 ### Workspace layout
 
-Monkeybee is a Cargo workspace with focused crates that share a common document core. The architecture enforces separation of concerns while ensuring the document model is genuinely reusable across all subsystems.
+Monkeybee is a Cargo workspace with four explicit strata:
+1. **Byte/revision layer** — immutable source bytes plus appended revisions.
+2. **Syntax layer** — token/span preserving PDF syntax and repair provenance.
+3. **Semantic document layer** — resolved page/resource/object graph with ownership classes.
+4. **Content layer** — parsed content-stream IR and interpreter shared by render/extract/inspect/edit.
+
+`monkeybee-core` is intentionally small; it provides shared primitives rather than becoming a god crate.
+All open paths operate on a `ByteSource` trait so the architecture supports mmap files, in-memory buffers, and future range-backed sources.
 
 ### Crate boundaries
 
 #### `monkeybee-core`
 
-The foundation. Owns the document object model, cross-reference management, page tree, resource resolution, object identity, inherited state propagation, and shared geometry/page-state understanding.
+Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets. Intentionally minimal — does not own the full document graph or byte storage.
 
 Key responsibilities:
-- PDF object types (booleans, integers, reals, strings, names, arrays, dictionaries, streams, references)
-- Cross-reference tables and streams (reading, writing, repair)
-- Object graph with reference resolution
-- Page tree with inherited attributes
-- Resource dictionaries and resolution chain
-- Document-level metadata
-- Incremental update tracking
+- PDF object type definitions (booleans, integers, reals, strings, names, arrays, dictionaries, streams, references)
+- Object identity (ObjRef: object number + generation)
 - Shared coordinate geometry and transformation pipeline
-- Canonicalization without destructive loss
+- Shared error taxonomy and diagnostic types
+- `ExecutionContext` definition (budgets, cancellation, providers, tracing)
+- Trait definitions shared across strata (`ByteSource`, `FontProvider`, `ColorProfileProvider`, `CryptoProvider`)
 
-The core must be mutation-friendly. Its representations must preserve enough structure that editing, annotation, and re-serialization are practical — not one-way lossy collapse.
+The core must remain small enough that every other crate can depend on it without pulling in subsystem weight.
 
 **PDF object type specifics:**
 
@@ -412,9 +436,45 @@ PDF uses a bottom-left coordinate system with units of 1/72 inch (by default). T
 
 The shared geometry module must provide: matrix multiplication, matrix inversion, point transformation, rectangle transformation (with proper handling of rotated/skewed rectangles), and rectangle intersection/union.
 
+#### `monkeybee-bytes`
+
+Byte sources, mmap/in-memory/range-backed access, revision chain, and raw span ownership. This is the byte/revision layer.
+
+Key responsibilities:
+- `ByteSource` trait implementations (mmap, in-memory, future range-backed)
+- Revision chain tracking (original file + appended incremental updates)
+- Raw span ownership for preserve-mode byte-perfect write-back
+- No PDF-semantic understanding — purely byte-level
+
+#### `monkeybee-document`
+
+Semantic document graph: page tree, inherited state, resource resolution, ownership classes. This is the semantic document layer built on top of parsed syntax.
+
+Key responsibilities:
+- Document-level model (PdfDocument, ObjectStore, PageTree)
+- Cross-reference management and resolution
+- Page tree with inherited attribute materialization
+- Resource dictionary resolution chain
+- Object ownership classification (`Owned`, `ForeignPreserved`, `OpaqueUnsupported`)
+- Incremental update tracking and merge
+- Change tracking and mutation model
+- Reference integrity index (forward and reverse lookups)
+
+#### `monkeybee-content`
+
+Content-stream IR and event interpreter shared by render, extract, inspect, and edit subsystems. This is the content layer.
+
+Key responsibilities:
+- Content stream parsing and operator dispatch
+- Graphics state machine (single implementation shared by all consumers)
+- Streaming event model for one-shot execution
+- `PagePlan` IR: immutable page-scoped display list for cached/region-aware workflows
+- Marked content span tracking
+- Source-span provenance for content-stream-level debugging
+
 #### `monkeybee-parser`
 
-Reads PDF bytes into the core document model.
+Reads PDF bytes into the document model via syntax-preserving parsing with repair provenance.
 
 Key responsibilities:
 - Lexing and tokenization
@@ -459,9 +519,9 @@ Stream data may pass through multiple filters in sequence. The `/Filter` entry s
 - **ASCII85Decode / ASCIIHexDecode:** Text-to-binary decodings. These appear as outer wrappers when the PDF was generated for environments that cannot handle binary data. ASCII85 uses the `~>` end-of-data marker; ASCIIHex uses `>`. Both must tolerate whitespace.
 - **RunLengthDecode:** Simple RLE decompression. Byte-based: 0-127 means copy next N+1 bytes; 129-255 means repeat next byte 257-N times; 128 is EOD.
 - **CCITTFaxDecode:** Group 3 or Group 4 fax decompression. Parameters: `/K` (-1 for Group 4, 0 for Group 3 one-dimensional, >0 for mixed), `/Columns`, `/Rows`, `/BlackIs1`, `/EncodedByteAlign`. Common in scanned document images.
-- **JBIG2Decode:** JBIG2 decompression. May reference global segments via `/DecodeParms` → `/JBIG2Globals`. The globals stream must be resolved and prepended.
+- **JBIG2Decode:** JBIG2 decompression. May reference global segments via `/DecodeParms` → `/JBIG2Globals`. The globals stream must be resolved and prepended. In hardened security mode this decoder must be isolated or disabled with explicit Tier 3 reporting.
 - **DCTDecode:** JPEG decompression. The stream data is a complete JPEG file (with SOI/EOI markers). The engine must handle both baseline and progressive JPEG. The `/ColorTransform` parameter controls whether a YCbCr→RGB conversion is applied (default: yes for 3-component, no for others).
-- **JPXDecode:** JPEG 2000 decompression. The stream data is a complete JP2 or J2K codestream. Color space information may come from the image's own headers or be overridden by the PDF's `/ColorSpace` entry.
+- **JPXDecode:** JPEG 2000 decompression. The stream data is a complete JP2 or J2K codestream. Color space information may come from the image's own headers or be overridden by the PDF's `/ColorSpace` entry. In hardened security mode this decoder must be isolated or disabled with explicit Tier 3 reporting.
 - **Crypt:** Decryption filter for per-object encryption. Used when only specific streams are encrypted differently from the document default.
 
 **Filter chain edge cases and failure modes:**
@@ -740,6 +800,8 @@ When generating new pages with text, the write path must embed the fonts used:
 5. For CIDFonts: generate the CIDFont descriptor with `/DW` and `/W` arrays, the CMap (typically Identity-H for Unicode-mapped fonts), and the CIDToGIDMap (typically Identity for subsetted TrueType CIDFonts).
 6. Tag the font name with a 6-letter random prefix followed by `+` (e.g., `ABCDEF+ArialMT`) to indicate subsetting. This is a convention, not a requirement, but it aids debugging and conformance checking.
 
+Generated text must not assume a one-codepoint-to-one-glyph mapping. Complex-script shaping and bidi reordering occur before subsetting and ToUnicode generation.
+
 **Document generation API:**
 
 The generation API is the public surface for creating new PDFs from scratch. It must be high-level enough to be useful without forcing the caller to understand PDF internals, but low-level enough to express the full range of PDF content.
@@ -748,7 +810,9 @@ API layers:
 1. **Document builder:** Create a new document, set metadata (title, author, producer), configure output options (PDF version, encryption, compression).
 2. **Page builder:** Add pages with specified dimensions and rotation. Set page-level resources.
 3. **Content builder:** A fluent API for building page content:
-   - Text operations: `begin_text()`, `set_font(name, size)`, `set_color(color)`, `move_to(x, y)`, `show_text(string)`, `show_text_with_kerning(segments)`, `end_text()`.
+   - Text operations:
+     - Low-level: `begin_text()`, `set_font(name, size)`, `move_to(x, y)`, `show_text_raw(bytes)`, `show_glyphs(positioned_glyphs)`, `end_text()`
+     - Shaped text: `show_text(string)` and `layout_text(paragraph, options)` route through a `TextShaper` that handles bidi, shaping, line breaking, and font fallback before emitting positioned glyphs
    - Graphics operations: `move_to(x, y)`, `line_to(x, y)`, `curve_to(cp1, cp2, end)`, `close_path()`, `stroke()`, `fill()`, `clip()`, `set_line_width(w)`, `set_dash_pattern(array, phase)`.
    - Image operations: `draw_image(image_data, format, rect)` — accepts JPEG, PNG, or raw pixel data and embeds appropriately (JPEG is passed through as DCTDecode; PNG is re-encoded as FlateDecode with PNG predictors; raw pixels are compressed with FlateDecode).
    - State operations: `save_state()`, `restore_state()`, `transform(matrix)`, `set_blend_mode(mode)`, `set_opacity(alpha)`.
@@ -785,6 +849,18 @@ For preserve-mode / incremental-append workflows that must not invalidate existi
 - The new cross-reference section references only new or modified objects. Unchanged objects retain their original byte offsets.
 - Byte ranges covered by existing signatures (the `/ByteRange` values in signature dictionaries) must remain untouched.
 - The writer must track which objects were modified and ensure the incremental update correctly supersedes only those objects.
+
+#### `monkeybee-edit`
+
+Transactional structural edits, resource management, and high-assurance operations.
+
+Key responsibilities:
+- `EditTransaction` framework: stage edits, compute closure, validate, commit/rollback
+- Resource GC: detect and remove unreachable objects after edits
+- Resource deduplication: identify and merge identical objects
+- Redaction application: high-assurance rewrite with `RedactionPlan` (SemanticExact / SecureRasterizeRegion / SecureRasterizePage)
+- Optimization operations: compaction, recompression, object stream repacking
+- All optimization and cleanup operations are explicit user-triggered actions, not incidental writer side effects
 
 #### `monkeybee-annotate`
 
@@ -875,6 +951,17 @@ Text extraction reuses the same content stream interpretation pipeline as the re
 - **Text in patterns and form XObjects:** Text appearing inside tiling patterns or form XObjects must be extracted with the correct transformation applied (the pattern matrix or form matrix composed with the invoking CTM).
 - **Marked content for reading order:** Tagged PDFs use marked content sequences (`BMC`/`BDC`/`EMC`) with structure tags that define logical reading order. When available, the extraction pipeline should prefer the tagged reading order over geometric heuristics. However, most real-world PDFs are not tagged; geometric heuristics are the primary path.
 
+#### `monkeybee-validate`
+
+Conformance validation, profile checking, and structural verification.
+
+Key responsibilities:
+- Arlington-model conformance validation (codegen from TSV, strict/tolerant integration)
+- Profile-specific validation (PDF/A-4, PDF/X-6)
+- Write preflight checks (structural validity before serialization)
+- Signature byte-range verification
+- Consume validation results from the proof harness and turn them into evidence/regression artifacts
+
 #### `monkeybee-proof`
 
 Automated validation and evidence generation.
@@ -940,7 +1027,10 @@ Key responsibilities:
 - `monkeybee validate <file> [--roundtrip|--structure|--render-compare|--conformance]`
 - `monkeybee diagnose <file>` — full compatibility report
 - `monkeybee proof <corpus-dir>` — run the full proof harness
-- `monkeybee conformance <file> [--profile pdf-a4|pdf-x6|pdf-ua2]` — profile-specific validation
+- `monkeybee conformance <file> [--profile pdf-a4|pdf-x6]` — profile-specific validation
+- `monkeybee optimize <file> [--dedup|--gc|--recompress] -o <o>` — full-rewrite compaction and cleanup as an explicit user operation
+- `monkeybee trace <file>` — emit page/subsystem spans, repair decisions, cache statistics, and budget consumption as JSON
+- `monkeybee signatures <file>` — inspect signature dictionaries, byte ranges, CMS envelope metadata, and provider-backed verification results
 
 **Command details:**
 
@@ -984,7 +1074,23 @@ All subsystems that deal with spatial operations (rendering, annotation, extract
 
 The document model supports disciplined mutation: adding, modifying, and removing objects with explicit change tracking. Mutations produce a well-defined delta that the write path can serialize. Mutations do not corrupt the object graph or violate reference integrity.
 
-The change tracking model:
+Mutations occur inside an `EditTransaction`.
+Each touched object is classified as:
+- `Owned` — semantically understood and eligible for rewrite/canonicalization
+- `ForeignPreserved` — carried forward byte-preservingly unless an edit explicitly takes ownership
+- `OpaqueUnsupported` — detected but not safely transformable; incompatible edits must fail explicitly
+
+Transaction flow:
+1. Stage semantic edits
+2. Compute the affected page/resource/reference closure
+3. Run validation preflight
+4. Either commit atomically as a delta or roll back
+
+Resource GC, deduplication, unreachable-object pruning, and rewrite-time compaction are explicit edit operations, not incidental writer side effects.
+
+Full-rewrite mode may canonicalize only `Owned` objects. Preserve-mode output must not silently take ownership of foreign or opaque structures.
+
+The underlying change tracking model:
 - Every mutation is recorded as (object_id, old_value_hash, new_value). This enables both incremental save (serialize only changed objects) and undo (restore old values).
 - New objects are assigned object numbers from a monotonically increasing allocator. Generation numbers for new objects are 0.
 - Deleted objects are recorded in the free list. Their generation number is incremented.
@@ -1046,10 +1152,17 @@ All errors at all severity levels are collected into the compatibility ledger. F
 ### Content stream contract
 
 Content stream parsing and interpretation follow a shared contract:
-- The graphics state machine is implemented once in a shared location.
+- The graphics state machine is implemented once in `monkeybee-content`.
 - Rendering, extraction, and inspection all consume content streams through the same interpretation pipeline.
 - The pipeline supports both "execute for rendering" and "analyze for extraction" modes without duplicated logic.
 - The pipeline emits events (operator dispatched, state changed, text shown, path painted, etc.) that downstream consumers can subscribe to selectively.
+
+The content subsystem exposes two surfaces built from the same interpreter:
+1. **Streaming events** for low-memory, one-shot execution.
+2. **PagePlan IR** for repeated, cached, or region-aware workflows.
+
+`PagePlan` is an immutable page-scoped display list containing normalized draw ops, text runs/quads, resource dependencies, marked-content spans, degradation annotations, and source-span provenance.
+Render, extract, inspect, diff, and edit subsystems may consume either surface; the interpreter remains the single source of truth.
 
 **Event model:**
 
@@ -1284,11 +1397,15 @@ Annotations must be resolved with their appearance streams. If an appearance str
 
 *Redact:* The redaction annotation has two visual states: before application (shows the region to be redacted, typically with a red outline or crosshatch) and after application (fills the region with the overlay color, removes underlying content). Before-application appearance: draw the region outline. After-application appearance: fill the `/RO` (redaction overlay) area with `/IC` and optional `/OverlayText`.
 
-Redaction application (burning redactions into the page) is a critical workflow that must be separate from merely creating the annotation. When a redaction is applied:
-1. Remove all content (text, images, vectors) underneath the redaction rectangle from the page's content streams. This requires content stream rewriting: parsing the content stream, identifying operators that paint within the redacted region (using the graphics state to track coordinates), and removing those operators.
-2. Optionally remove any text content from the page's text extraction (removing references to characters within the redacted area from any ToUnicode mappings is not necessary — the content stream removal is sufficient).
-3. Replace the redaction annotation with its "applied" appearance (a filled rectangle with optional overlay text burned into the page content).
-4. The applied redaction must be irreversible — the original content must not be recoverable from the saved file. This means: do not merely cover the content with an opaque rectangle (the content would still be extractable). Actually remove the underlying content stream operators.
+Redaction annotation creation lives in `monkeybee-annotate`; redaction application lives in `monkeybee-edit` and is treated as a high-assurance rewrite.
+When a redaction is applied, the engine first constructs a `RedactionPlan` and selects one of:
+- `SemanticExact` — only when complete semantic removal can be proven (all content operators within the redacted region are fully identified and removable without side effects)
+- `SecureRasterizeRegion` — replace the affected region with a safe raster surrogate when exact semantic removal cannot be proven (e.g., reused XObjects, partial image overlap, complex transparency)
+- `SecureRasterizePage` — rebuild the entire page as a safe raster surrogate when region-level proof is insufficient
+
+Post-apply verification is mandatory: extraction must not recover redacted text, and surviving canary bytes/resources are scanned where feasible.
+
+The applied redaction must be irreversible — the original content must not be recoverable from the saved file. This means: do not merely cover the content with an opaque rectangle (the content would still be extractable). The selected apply mode guarantees actual removal or destruction of underlying content.
 
 *Widget (form field):* Appearance depends on the field type. Text fields: render the field value text within the widget rect using `/DA`. Checkboxes: render a check mark or empty box. Radio buttons: render a filled or empty circle. Choice fields: render the selected value or a dropdown indicator. Button fields: render the button label. The `/MK` (appearance characteristics) dictionary provides rotation, border color, background color, caption, and icon information.
 
@@ -1339,7 +1456,11 @@ The engine must handle AcroForm (interactive form) fields for both reading and b
   - `/Cert`: the signing certificate (for some signature types).
   - `/M`: signing date. `/Reason`, `/Location`, `/ContactInfo`: human-readable metadata.
 
-  The engine reads and validates the structural integrity of signature dictionaries but does not implement full cryptographic signature verification in v1 (verifying the CMS/PKCS#7 structure, certificate chain validation, OCSP/CRL checking, and timestamp verification are complex PKI operations — Tier 2 capability). The engine must preserve signature fields and their byte ranges during incremental-save operations. Specifically:
+  v1 guarantees:
+  - Byte-range integrity checking
+  - Signature dictionary parsing and CMS envelope inspection
+  - Incremental-append preservation of signed bytes
+  Full PKI trust validation is delegated to an optional `CryptoProvider` and is not claimed by the baseline engine alone. The engine must preserve signature fields and their byte ranges during incremental-save operations. Specifically:
   - The engine must track the exact byte offsets specified in `/ByteRange` and guarantee that incremental-append operations do not modify any bytes within those ranges.
   - When inspecting a document, the engine should report: number of signatures, signing dates, signature coverage (what percentage of the document is signed), and whether the document has been modified after signing (by checking if objects outside the signed byte range differ from those within it).
 
@@ -1372,6 +1493,9 @@ The project must maintain a curated corpus of ugly, hard, and pathological PDFs.
 - Linearized files (intact and damaged)
 - Files with unusual page structures (non-standard boxes, rotations, user units)
 
+The corpus is split into `public/`, `restricted/`, `generated/`, and `minimized/` tiers.
+Every fixture carries provenance, license/sensitivity metadata, expected failure/repair tags, and redistribution status.
+Crashers and regressions must be minimized into the `minimized/` tier whenever feasible.
 The corpus must be indexed, categorized, and continuously exercised by CI.
 
 **Specific test case classes and what each proves:**
@@ -1428,6 +1552,10 @@ Proves: the content stream interpreter handles scale and edge cases without perf
 Test cases: signed documents modified with incremental-append save, verification that byte ranges are preserved, verification that existing signatures validate after Monkeybee's modifications.
 Proves: preserve-mode write path does not corrupt existing signatures.
 
+*Class: redaction-safety*
+Test cases: text-only, image-only, mixed vector/text, reused XObjects, form XObjects, transparency, and canary-text leakage checks.
+Proves: no recoverable redacted content survives under the selected apply mode.
+
 ### External references
 
 Monkeybee does not treat any single external renderer as ground truth. Instead, it uses consensus-style reference testing:
@@ -1439,6 +1567,8 @@ Monkeybee does not treat any single external renderer as ground truth. Instead, 
 
 Where references disagree, the disagreement itself is recorded and investigated.
 
+Every proof run records an oracle manifest: renderer name, exact version, build hash/container digest, invocation flags, and platform. Pinned oracle manifests are required in canonical CI runs for reproducibility.
+
 ### Arlington-model conformance validation
 
 The Arlington PDF Model is a machine-readable description of the entire PDF specification's object structure: which dictionary keys are required, optional, or deprecated for each object type; what types and value ranges are legal for each key; which keys are mutually exclusive or conditionally required. Monkeybee integrates the Arlington model as a structural validation oracle:
@@ -1446,7 +1576,7 @@ The Arlington PDF Model is a machine-readable description of the entire PDF spec
 1. **Code generation from Arlington:** At build time, parse the Arlington TSV data files and generate Rust validation functions for each PDF object type. Each function checks: required keys present, no unknown keys (in strict mode), value types correct, value ranges valid, conditional requirements satisfied (e.g., "/Subtype required when /Type is /Font").
 2. **Integration with the tolerant parser:** After parsing each object, run the Arlington validator. In strict mode, violations are errors. In tolerant mode, violations are diagnostics recorded in the compatibility ledger with the specific Arlington rule that was violated.
 3. **Integration with the write path:** Before serializing any object, validate it against the Arlington model. The write path must not emit objects that violate the spec — this is a hard invariant, not a best-effort check.
-4. **Profile-specific validation:** When the target output is a specific profile (PDF/A-4, PDF/X-6, PDF/UA-2), the Arlington model encodes the additional constraints of that profile. The validator checks both base PDF conformance and profile-specific requirements. This is the foundation for the downlevel write mode.
+4. **Profile-specific validation:** When the target output is a supported v1 profile (PDF/A-4, PDF/X-6), the Arlington model encodes the additional constraints of that profile. The validator checks both base PDF conformance and profile-specific requirements. This is the foundation for the downlevel write mode.
 5. **Coverage metric:** Track which Arlington rules are exercised by the pathological corpus. Rules that are never exercised represent document structures the engine has never encountered — these are blind spots that should drive corpus acquisition.
 
 ### Round-trip requirements
@@ -1485,6 +1615,7 @@ The compatibility ledger is a structured, machine-readable record produced for e
 
 ```
 CompatibilityLedger {
+  schema_version: string,       // ledger schema version for forward compatibility
   document_id: string,          // hash of input file
   file_name: string,
   file_size: u64,
@@ -1497,6 +1628,7 @@ CompatibilityLedger {
   features: [FeatureEntry],     // one per detected feature category
   repairs: [RepairEntry],       // one per repair action taken
   diagnostics: [DiagnosticEntry], // warnings, notes, errors
+  pages: [PageLedger],           // per-page feature/diagnostic breakdown
   summary: LedgerSummary,
 }
 
@@ -1542,6 +1674,18 @@ ObjectRef {
   object_number: u32,
   generation_number: u16,
 }
+
+PageLedger {
+  page_index: u32,
+  features: [FeatureEntry],
+  diagnostics: [DiagnosticEntry],
+  degraded_regions: [RegionRef],
+}
+
+RegionRef {
+  bbox: [f32; 4],
+  reason: string,
+}
 ```
 
 **Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
@@ -1570,6 +1714,17 @@ v1 may not be released until:
 - Internal `unsafe` is permitted only when: (a) it provides a measurable and significant performance improvement on a proven hot path, (b) it is minimal and isolated behind a safe abstraction, (c) it is explicitly documented with a safety justification, and (d) it is covered by aggressive testing including fuzzing.
 - Parser code that handles untrusted input must be especially scrutinized. Buffer overflows, integer overflows, and unbounded allocations in parser code are treated as critical bugs.
 - All `unsafe` blocks are tagged and auditable.
+
+### Security profiles
+
+Monkeybee distinguishes memory safety from execution safety.
+`ExecutionContext` selects a security profile:
+- `Compatible` — widest feature coverage; all decoders and native bridges enabled
+- `Hardened` — bounded / isolated risky decoders; complexity limits enforced more aggressively
+- `Strict` — disable risky or non-native features with explicit degradation reporting
+
+High-risk domains include JBIG2Decode, JPXDecode, native font bridges, XFA XML packet handling, and Type 4 calculator functions.
+In hardened mode these run in isolated workers or are disabled; no external-entity XML resolution is ever permitted.
 
 ### Targeted formal verification
 
@@ -1633,6 +1788,8 @@ The engine maintains several layered caches, each with explicit eviction policy:
 5. **Color space cache:** Parsed ICC profiles and precomputed LUTs, keyed on the ICC profile stream's object ID. ICC profile parsing and LUT construction are expensive (especially for CMYK→RGB with large cLUT tables); caching is essential.
 
 6. **Resource resolution cache:** Per-page resolved resource dictionaries (the result of page tree inheritance resolution). Avoids repeated tree traversal for multi-pass operations (render + extract on the same page).
+
+7. **PagePlan cache:** Normalized per-page IR keyed on (revision_id, page_index, content_hash). Eviction: LRU by estimated op count or memory cost. Invalidated when page content, inherited resources, or referenced form/pattern resources change. Enables repeated render/extract/inspect/diff passes without re-interpreting the content stream.
 
 **Parallelism model:**
 
@@ -1792,7 +1949,7 @@ The engine must enforce configurable resource limits to prevent adversarial inpu
 - **Maximum page count** (default: 100,000).
 - **Timeout** for any single-page operation (configurable, no default — the caller sets this).
 
-All limits are configurable by the caller. The defaults are chosen to handle all legitimate PDFs while rejecting pathological adversarial inputs.
+All limits are configured and accounted through `ExecutionContext`; actual budget consumption is reportable in diagnostics and traces. The defaults are chosen to handle all legitimate PDFs while rejecting pathological adversarial inputs.
 
 ---
 
@@ -1822,9 +1979,14 @@ v1 is the point where Monkeybee PDF publicly claims engine reality. The followin
 - [ ] Round-trip harness covers all seven chain types on representative documents.
 - [ ] Annotation round-trip harness passes on representative documents.
 - [ ] Compatibility ledger is complete and machine-readable per the schema in Part 6.
+- [ ] Baseline parser/render/write paths pass the v1 proof gates without experimental backends.
+- [ ] Experimental backends are optional and benchmarked head-to-head against the baseline.
 - [ ] Performance benchmarks exist for all benchmark classes.
-- [ ] Fuzz testing covers parser and content stream interpreter.
+- [ ] Fuzz testing covers parser, content stream interpreter, and writer (metamorphic + writer fuzzing).
 - [ ] Arlington-model validation is integrated for at least document catalog, page tree, and font dictionaries.
+- [ ] Public, generated, and minimized corpora exist for every gated feature class; restricted fixtures may supplement but not replace public evidence.
+- [ ] Oracle manifests are pinned in canonical CI runs.
+- [ ] Compatibility ledger JSON is schema-versioned and backward-compatible within major versions.
 
 **Fuzz testing strategy:**
 
@@ -1849,6 +2011,10 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 - Execution time bounded (each fuzz iteration must complete within a timeout, default 10 seconds).
 - For `fuzz_parse_document`: if parsing succeeds, the result must be serializable without panics (round-trip sanity).
 
+*Metamorphic testing:* Generate or mutate valid PDFs, apply random edit/annotate/save/reload sequences, and assert render/text/structure invariants. This catches emergent bugs that single-pass fuzzing misses.
+
+*Writer fuzzing:* Fuzz serialization preconditions and parse-own-output invariants, not just the parser. The writer must survive arbitrary valid document graph states without producing invalid output.
+
 *Tooling:* cargo-fuzz with libFuzzer backend for continuous fuzzing. AFL++ as a secondary fuzzer for diversity. Integration with OSS-Fuzz for continuous community-driven fuzzing after open-source release.
 
 ### Quality gates
@@ -1867,14 +2033,33 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 When this spec stabilizes through APR refinement, it should be decomposed into beads. The following is the anticipated bead decomposition structure. Each bead will be self-contained, dependency-aware, and carry its own test/E2E/logging obligations.
 
 ### Foundation beads
-- B-CORE-001: PDF object types and object graph
-- B-CORE-002: Cross-reference table/stream parsing and repair
-- B-CORE-003: Page tree and inherited attribute resolution
-- B-CORE-004: Resource dictionary resolution chain
-- B-CORE-005: Shared coordinate geometry and transformation pipeline
-- B-CORE-006: Incremental update tracking and merge
-- B-CORE-007: Change tracking and mutation model
-- B-CORE-008: Reference integrity index (forward and reverse lookups)
+- B-CORE-001: PDF object type definitions and shared primitives
+- B-CORE-002: Shared coordinate geometry and transformation pipeline
+- B-CORE-003: Error taxonomy and diagnostic types
+- B-CORE-004: ExecutionContext (budgets, cancellation, providers, tracing)
+- B-CORE-005: Trait definitions (ByteSource, FontProvider, ColorProfileProvider, CryptoProvider)
+
+### Byte layer beads
+- B-BYTES-001: ByteSource trait and implementations (mmap, in-memory, range-backed)
+- B-BYTES-002: Revision chain tracking
+- B-BYTES-003: Raw span ownership for preserve-mode
+
+### Document layer beads
+- B-DOC-001: Document model and ObjectStore
+- B-DOC-002: Cross-reference management and resolution
+- B-DOC-003: Page tree and inherited attribute resolution
+- B-DOC-004: Resource dictionary resolution chain
+- B-DOC-005: Object ownership classification (Owned/ForeignPreserved/OpaqueUnsupported)
+- B-DOC-006: Incremental update tracking and merge
+- B-DOC-007: EditTransaction and change tracking
+- B-DOC-008: Reference integrity index (forward and reverse lookups)
+
+### Content layer beads
+- B-CONTENT-001: Content stream parsing and operator dispatch
+- B-CONTENT-002: Graphics state machine
+- B-CONTENT-003: Streaming event model
+- B-CONTENT-004: PagePlan IR (immutable display list, cached workflows)
+- B-CONTENT-005: Marked content span tracking
 
 ### Parser beads
 - B-PARSE-001: Lexer and tokenizer
@@ -1913,6 +2098,18 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-WRITE-008: Signature-safe preserve write path
 - B-WRITE-009: Font embedding and subsetting for generated content
 - B-WRITE-010: Output encryption (AES-256)
+
+### Edit beads
+- B-EDIT-001: EditTransaction framework
+- B-EDIT-002: Resource GC and deduplication
+- B-EDIT-003: Redaction application (high-assurance rewrite)
+- B-EDIT-004: Optimization operations (compaction, recompression)
+
+### Validate beads
+- B-VALIDATE-001: Arlington-model conformance validation
+- B-VALIDATE-002: Profile-specific validation (PDF/A-4, PDF/X-6)
+- B-VALIDATE-003: Write preflight checks
+- B-VALIDATE-004: Signature byte-range verification
 
 ### Annotation beads
 - B-ANNOT-001: Annotation model and type support
@@ -1959,7 +2156,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-CHECK-003: Post-writeback checkpoint (round trips working, verify bidirectionality claim)
 - B-CHECK-004: Pre-release checkpoint (all gates, verify proof surfaces are externally legible)
 
-### Alien artifact beads
+### Experimental / post-v1 beads
 - B-ALIEN-001: Exact analytic area coverage rasterizer (Green's theorem, signed area accumulation, SIMD prefix sums)
 - B-ALIEN-002: Robust geometric predicates (Shewchuk-style adaptive precision for orientation, intersection, clipping)
 - B-ALIEN-003: Spectral-aware color science pipeline (tetrahedral interpolation, Bradford adaptation, perceptual gamut mapping)

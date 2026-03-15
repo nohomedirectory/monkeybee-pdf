@@ -18,7 +18,7 @@ This loop is the thesis. Every subsystem exists to make this loop real on ugly d
 
 ## What v1 must prove
 
-Monkeybee v1 is not a demo or a roadmap. It must ship with automated, repeatable evidence of:
+Monkeybee v1 is not a demo or a roadmap. It must ship with automated, repeatable evidence of the closed loop on ugly documents using a correct baseline engine. Advanced algorithmic backends are welcome, but they are not v1 blockers until they outperform the baseline under proof.
 
 - **Rendering correctness** on hard, pathological, real-world PDFs that simpler engines mishandle or refuse.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent drift.
@@ -39,20 +39,25 @@ Target categories include: malformed cross-references, broken object graphs, his
 
 ## Architecture at a glance
 
-Monkeybee is a Rust workspace organized as a set of focused crates over a shared document core:
+Monkeybee is a Rust workspace organized as layered crates with explicit preservation and ownership boundaries:
 
 | Crate | Responsibility |
 |---|---|
-| `monkeybee-core` | Object model, cross-references, document graph, page model, resource resolution, shared geometry/page-state |
-| `monkeybee-parser` | PDF parsing, repair, tolerant/strict modes, incremental-update handling |
+| `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets |
+| `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, revision chain, raw span ownership |
+| `monkeybee-parser` | PDF syntax parsing, repair, tolerant/strict modes, raw token/span retention |
+| `monkeybee-document` | Semantic document graph, page tree, inherited state, resource resolution, ownership classes |
+| `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit |
 | `monkeybee-render` | Page rendering: content streams, text, fonts, images, transparency, vector graphics, masks, blending |
 | `monkeybee-write` | Serialization, generation, incremental save, full rewrite, structural validity |
+| `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application |
 | `monkeybee-annotate` | Annotation creation, modification, flattening, geometry-aware placement |
 | `monkeybee-extract` | Text extraction with positions, metadata, structure inspection, asset extraction, diagnostics |
+| `monkeybee-validate` | Arlington/profile validation, write preflight, signature byte-range checks |
 | `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility accounting |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, conversion, diagnostics |
 
-All crates share the document core. The core is designed for genuine reuse: rendering, extraction, annotation, editing, and writeback all operate on the same document model, not parallel dead-end parse trees.
+The architecture has four explicit strata: byte/revision, syntax, semantic document, and content. All crates share `monkeybee-core` for primitives. Rendering, extraction, annotation, editing, and writeback all operate on the same document model, not parallel dead-end parse trees.
 
 ## Repo structure
 
@@ -65,11 +70,16 @@ monkeybee-pdf/
 ├── Cargo.toml
 ├── crates/
 │   ├── monkeybee-core/
+│   ├── monkeybee-bytes/
 │   ├── monkeybee-parser/
+│   ├── monkeybee-document/
+│   ├── monkeybee-content/
 │   ├── monkeybee-render/
 │   ├── monkeybee-write/
+│   ├── monkeybee-edit/
 │   ├── monkeybee-annotate/
 │   ├── monkeybee-extract/
+│   ├── monkeybee-validate/
 │   ├── monkeybee-proof/
 │   └── monkeybee-cli/
 ├── docs/
