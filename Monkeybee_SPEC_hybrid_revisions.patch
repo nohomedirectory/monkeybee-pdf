@@ -1,0 +1,1022 @@
+--- a/SPEC (6).md
++++ b/SPEC (6).md
+@@ -13,6 +13,31 @@
+ ```
+ 
+ This loop is not a feature list. It is the proof that the engine owns enough of document reality to operate bidirectionally on hard, ugly, real-world documents. Every subsystem, every crate, every design decision must be measured against this loop.
++
++
++### Invariant document substrate thesis
++
++The closed loop is the user-visible proof surface. The deeper architectural thesis is stronger:
++every document state in Monkeybee must be representable as an invariant-preserving projection of a
++single persistent, versioned document substrate.
++
++At minimum, the substrate must unify:
++- source bytes and preserved byte spans
++- parsed COS syntax with provenance
++- semantic object graphs and ownership classes
++- content interpretation and graphics-state transitions
++- extraction/layout/semantic-anchor surfaces
++- edit deltas, undo/rebase history, and write plans
++- proof artifacts, receipts, and compatibility ledgers
++
++The key architectural question for every subsystem is therefore not only "does this feature work?"
++but also "what stable substrate object, digest, dependency edge, and preservation claim does it
++correspond to?" If that mapping is hand-wavy, the feature is not yet architecturally real.
++
++This substrate thesis is the most consequential refinement to the current plan because it turns
++several promises that are already correct in spirit but under-specified in mechanism — structural
++sharing, precise invalidation, cheap snapshots, explainable diffs, temporal replay, and
++signature-safe save planning — into one coherent computational model.
+ 
+ ### Non-negotiables
+ 
+@@ -24,6 +49,11 @@
+ 6. Architecture is natively owned, not donor-inherited. External implementations are behavioral references, not architectural authorities.
+ 7. The compatibility doctrine (Tier 1/2/3) is explicit and unapologetic. Silent evasion is unacceptable.
+ 
++8. Snapshots, undo, diff, rebase, and cache reuse must be grounded in a content-addressed persistent substrate rather than ad hoc cloning, mutable global state, or cache-local tricks.
++9. Save planning, signature safety, and byte-preservation claims must be derivable from explicit preservation rules and surfaced as machine-readable receipts before bytes are emitted.
++10. Ambiguous recovery must remain visible as a bounded hypothesis set with causal evidence. Monkeybee must never silently pick a materially different interpretation without explanation.
++11. External-facing intelligence surfaces (queries, semantic anchors, agent-facing edit APIs, diff explanations) must be deterministic, typed, and auditable rather than free-form magic.
++
+ ### Anti-goals
+ 
+ - Monkeybee is not trying to become a polished desktop PDF suite in v1.
+@@ -33,6 +63,10 @@
+ - Monkeybee must not become incoherent because agents can generate enormous quantities of code. Deeper coherence, not decorative sprawl.
+ - Monkeybee is not adding 3D PDF support, OCR, document understanding, accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1. Those are post-v1 lanes.
+ 
++- Monkeybee is not making v1 depend on theorem provers, zero-knowledge proofs, CRDT collaboration, reactive execution, or AI agents. Those may be layered later, but the baseline must stand without them.
++- Monkeybee is not exposing unconstrained LLM-edit surfaces that can mutate PDFs without stable anchors, typed proposals, policy checks, or receipts.
++- Monkeybee is not using "future-proofing" as an excuse for vague substrate hand-waving. The core substrate decisions must be explicit before subsystem fan-out.
++
+ ### Alien artifact doctrine
+ 
+ Monkeybee aspires to feel like an alien artifact in the only sense that matters: a disturbing combination of breadth, depth, coherence, and evidence. Not arbitrary exotic cleverness. Not decorative math. A system where the renderer, document model, extraction layer, mutation substrate, generation path, compatibility handling, and proof machinery all feel like manifestations of one underlying idea rather than a pile of features.
+@@ -47,9 +81,26 @@
+ 3. Baseline v1 must prefer simple, auditable defaults over compact or exotic defaults.
+ 4. An experimental path becomes default only after it beats the baseline on correctness or cost under the proof harness.
+ 
++
++### Substrate delivery doctrine
++
++Monkeybee's most important new architectural commitment is a concrete persistent incremental
++substrate. That substrate is baseline architecture, not an optional research flourish.
++
++The baseline substrate must provide:
++- content-addressed roots for syntax, semantics, preserved bytes, and temporal lineage
++- exact dependency-tracked recomputation for derived artifacts
++- explicit preservation claims for every edit and write plan
++- machine-readable certificates tying saves, diffs, and diagnostics back to substrate digests
++
++More exotic extensions — theorem-prover-backed invariants, zk attestations, reactive bindings,
++differential layout optimization, collaborative CRDT layers — are permitted only as layers on top
++of the baseline substrate. They may enrich the evidence model, but they may not become hidden
++prerequisites for correctness.
++
+ ### Delivery spine
+ 
+-Monkeybee defines five release slices:
++Monkeybee defines six release slices:
+ 
+ 0. **Slice F — Foundation freeze**
+    - identity model (`DocumentId`, `SnapshotId`, `ResourceFingerprint`)
+@@ -58,6 +109,10 @@
+    - render/content/paint boundary freeze
+    - scope registry bootstrap (see Part 8)
+    - cache-key doctrine finalized before subsystem fan-out
++   - content-addressed snapshot substrate + root-digest schema
++   - incremental query engine + exact invalidation semantics
++   - preservation algebra + invariant certificate schema
++   - temporal revision model + semantic-anchor identity rules
+ 
+ 1. **Slice A — Reader kernel**
+    - open/parse/repair
+@@ -78,16 +133,28 @@
+    - progressive page/region render
+    - prefetch planning + refinement
+ 
++
+ 4. **Slice D — External proof**
+    - pathological corpus
+    - compatibility ledger
+    - multi-oracle render comparison
+    - CI scorecards and regression gates
++   - invariant certificates, hypothesis ledgers, and failure capsules
++
++5. **Slice E — Intelligence / forensics / collaboration (post-v1)**
++   - temporal revision replay and historical inspection surfaces
++   - spatial-semantic graph + typed query interface
++   - agent-safe edit proposals anchored by stable semantic IDs
++   - collaborative delta merge / CRDT research lane
++   - optional provenance attestations (Merkle-first, zk-later)
+ 
+ **v1 release requirement:** Slice F + Slice A + Slice B + Slice D.
+ 
+ No feature bead may begin implementation until its Slice F dependencies are ratified.
++
+ **v1 optional beta lane:** Slice C may ship behind a feature flag if it threatens v1 critical path.
++**post-v1 expansion lane:** Slice E is intentionally non-blocking so Monkeybee can absorb higher-order
++document-intelligence features without destabilizing the v1 kernel.
+ 
+ Every task in the roadmap must declare its owning slice.
+ 
+@@ -539,6 +606,28 @@
+ A user compares two PDFs or two snapshots and receives a unified diff: structural changes,
+ text changes, render deltas, signature impact, and compatibility-tier changes.
+ 
++
++### Workflow 11: Time-travel and revision forensics
++
++A user loads a PDF with multiple incremental updates, signatures, or suspicious late-stage edits and
++asks not merely "what does the latest state look like?" but "how did it get here?" Monkeybee can
++inspect the revision chain, materialize historical snapshots, diff any two revision frames,
++re-render historical states, and explain which objects changed at each step.
++
++Proof surfaces: revision-replay harness, historical render/extract equivalence checks, signed-range
++impact verification, and per-frame change receipts.
++
++### Workflow 12: Queryable semantic anchors and agent-safe edits
++
++A user or agent loads a PDF and queries it through a typed, geometry-aware semantic graph rather
++than by scraping raw text. The caller can locate a table cell, paragraph, form field, annotation,
++or signature region by stable semantic anchor; then propose a constrained edit, highlight,
++redaction, or extraction workflow against that anchor. Monkeybee validates the proposal against the
++current snapshot, policy, ownership rules, and preservation constraints before applying anything.
++
++Proof surfaces: anchor-stability tests across safe rewrites, query determinism checks, proposal
++validation logs, and edit receipts that point back to anchor IDs and substrate digests.
++
+ ---
+ 
+ ## Part 2 — Compatibility target
+@@ -825,20 +914,75 @@
+ All other workspace crates are implementation crates unless explicitly re-exported by `monkeybee`.
+ The workspace layout is not itself the public API contract.
+ 
+-Monkeybee is a Cargo workspace with five explicit strata:
++Monkeybee is a Cargo workspace with six explicit strata:
+ 1. **Byte/revision layer** — immutable source bytes plus appended revisions.
+-2. **Syntax/COS layer (`monkeybee-syntax`)** — immutable parsed objects, token/span provenance,
++2. **Persistent substrate/query layer (`monkeybee-substrate`)** — content-addressed roots,
++   structural sharing, temporal lineage, invariant certificates, and dependency-tracked query
++   recomputation. This is the computational kernel that makes snapshot/diff/undo/invalidation
++   claims concrete.
++3. **Syntax/COS layer (`monkeybee-syntax`)** — immutable parsed objects, token/span provenance,
+    xref provenance, object-stream membership, raw formatting retention, and repair records.
+    This is the preservation boundary.
+-3. **Semantic document layer (`monkeybee-document`)** — resolved page/resource/object graph built
+-   from syntax snapshots; it owns semantic meaning, not raw-byte fidelity.
+-4. **Content layer** — parsed content-stream IR and interpreter shared by render/extract/inspect/edit.
+-5. **Facade/report layer** — `monkeybee` (stable public API), `monkeybee-diff`, `monkeybee-signature`, and `monkeybee-cli`.
++4. **Semantic document layer (`monkeybee-document`)** — resolved page/resource/object graph built
++   from syntax snapshots and substrate roots; it owns semantic meaning, not raw-byte fidelity.
++5. **Content layer** — parsed content-stream IR and interpreter shared by render/extract/inspect/edit.
++6. **Facade/report layer** — `monkeybee` (stable public API), `monkeybee-diff`, `monkeybee-signature`, and `monkeybee-cli`.
+ 
+ `monkeybee-core` is intentionally small; it provides shared primitives rather than becoming a god crate.
+ `monkeybee-syntax` is intentionally dumb but durable: it preserves what the parser saw and what the
+ repair engine inferred, without forcing the semantic layer to own raw syntax detail.
+ All open paths operate on a `ByteSource` trait so the architecture supports mmap files, in-memory buffers, and future range-backed sources.
++
++
++`monkeybee-substrate` is intentionally not a god crate. It does not own PDF semantics, parsing,
++rendering, or write policy; it owns the persistent computational substrate that those layers share.
++`monkeybee-syntax` remains dumb but durable. `monkeybee-document` remains semantically rich. The
++substrate exists so those crates do not each reinvent structural sharing, diffing, lineage, and
++invalidation in slightly incompatible ways.
++
++### Persistent incremental document substrate
++
++Monkeybee's substrate is a content-addressed, structurally shared document store backed by
++cryptographic digests (BLAKE3 in the baseline design, abstracted behind a digest trait if later
++research warrants alternatives). The substrate is the concrete answer to the spec's current claim
++that snapshots are "structurally shared by default."
++
++```
++pub struct NodeDigest(pub [u8; 32]);
++
++pub enum SubstrateNode {
++    RawSpan { source: ByteSpanRef },
++    ParsedCos { kind: CosKind, children: Vec<NodeDigest> },
++    SemanticObject { kind: SemanticKind, children: Vec<NodeDigest> },
++    DerivedIndex { kind: DerivedIndexKind, children: Vec<NodeDigest> },
++}
++
++pub struct SnapshotRoot {
++    pub syntax_root: NodeDigest,
++    pub semantic_root: NodeDigest,
++    pub preserve_root: NodeDigest,
++    pub lineage_root: NodeDigest,
++    pub hypothesis_set: HypothesisSetId,
++    pub query_epoch: u64,
++}
++```
++
++Rules of the substrate:
++- leaves may refer zero-copy to original byte spans; preserve-mode raw bytes are first-class nodes,
++  not side tables
++- interior node digests include normalized local payload + ordered child digests
++- snapshot creation is root creation, not document cloning
++- diffing skips identical digests and descends only into changed subtrees
++- undo is historical root selection; redo is ordinary forward movement to another root
++- cross-snapshot reuse is keyed by digests and manifest-qualified view state, never by mutable
++  object addresses
++- every write, diff, and proof artifact may point back to substrate digests for causal explanation
++
++This design makes several core properties natural rather than bespoke:
++- O(1) historical snapshot handles
++- O(changed subgraph) structural diffs and exact invalidation
++- zero-copy preserve workflows for untouched spans
++- digest-backed write receipts, semantic anchors, and temporal replay
+ 
+ ### Engine / session / snapshot model
+ 
+@@ -848,6 +992,29 @@
+   Snapshot creation must be copy-on-write / persistent-data-structure based; full-document cloning
+   is a fallback of last resort, not the baseline design.
+ - `EditTransaction` consumes a snapshot and produces a new snapshot plus a serializable delta.
++
++
++`PdfSnapshot` is therefore not a bag of mutable hash maps. It is an immutable semantic view over a
++`SnapshotRoot` plus policy-qualified query handles. The user-facing `SnapshotId` remains the stable
++API identity, but internally every snapshot also has a digestable substrate root that can back
++replay, diff, receipts, and change attribution.
++
++```
++pub struct SnapshotLineage {
++    pub snapshot_id: SnapshotId,
++    pub root: SnapshotRoot,
++    pub parent: Option<SnapshotId>,
++    pub transaction_intent: Option<TransactionIntent>,
++    pub change_digest: [u8; 32],
++}
++
++pub struct SnapshotDelta {
++    pub changed_objects: Vec<ObjRef>,
++    pub changed_node_digests: Vec<NodeDigest>,
++    pub invalidated_queries: Vec<QueryKey>,
++    pub preserved_properties: Vec<PreservationClaim>,
++}
++```
+ 
+ `CapabilityReport` is an early open artifact: it is produced during `OpenProbe` (before full open)
+ and refined after full parse. It is not merely a workflow promise.
+@@ -870,6 +1037,10 @@
+     pub recovery_confidence: RecoveryConfidence,
+     pub ambiguity_count: u32,
+     pub active_content: ActiveContentReport,
++    pub substrate_digest: [u8; 32],
++    pub temporal_revision_depth: u32,
++    pub hypothesis_summary: Option<HypothesisSetSummary>,
++    pub semantic_surface: Option<SemanticSurfaceSummary>,
+ }
+ 
+ pub struct SaveConstraintReport {
+@@ -879,6 +1050,19 @@
+     pub allowed_incremental_ops: Vec<SaveOperationKind>,
+     pub blocked_ops: Vec<BlockedSaveOperation>,
+     pub signature_impact: SignatureImpactReport,
++}
++
++pub struct HypothesisSetSummary {
++    pub set_id: HypothesisSetId,
++    pub candidate_count: u32,
++    pub chosen: Option<RecoveryCandidateId>,
++    pub unresolved_material_ambiguities: u32,
++}
++
++pub struct SemanticSurfaceSummary {
++    pub has_layout_graph: bool,
++    pub has_semantic_anchors: bool,
++    pub anchor_policy: AnchorStabilityPolicy,
+ }
+ ```
+ 
+@@ -920,6 +1104,44 @@
+ ```
+ 
+ `engine.open(...)` may accept a prior probe result to avoid duplicate work.
++
++
++### Hypothesis set and candidate collapse contract
++
++Ambiguous tolerant parsing is promoted from a diagnostic side note to a first-class artifact.
++Monkeybee maintains a bounded `HypothesisSet` whenever materially different repairs survive initial
++probe/open analysis.
++
++```
++pub struct HypothesisSet {
++    pub set_id: HypothesisSetId,
++    pub candidates: Vec<HypothesisCandidate>,
++    pub collapse_policy: HypothesisCollapsePolicy,
++}
++
++pub struct HypothesisCandidate {
++    pub candidate_id: RecoveryCandidateId,
++    pub snapshot_root: SnapshotRoot,
++    pub confidence: f64,
++    pub evidence: Vec<HypothesisEvidence>,
++}
++
++pub struct HypothesisEvidence {
++    pub source: String,
++    pub score_delta: f64,
++    pub reason: String,
++}
++```
++
++Baseline v1 behavior remains practical:
++- `engine.open()` returns the highest-confidence candidate plus full alternative summaries
++- `engine.open_with_candidate(...)` can force a specific candidate for forensic or debugging work
++- all receipts and ledgers for ambiguous files record the originating hypothesis set ID
++- if a caller selects a policy that forbids unresolved ambiguity, the open is rejected explicitly
++
++Post-v1, deeper parts of the stack may choose to carry multiple live candidates longer, but the
++current architectural requirement is simpler and stricter: ambiguity must remain observable,
++serializable, and auditable all the way to the proof artifacts.
+ 
+ ### Complexity fingerprint and admission contract
+ 
+@@ -1143,9 +1365,49 @@
+ 
+ All caches, proofs, and invalidation logic key off `snapshot_id`, never mutable in-place document state. This lifecycle model makes page-parallel render/extract, stable PagePlan caches, preserve/incremental save correctness, reproducible proof artifacts, and future viewer/editor use all straightforward because nothing mutates in place.
+ 
++
++
++### Incremental query engine doctrine
++
++The current spec already names the major caches. The refinement here is that those caches are not
++conceptually seven unrelated hash maps; they are materialized query families over the persistent
++substrate.
++
++Every derived artifact in Monkeybee — resolved resources, page plans, rendered tiles, extracted
++surfaces, semantic graphs, write plans, diff reports, and proof receipts — is modeled as a query
++with declared dependencies and memoized results.
++
++```
++trait QueryEngine {
++    fn get<Q: QuerySpec>(&self, key: Q::Key, ctx: &ExecutionContext) -> Q::Value;
++}
++
++fn resolved_resources(page_index: u32) -> ResolvedResources;
++fn page_plan(page_index: u32, mode: PagePlanMode) -> PagePlan;
++fn rendered_tile(page_index: u32, tile: TileId, profile: RenderProfile) -> RasterTile;
++fn extract_surface(page_index: u32, surface: ExtractSurfaceKind) -> ExtractSurface;
++fn semantic_graph(page_index: u32, profile: ExtractProfile) -> SpatialSemanticGraph;
++fn write_plan(snapshot_id: SnapshotId, mode: WriteMode) -> WritePlan;
++fn diff(a: SnapshotId, b: SnapshotId, mode: DiffMode) -> DiffReport;
++```
++
++Required properties:
++- queries record the substrate digests and dependent query keys they observed
++- if none of a query's transitive input digests changed, recomputation is forbidden; the cached
++  result must be reused
++- if any transitive input digest changed, reuse is forbidden unless the query spec explicitly
++  defines a partial-reuse rule
++- invalidation is driven by changed digests and graph edges, not by broad subsystem-wide flushes
++- query traces are explainable through `TraceEventStream`
++
++This is a major improvement over the current plan because it converts several ambitious promises —
++"exact invalidation," "cache reuse across snapshots," "only rerender the touched page," "diff only
++changed structure," and "history replay without reparsing the world" — into one reusable
++architectural mechanism.
++
+ ### Cache management doctrine
+ 
+-All caches are governed by a single `CachePolicy`.
++All query materializations and caches are governed by a single `CachePolicy`.
+ 
+ `CachePolicy` defines:
+ - in-memory byte budget
+@@ -1180,7 +1442,11 @@
+ - `PagePlanCache`          key=(cache_namespace, page_index, dependency_fingerprint, pageplan_mode_hash)
+ - `RasterTileCache`        key=(cache_namespace, page_index, tile_id, dpi, completeness, render_profile_hash)
+ - `ColorTransformCache`    key=(icc_fingerprint, intent, target_space)
++
+ - `ResolvedResourceCache`  key=(snapshot_id, page_index, inheritance_fingerprint)
++- `SemanticGraphCache`     key=(cache_namespace, page_index, extract_profile_hash)
++- `InvariantCertificateCache` key=(before_snapshot_id, after_snapshot_id, write_mode, proof_profile_hash)
++- `TemporalReplayCache`    key=(document_id, revision_frame_id, view_state_hash)
+ 
+ - No cache is unbounded in any runtime, including native and WASM.
+ - WASM uses smaller default budgets, not different cache semantics.
+@@ -1400,6 +1666,23 @@
+ - Raw span ownership for preserve-mode byte-perfect write-back
+ - No PDF-semantic understanding — purely byte-level
+ 
++
++#### `monkeybee-substrate`
++
++Persistent computational substrate shared across syntax, document, diff, proof, and writeback.
++
++Key responsibilities:
++- content-addressed node store for raw spans, parsed COS nodes, semantic nodes, and derived indexes
++- snapshot root creation, structural sharing, and subtree-delta computation
++- dependency-tracked incremental query engine
++- temporal revision graph and historical snapshot materialization
++- invariant certificate generation and digest-backed provenance plumbing
++- bounded hypothesis-set storage and candidate lineage
++
++`monkeybee-substrate` owns no PDF feature semantics by itself. It owns the persistent machinery
++that lets higher layers express those semantics without giving up exact invalidation, cheap
++snapshots, or proof-quality receipts.
++
+ #### `monkeybee-syntax`
+ 
+ First-class syntax/COS layer between the parser and the semantic document model. This is the preservation boundary.
+@@ -1473,6 +1756,67 @@
+ an incrementally updated graph (only the changed subgraph is recomputed).
+ 
+ - Derived-artifact invalidation (PagePlan, resolved resources, decoded streams, widget appearances)
++
++
++### Temporal revision graph contract
++
++Incremental-update chains are not just a parser concern. They form a first-class temporal graph that
++can be queried, replayed, and diffed.
++
++```
++pub struct RevisionFrame {
++    pub frame_id: RevisionFrameId,
++    pub byte_range: (u64, u64),
++    pub snapshot_id: SnapshotId,
++    pub parent: Option<RevisionFrameId>,
++    pub appended_objects: Vec<ObjRef>,
++    pub signature_state: SignatureSummary,
++}
++
++pub struct TemporalRevisionGraph {
++    pub frames: Vec<RevisionFrame>,
++    pub latest: RevisionFrameId,
++}
++```
++
++Required behavior:
++- `OpenSession` can enumerate all recoverable revision frames in order
++- any historical frame can be materialized as a read-only `PdfSnapshot`
++- rendering, extraction, inspection, and diffing must all be definable against historical
++  snapshots, not only the latest state
++- unchanged substrate nodes are reused across frames; replay is not permitted to devolve into
++  blind full-document reparsing of each revision unless the file is so damaged that no stronger
++  strategy survives
++- proof artifacts for signed or litigated documents must be able to cite the exact frame used
++
++### Snapshot query interface
++
++Monkeybee should expose a typed snapshot query surface rather than forcing every advanced workflow
++through raw object traversal.
++
++```
++let fonts = snapshot.query().pages(3..4).resources().fonts().collect::<Vec<_>>();
++
++let hits = snapshot
++    .query()
++    .all_pages()
++    .text_runs()
++    .filter(|run| run.font_size > 14.0)
++    .filter(|run| run.text.contains("CONFIDENTIAL"))
++    .with_geometry()
++    .collect::<Vec<_>>();
++
++let history = session
++    .history()
++    .between(frame_a, frame_b)
++    .structural()
++    .semantic()
++    .visual();
++```
++
++The query API is not ornamental sugar. It is the stable, typed boundary that lets viewers,
++forensics tools, automation, and future agent adapters ask meaningful questions without duplicating
++internal traversal logic.
+ 
+ #### `monkeybee-catalog`
+ 
+@@ -2228,6 +2572,11 @@
+ 
+ Key responsibilities:
+ - Internal `LayoutGraph` IR: spans, lines, blocks, reading-order edges, tag links, table/column hypotheses, and confidence scores
++- `SpatialSemanticGraph`: a richer graph of semantic nodes (paragraphs, cells, figures, fields,
++  annotations, signatures, regions) with reading-order, containment, geometric-adjacency,
++  dependency, and revision-lineage edges
++- Stable semantic anchors derived from snapshot-aware hashes so downstream tooling can refer to
++  document regions without scraping ad hoc coordinates from raw text output
+ - Multi-surface text extraction built on `monkeybee-text`:
+   - `PhysicalText` (glyphs, quads, exact geometry)
+   - `LogicalText` (reading-order text with per-block confidence)
+@@ -2242,6 +2591,7 @@
+ ```
+ pub struct ExtractResult {
+     pub layout_graph: Arc<LayoutGraph>,
++    pub semantic_graph: Option<Arc<SpatialSemanticGraph>>,
+     pub surface: ExtractSurface,
+     pub report: ExtractReport,
+ }
+@@ -2519,6 +2869,64 @@
+ - `monkeybee trace <file>` — emit page/subsystem spans, repair decisions, cache statistics, and budget consumption as JSON
+ - `monkeybee signatures <file>` — inspect signature dictionaries, byte ranges, CMS envelope metadata, and provider-backed verification results
+ 
++
++
++### Semantic anchor and agent-facing contract
++
++Monkeybee should expose stable semantic anchors so that viewers, automation, and future AI/native
++integrations can refer to document meaning without depending on fragile page-local heuristics.
++
++```
++pub struct SemanticAnchorId(pub [u8; 32]);
++
++pub enum SemanticNodeKind {
++    Page,
++    Paragraph,
++    Line,
++    Span,
++    Table,
++    TableCell,
++    Figure,
++    FormField,
++    Annotation,
++    Signature,
++    Region,
++}
++
++pub struct SemanticNode {
++    pub anchor_id: SemanticAnchorId,
++    pub kind: SemanticNodeKind,
++    pub page_index: u32,
++    pub bbox: Rectangle,
++    pub text_excerpt: Option<String>,
++    pub depends_on: Vec<ObjRef>,
++    pub source_span_ids: Vec<SpanId>,
++}
++
++pub struct EditProposal {
++    pub proposal_id: String,
++    pub anchors: Vec<SemanticAnchorId>,
++    pub op: SemanticEditOp,
++    pub precondition_snapshot: SnapshotId,
++    pub precondition_digest: [u8; 32],
++    pub intent: EditIntent,
++}
++```
++
++Required properties:
++- anchor IDs are deterministic for a given snapshot + extraction profile
++- safe rewrites and incremental appends SHOULD preserve anchor IDs for semantically unchanged
++  regions; when they cannot, Monkeybee emits an alias map rather than silently drifting
++- agent-facing or external edit APIs operate on typed `EditProposal`s and yield ordinary
++  `EditTransaction` receipts; they do not bypass ownership, policy, preservation, or signature
++  planning rules
++- a future JSON-RPC/WASM adapter may expose this surface, but the core guarantee lives in the
++  engine proper, not in one transport
++
++This absorbs the best part of the "AI-native PDF" plans without sacrificing discipline: the engine
++becomes queryable and automatable because it exposes typed semantic anchors, not because it hands an
++LLM a bag of text and hopes for the best.
++
+ ### CLI output discipline
+ 
+ All CLI commands follow a consistent output contract:
+@@ -2658,6 +3066,23 @@
+ - `ResourceFingerprint` identifies immutable reusable artifacts across snapshots/documents.
+ 
+ No cache may key cross-document data by `ObjRef` alone.
++
++
++### Root digest and substrate identity invariant
++
++Every snapshot carries multiple digest surfaces:
++- `syntax_digest` — normalized digest of the preserved/parsed COS layer
++- `semantic_digest` — digest of the semantic object graph and ownership state
++- `preserve_digest` — digest of all byte-preserved spans that remain relevant to writeback
++- `lineage_digest` — digest of temporal ancestry and change-set linkage
++
++Digest equality is stronger than object-number equality and weaker than byte-for-byte file identity.
++It is the right granularity for structural sharing, cache reuse, semantic anchor stability,
++certificate generation, and diff short-circuiting.
++
++Required rule: no subsystem may claim two states are "the same" purely because the same `ObjRef`s
++exist. Equivalence must always be stated in terms of explicit digests or explicit preservation
++claims.
+ 
+ ### Provenance preservation
+ 
+@@ -2799,6 +3224,29 @@
+ - Deleted objects are recorded in the free list. Their generation number is incremented.
+ - Reference integrity is maintained by a reference index: the model knows which objects reference which other objects, enabling orphan detection and referential integrity checks before save.
+ 
++
++### Collaboration-ready delta invariant
++
++Monkeybee v1 does **not** promise automatic multi-writer merge. The current refinement is more
++foundational: transaction deltas must be serializable, causally ordered, and rich enough that a
++future collaboration layer can be added without replacing the core mutation model.
++
++This means every committed delta records:
++- causal parent snapshot
++- touched object digests before and after
++- semantic intent and ownership transitions
++- conflict set boundaries precise enough for deterministic rebase
++
++A post-v1 CRDT or multiplayer layer may build on this. It is explicitly not allowed to force v1 to
++adopt weaker local guarantees in exchange for speculative future collaboration.
++
++### Ambiguity and hypothesis invariant
++
++Any artifact derived from an ambiguous parse or repair path must carry hypothesis lineage until the
++caller or engine policy has legitimately collapsed it. Render reports, extraction results,
++diff reports, write plans, and proof ledgers for ambiguous files must all be traceable back to the
++originating hypothesis set.
++
+ ### Dependency and invalidation invariant
+ 
+ Every cached or derived artifact must be traceable to the objects and inherited state that produced it.
+@@ -2809,6 +3257,58 @@
+ 
+ This invariant ensures that the engine never serves stale caches and never grossly over-invalidates after small edits.
+ 
++
++
++### Preservation algebra
++
++Preservation is not a vague aspiration. Monkeybee models what each transform preserves,
++invalidates, or intentionally destroys.
++
++```
++pub enum PreservedProperty {
++    ByteRange { start: u64, end: u64 },
++    ObjectIdentity(ObjRef),
++    StructuralValidity,
++    VisualEquivalence { page_index: u32 },
++    SemanticEquivalence,
++    TaggedStructureIntegrity,
++    FormFieldSemantics,
++    AnnotationGeometry,
++    SignatureValidity(ObjRef),
++}
++
++pub enum TransformClass {
++    AddAnnotation,
++    FillField,
++    SetMetadata,
++    ReorderPages,
++    FlattenAnnotation,
++    Redact,
++    IncrementalAppend,
++    FullRewrite,
++    Optimize,
++}
++
++pub struct PreservationClaim {
++    pub property: PreservedProperty,
++    pub verdict: PreservationVerdict,
++    pub reason: String,
++    pub evidence: Vec<CausalRef>,
++}
++```
++
++Composition rules:
++- if two transforms each preserve property `P` and their touch sets do not conflict, the composed
++  transform preserves `P`
++- signature safety is derived, not guessed: a save is signature-safe only if all signed byte ranges
++  and policy-relevant structural claims remain preserved
++- redaction is modeled explicitly as anti-preservation: the engine must prove what was removed and
++  what surrounding properties still hold
++- `WritePlan` classification is derived from preservation claims + ownership + write mode, not from
++  ad hoc heuristics alone
++
++Baseline v1 implements this with an auditable rule engine and receipts. Stronger external proof
++mechanisms may be layered later, but the preservation algebra itself is baseline architecture.
+ ### Save planning invariant
+ 
+ Before any write, Monkeybee computes a `WritePlan` that classifies each touched object as one of:
+@@ -2817,6 +3317,14 @@
+ 
+ `WritePlan` is surfaced to the API/CLI and to the compatibility ledger. Signature-safe workflows
+ must be explainable before bytes are emitted, not inferred after the fact.
++
++
++`WritePlan` is therefore the executable frontier of the preservation algebra. For every touched
++object and every caller-visible preservation claim, the plan records whether the engine will:
++- preserve bytes verbatim
++- append a superseding object without mutating old bytes
++- rewrite owned semantics while preserving higher-level properties
++- invalidate specific properties with an explicit, cited reason
+ 
+ ### Signature safety proof artifact contract
+ 
+@@ -2845,16 +3353,48 @@
+     pub snapshot_id: SnapshotId,
+     pub write_mode: WriteMode,
+     pub write_plan_digest: [u8; 32],
++    pub pre_snapshot_digest: [u8; 32],
++    pub post_snapshot_digest: [u8; 32],
++    pub delta_digest: [u8; 32],
+     pub bytes_appended: u64,
+     pub preservation: BytePreservationMap,
+     pub signature_coverage: Vec<SignedCoverageEntry>,
+     pub ownership_transitions: Vec<OwnershipTransitionRecord>,
++    pub invariant_certificate: Option<InvariantCertificate>,
++    pub hypothesis_set: Option<HypothesisSetSummary>,
+     pub post_write_validation: Vec<ValidationFinding>,
+ }
+ ```
+ 
+ `WritePlan.execute()` SHOULD return:
+ `OperationSuccess<WriteResult { bytes, receipt: Option<WriteReceipt> }>`
++
++
++### Invariant certificate contract
++
++Every write, diff, redaction application, and history-replay export MAY additionally emit an
++`InvariantCertificate`. In baseline form this is a Merkle/digest-backed receipt, not a theorem
++prover artifact and not a zk dependency.
++
++```
++pub struct InvariantCertificate {
++    pub certificate_version: String,
++    pub before_digest: [u8; 32],
++    pub after_digest: [u8; 32],
++    pub delta_digest: [u8; 32],
++    pub preserved: Vec<PreservationClaim>,
++    pub invalidated: Vec<PreservedProperty>,
++    pub trace_digest: [u8; 32],
++    pub external_attestations: Vec<ExternalAttestationRef>,
++}
++```
++
++Rules:
++- baseline certificates are generated entirely inside Monkeybee with pinned digest algorithms
++- optional external attestations (PKI timestamps, notarization, future zk proofs) attach to the
++  certificate; they do not replace the baseline receipt schema
++- certificate production is deterministic under deterministic mode
++- proof harnesses can independently recompute certificate digests for validation
+ 
+ **WritePlan classification rules:**
+ 
+@@ -3217,6 +3757,33 @@
+ 
+ The graphics state machine (CTM, color state, text state, line properties, clipping path, blend mode, transparency, overprint, rendering intent) must be implemented as a single shared stack machine. Push/pop via `q`/`Q` operators must be precise. State inheritance across content streams (page → form XObject → tiling pattern) must follow the spec.
+ 
++
++The refinement here is that the graphics state is specified as a transition algebra, not merely as a
++mutable bag of fields.
++
++```
++pub struct GraphicsTransition {
++    pub before: GraphicsStateDigest,
++    pub after: GraphicsStateDigest,
++    pub emitted_effects: Vec<InterpreterEffect>,
++}
++
++fn transition(state: &GraphicsState, op: &Operator) -> TransitionResult;
++```
++
++Required algebraic properties:
++- `q`/`Q` form a well-bracketed stack discipline; imbalance is diagnosable and recoverable only via
++  explicit error-recovery rules
++- CTM composition is associative in operator order; derived geometry consumers must all consume the
++  same composed transform
++- clipping is monotone within a save/restore frame
++- render, extract, inspect, and edit consumers all observe the same operator transition stream and
++  differ only in their effect handlers
++
++This is one of the best ideas from the competing plans because it turns the current excellent but
++primarily descriptive graphics-state section into something derivable, property-testable, and safe
++for optimizer work.
++
+ **The graphics state contains:**
+ 
+ *Device-independent state:*
+@@ -3668,6 +4235,7 @@
+ 4. **Profile-specific validation:** When the target output is a supported v1 profile (PDF/A-4, PDF/X-6), the Arlington model encodes the additional constraints of that profile. The validator checks both base PDF conformance and profile-specific requirements. This is the foundation for the downlevel write mode.
+ 5. **Coverage metric:** Track which Arlington rules are exercised by the pathological corpus. Rules that are never exercised represent document structures the engine has never encountered — these are blind spots that should drive corpus acquisition.
+ 
++
+ ### Round-trip requirements
+ 
+ The following round-trip chains must pass on representative documents from the pathological corpus:
+@@ -3679,6 +4247,9 @@
+ 5. **Load → extract → verify against known ground truth** (extraction accuracy)
+ 6. **Load (preserve mode) → annotate → save (incremental) → reload → verify signatures** (signature preservation)
+ 7. **Load → save (full rewrite) → reload → render → compare to original render** (rewrite fidelity)
++8. **Load → enumerate revision frames → materialize historical snapshot → render/extract/diff** (temporal replay fidelity)
++9. **Load → extract semantic anchors → safe rewrite/incremental append → reload → verify stable anchors or alias map** (anchor stability)
++10. **Load ambiguous file → inspect hypothesis set → force candidate or auto-collapse → compare receipts** (hypothesis truthfulness)
+ 
+ **Specific failure modes each chain is designed to catch:**
+ 
+@@ -3695,6 +4266,12 @@
+ *Chain 6 (signature preservation):* Detects: byte-range corruption (existing bytes modified), structural changes to signed content, incremental-append errors that invalidate the document structure.
+ 
+ *Chain 7 (rewrite fidelity):* Detects: lossy canonicalization (information destroyed during save that affects rendering), stream re-encoding errors, object serialization bugs, font re-embedding errors.
++
++*Chain 8 (temporal replay fidelity):* Detects: incorrect reconstruction of historical incremental states, replay paths that accidentally inspect the latest snapshot instead of the requested frame, and revision-local signature/context leakage.
++
++*Chain 9 (anchor stability):* Detects: semantic-anchor drift for unchanged content, unstable geometry hashing, missing alias maps when safe rewrites legitimately change internal object identities, and query-interface regressions that break downstream automation.
++
++*Chain 10 (hypothesis truthfulness):* Detects: silent candidate collapse, missing hypothesis lineage in receipts/ledgers, and repair policies that return materially different semantics without user-visible evidence.
+ 
+ ### Compatibility ledger schema
+ 
+@@ -3845,6 +4422,20 @@
+ ledger output against the schema. Downstream tools (dashboards, CI gates, regression detectors)
+ consume the ledger via the schema.
+ 
++
++### Ledger extensions for roots, hypotheses, and certificates
++
++The compatibility ledger MUST grow to record substrate-aware evidence, not only human-readable
++feature summaries. Concretely, the schema family should include:
++- snapshot root digests for the analyzed document state
++- temporal revision depth and, when relevant, the specific revision frame inspected
++- hypothesis-set summaries for ambiguous files
++- invariant-certificate references for writes, diffs, redactions, and replay exports
++- semantic-surface summaries (layout graph present, semantic anchors present, anchor policy)
++
++This does **not** mean the ledger becomes a dumping ground for giant internal graphs. Large artifacts
++remain externalized and content-addressed; the ledger stores digests, summaries, and references.
++
+ ### External schema doctrine
+ 
+ The following outputs are schema-versioned external interfaces:
+@@ -3876,7 +4467,28 @@
+ 3. `ledger/` — per-document compatibility ledger JSON files
+ 4. `diffs/` — render comparison images for any page with MS-SSIM below threshold
+ 5. `timing.json` — per-test-class timing data for performance regression detection
+-6. `capsules/` — self-contained failure capsules for every material proof failure
++6. `certificates/` — invariant certificates and digest validation summaries
++7. `history/` — temporal replay artifacts for revision-backed fixtures
++8. `queries/` — semantic-anchor and typed-query expectation results
++9. `capsules/` — self-contained failure capsules for every material proof failure
++
++
++
++### Strategy tournament doctrine
++
++When Monkeybee has multiple candidate strategies for the same job — for example repair heuristics,
++render backends, layout analyzers, or optimization passes — the proof harness should run explicit
++strategy tournaments rather than relying on taste, anecdote, or benchmark cherry-picking.
++
++Rules:
++- every experimental strategy declares the baseline it competes with
++- tournaments compare correctness first, cost second
++- promotion requires corpus-level wins under pinned manifests and documented thresholds
++- automatic exploration (mutation search, candidate generation, offline tuning) is allowed, but no
++  strategy self-promotes without human-readable evidence and ordinary review
++
++This captures the best part of the "self-evolving harness" idea while staying faithful to the
++spec's auditable baseline-first doctrine.
+ 
+ ### Failure capsule doctrine
+ 
+@@ -4350,6 +4962,10 @@
+ - [ ] All three parse modes (Strict/Tolerant/Preserve) are functional.
+ - [ ] Both write modes (full rewrite, incremental append) are functional.
+ - [ ] Incremental-append save preserves existing digital signatures on representative signed documents.
++
++- [ ] Content-addressed snapshots, deltas, and structural sharing are operational and externally inspectable.
++- [ ] Historical revision inspection works on representative incremental-update documents.
++- [ ] Write receipts carry preservation claims and invariant-certificate references when requested.
+ 
+ ### Proof gates
+ 
+@@ -4366,6 +4982,10 @@
+   and pinned oracle evidence.
+ - [ ] Experimental backends are optional and benchmarked head-to-head against the baseline.
+ - [ ] Performance benchmarks exist for all benchmark classes.
++
++- [ ] Invariant certificates are emitted, schema-validated, and independently recomputable in proof mode.
++- [ ] Ambiguous-repair fixtures produce hypothesis-set evidence rather than silent collapse.
++- [ ] Temporal replay and semantic-anchor stability harnesses run on representative fixtures.
+ 
+ ### Test obligation matrix
+ 
+@@ -4386,6 +5006,11 @@
+ | color-space | render | ΔE₀₀ ≤2.0 vs reference on corpus | Per-pixel average |
+ | content-stream-stress | content | Complete without timeout on corpus | All ops processed |
+ | signature-preserve | write | 100% byte-range integrity | Byte comparison |
++
++| substrate-delta | substrate + document | 100% of edit fixtures | Changed-subgraph reuse + digest stability |
++| historical-replay | bytes + substrate + document | 100% of multi-revision fixtures | Frame-local render/extract/diff consistency |
++| hypothesis-recovery | parser + proof | ≥99% candidate-selection stability on ambiguous corpus or explicit unresolved classification | Candidate digests + evidence |
++| semantic-anchor-stability | extract | ≥95% stable anchors on semantically unchanged regions | Anchor/alias precision |
+ | redaction-safety | edit | Non-gating in v1 unless B-EDIT-003 is separately promoted |
+ 
+ **Regression policy:** A test class that was passing in the previous CI run and fails in the
+@@ -4437,6 +5062,10 @@
+ 
+ - [ ] Architectural gate: identity model (`DocumentId`, cache-key rules, snapshot/resource identity)
+   is finalized before parallel subsystem implementation begins.
++
++- [ ] Architectural gate: persistent substrate root/digest semantics are finalized before document/edit/diff work begins.
++- [ ] Architectural gate: incremental query engine dependency semantics are finalized before cache fan-out and performance work begins.
++- [ ] Architectural gate: preservation algebra and certificate schema are finalized before save-planning API stabilization.
+ - [ ] Architectural gate: dependency graph semantics (raw graph vs condensed DAG) are finalized
+   before edit/invalidation/writeback work begins.
+ - [ ] Architectural gate: session policy and per-operation `ExecutionContext` precedence rules are
+@@ -4459,6 +5088,17 @@
+ | Classic xref tables | Baseline | Simpler to audit, required for all PDFs |
+ | Cross-reference streams | Baseline (read), Post-baseline (write) | Must read; write deferred unless forced by compact mode |
+ | Object stream packing | Post-baseline | Requires xref streams, adds complexity |
++
++| Content-addressed persistent snapshots | Baseline | Grounds structural sharing, undo, diff, and exact invalidation |
++| Incremental query engine | Baseline | Required for large-document edit performance and exact reuse semantics |
++| Preservation algebra + invariant certificates | Baseline | Required for explainable save planning and signature evidence |
++| Recovery hypothesis tracking | Baseline | Required for truthful tolerant parsing on ambiguous inputs |
++| Temporal revision replay | v1_supported_non_gating | High-value forensic surface built on the incremental substrate |
++| Spatial-semantic graph + stable anchors | v1_advisory | Valuable for extraction/automation; not a v1 gate |
++| Agent-safe JSON/WASM edit API | Post-v1 | Depends on anchor stability and policy surfaces |
++| Collaborative CRDT merge | Post-v1 | Built on serializable deltas; not part of the v1 kernel |
++| Reactive document bindings | Experimental | Sandbox-heavy and non-essential to baseline engine reality |
++| External cryptographic / zk attestations | Experimental | Baseline Merkle receipts first; stronger proofs later |
+ | All standard filters (Flate, LZW, ASCII85, etc.) | Baseline | Required for real-world PDFs |
+ | JBIG2 decode | Baseline on `native-compatible`/`native-hardened`; explicit degradation on `wasm-strict` unless a proven pure-Rust path exists | Target-qualified support |
+ | JPEG 2000 decode | Baseline on `native-compatible`/`native-hardened`; explicit degradation on `wasm-strict` unless a proven pure-Rust path exists | Target-qualified support |
+@@ -4512,6 +5152,12 @@
+ - entropy-optimal write encoding
+ - probabilistic layout analysis
+ 
++- differential document morphing / layout optimization
++- reactive document binding DSL and sandbox
++- external attestations / zk-backed redaction and provenance proofs
++- collaboration layer and CRDT-backed delta merge
++- strategy tournaments and auto-tuning infrastructure
++
+ ---
+ 
+ ## Part 9 — Bead conversion appendix
+@@ -4532,6 +5178,15 @@
+ - B-BYTES-002: Revision chain tracking
+ - B-BYTES-003: Raw span ownership for preserve-mode
+ - B-BYTES-004: Fetch scheduler and prefetch planning for range-backed sources
++
++
++### Substrate beads
++- B-SUBSTRATE-001: Content-addressed node store and digest scheme
++- B-SUBSTRATE-002: Snapshot roots, structural sharing, and subtree-delta computation
++- B-SUBSTRATE-003: Incremental query engine and dependency tracking
++- B-SUBSTRATE-004: Temporal revision graph and historical snapshot materialization
++- B-SUBSTRATE-005: Invariant certificates and Merkle-backed provenance receipts
++- B-SUBSTRATE-006: Hypothesis-set storage and candidate-collapse records
+ 
+ ### Document layer beads
+ - B-DOC-001: Document model and ObjectStore
+@@ -4544,6 +5199,7 @@
+ - B-DOC-008: Reference integrity index (forward and reverse lookups)
+ - B-DOC-009: Dependency graph computation, storage, and query
+ - B-DOC-010: Cache management integration (bounded budgets, eviction, pinning)
++- B-DOC-011: Snapshot query interface and semantic-graph federation
+ 
+ ### Content layer beads
+ - B-CONTENT-001: Content stream parsing and operator dispatch
+@@ -4667,11 +5323,13 @@
+ - B-EXTRACT-003: Structure and resource inspection
+ - B-EXTRACT-004: Image and asset extraction
+ - B-EXTRACT-005: Diagnostic report generation
++- B-EXTRACT-006: Spatial-semantic graph and stable anchor generation
++- B-EXTRACT-007: Anchor aliasing and agent-facing proposal validation hooks
+ 
+ ### Proof beads
+ - B-PROOF-001: Pathological corpus acquisition and indexing
+ - B-PROOF-002: Render comparison harness
+-- B-PROOF-003: Round-trip validation harness (all seven chains)
++- B-PROOF-003: Round-trip validation harness (all ten chains)
+ - B-PROOF-004: Compatibility ledger system (per schema in Part 6)
+ - B-PROOF-005: Performance benchmark harness
+ - B-PROOF-006: Fuzz testing harness
+@@ -4680,6 +5338,9 @@
+ - B-PROOF-009: Arlington-model conformance validation integration
+ - B-PROOF-010: Corpus-level compatibility aggregation and regression tracking
+ - B-PROOF-011: Capability-matrix generation for README/site/CLI
++- B-PROOF-012: Strategy tournament framework for competing backends
++- B-PROOF-013: Historical replay harness
++- B-PROOF-014: Semantic-anchor stability harness
+ 
+ ### CLI beads
+ - B-CLI-001: Render command
+@@ -4693,6 +5354,9 @@
+ - B-CLI-009: Proof command
+ - B-CLI-010: Conformance command
+ - B-CLI-011: `capabilities` command (emit generated support matrix and proof provenance)
++- B-CLI-012: `history` command (enumerate and inspect revision frames)
++- B-CLI-013: `query` command (typed structural/semantic queries)
++- B-CLI-014: `explain` command (decision trace and preservation claims)
+ 
+ ### Checkpoint beads
+ - B-CHECK-001: Post-foundation Come-to-Jesus checkpoint (core + parser done, verify against North Star)
+@@ -4714,3 +5378,11 @@
+ - B-ALIEN-010: Probabilistic layout analysis for extraction (DBSCAN line detection, KDE column detection, Moran's I table detection)
+ - B-ALIEN-011: Arlington-model conformance validation (codegen from TSV, strict/tolerant integration, profile-specific checking)
+ - B-ALIEN-012: Kani proof harnesses (bounded allocation, no-panic lexer, reference termination, preserve-mode byte integrity)
++
++- B-ALIEN-013: Differential document morphing / layout optimization
++- B-ALIEN-014: Agent-facing semantic-anchor RPC surface
++- B-ALIEN-015: Merkle + optional zk attestation layer for writes and redactions
++- B-ALIEN-016: Temporal active-content replay sandbox
++- B-ALIEN-017: Collaborative delta / CRDT merge layer
++- B-ALIEN-018: Reactive document binding DSL and sandbox
++- B-ALIEN-019: Strategy tournament and offline auto-tuning harness
