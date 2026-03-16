@@ -48,7 +48,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 
 | Crate | Responsibility |
 |---|---|
-| `monkeybee` | Stable public facade: semver-governed `Engine`, `Session`, `Snapshot`, `EditTransaction`, `WritePlan`, `CapabilityReport`, and high-level open/render/extract/edit/save APIs |
+| `monkeybee` | Stable public facade: semver-governed `Engine`, `OpenProbe`, `Session`, `Snapshot`, `EditTransaction`, `WritePlan`, `CapabilityReport`, `DiffReport`, and high-level open/render/extract/edit/save APIs |
 | `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets, diagnostic streaming (DiagnosticSink), PDF version tracking, StreamHandle contract, provider traits (CryptoProvider, OracleProvider) |
 | `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduler (FetchScheduler trait), prefetch planning, revision chain, raw span ownership |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
@@ -63,6 +63,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, WritePlan classification, xref format decision rules, xref/trailer emission, structural validity, final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content stream rewrite pipeline |
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, widget/signature bridge |
+| `monkeybee-paint` | Shared page-independent paint and appearance primitives reused by render, compose, forms, and annotate |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
 | `monkeybee-extract` | Multi-surface text extraction, metadata, structure inspection, asset extraction, diagnostics |
 | `monkeybee-validate` | Arlington/profile validation, write preflight, signature byte-range checks |
@@ -97,12 +98,14 @@ monkeybee-pdf/
 │   ├── monkeybee-write/
 │   ├── monkeybee-edit/
 │   ├── monkeybee-forms/
+│   ├── monkeybee-paint/
 │   ├── monkeybee-annotate/
 │   ├── monkeybee-extract/
 │   ├── monkeybee-validate/
 │   ├── monkeybee-proof/
 │   └── monkeybee-cli/
 ├── docs/
+│   ├── scope_registry.yaml
 │   ├── architecture/
 │   ├── implementation/
 │   ├── testing/
@@ -110,6 +113,10 @@ monkeybee-pdf/
 │   └── adr/
 ├── tests/
 │   ├── corpus/
+│   │   ├── public/**/expectation.yaml
+│   │   ├── restricted/**/expectation.yaml
+│   │   ├── generated/**/expectation.yaml
+│   │   └── minimized/**/expectation.yaml
 │   ├── render/
 │   ├── roundtrip/
 │   ├── extraction/

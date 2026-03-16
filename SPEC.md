@@ -89,11 +89,9 @@ No feature bead may begin implementation until its Slice F dependencies are rati
 
 Every task in the roadmap must declare its owning slice.
 
-In concrete terms, "alien artifact" for this domain means:
-1. **Mathematical sophistication threaded through every hot path.** Where competing engines use brute force (supersampling for anti-aliasing, linear scan for CMap lookup, pixel-wise comparison for render diffing), Monkeybee uses genuinely stronger methods (exact analytic area coverage via Green's theorem, robust geometric predicates, multi-scale structural similarity, information-theoretic repair scoring, spectral-aware color science). These are not garnishes — they are the techniques that make the engine qualitatively different.
-2. **Correctness that is provable, not merely tested.** Exact area coverage gives mathematically correct anti-aliasing. Robust predicates eliminate floating-point degeneracy artifacts. Bayesian repair confidence gives auditable reasoning for every recovery decision. MS-SSIM gives perceptually valid render comparison. Each technique carries its own correctness proof.
-3. **Performance that comes from algorithmic insight, not just Rust's speed.** Tetrahedral interpolation is faster AND more accurate than trilinear. Tile-based lazy compositing is faster AND uses less memory than full-page buffers. Adaptive curvature-aware subdivision produces fewer triangles for the same visual quality. The alien artifact is not "fast because Rust" — it is fast because the algorithms are right.
-4. **An architecture that feels internally inevitable once understood.** The shared event-driven content stream interpreter, the unified geometry pipeline, the layered caching strategy, the composable parse/write modes, the compatibility ledger as the single evidence spine — these are not independent design decisions but consequences of the closed-loop thesis applied consistently.
+In concrete terms, "alien artifact" means unusual coherence, breadth, and evidence.
+The baseline contract specifies required behavior and proof thresholds.
+Advanced algorithm candidates live in `docs/architecture/EXPERIMENTAL_ANNEX.md`.
 
 ### Operational mode doctrine
 
@@ -582,7 +580,7 @@ PostScript XObjects (`/Subtype /PS`) embed raw PostScript code within a PDF. The
 
 **Encryption and security handler recovery**
 
-**Standard security handlers (V1-V5):** Support all standard encryption revisions. V1/V2 use RC4; V4 adds AES-128; V5 uses AES-256. The engine must support all of these for decryption. For output encryption, default to AES-256 (V5, R6) as the strongest standard option.
+**Standard security handlers (V1-V5):** Support all standard encryption revisions. V1/V2 use RC4; V4 adds AES-128; V5 uses AES-256. The engine must support all of these for decryption. Output encryption is a post-baseline, non-gating feature. It is disabled in the baseline v1 build. When the optional `write-encryption` feature is enabled and promoted, the default SHOULD be AES-256 (V5, R6).
 
 **Encryption key derivation specifics:**
 
@@ -665,6 +663,8 @@ pub struct CapabilityReport {
     pub signed: bool,
     pub encrypted: bool,
     pub tagged: bool,
+    pub structure_complexity: Option<StructureComplexity>,
+    pub structure_edit_risk: Option<StructureEditRisk>,
     pub has_xfa: bool,
     pub has_javascript: bool,
     pub risky_decoder_set: Vec<DecoderType>,
@@ -684,7 +684,9 @@ Before full open, the engine may perform an `OpenProbe`:
 probe = engine.probe(byte_source, probe_opts, &exec_ctx)?;
 ```
 
-`OpenProbe` is bounded and cheap. It may inspect:
+`OpenProbe` is bounded, cheap, and the default preflight for viewer/editor/CLI flows.
+`engine.open()` SHOULD accept a prior probe to avoid duplicate work.
+It may inspect:
 - header and declared version
 - tail region (`startxref`, `%%EOF`, update depth estimate)
 - linearization dictionary and first-page hint presence
@@ -1510,7 +1512,7 @@ Key responsibilities:
 
 Serializes the document model back to valid PDF bytes.
 
-`monkeybee-write` serializes a semantically complete document.
+`monkeybee-write` serializes a semantically complete document and never owns high-level content authoring.
 Authoring, page assembly, appearance generation, and builder-style APIs live in `monkeybee-compose`.
 
 Key responsibilities:
@@ -2220,6 +2222,8 @@ before any bytes are written.
 - `ownership_transitions`
 - `blocked_preserve_regions`
 - `full_rewrite_reasons`
+- `structure_impact`
+- `accessibility_impact`
 
 After `WritePlan`, the writer must compile a concrete `BytePatchPlan`:
 
@@ -2741,6 +2745,23 @@ during round-trips requires:
 ### Serialization contract
 
 The write path must produce bytes that are valid PDF. Cross-references must be correct. Object offsets must be accurate. Stream lengths must match. The output must be parseable by Monkeybee's own parser (self-consistency) and by reference implementations. Incremental saves must produce a valid append that does not corrupt the existing data.
+
+### Save commit contract
+
+For file-backed saves, Monkeybee uses staged commit semantics:
+1. Serialize to a temp file in the target directory.
+2. `fsync` the temp file.
+3. Re-open and validate according to the requested save policy.
+4. `fsync` the parent directory when supported.
+5. Atomically rename the temp file over the destination.
+6. On failure, preserve the original destination unchanged.
+
+Library APIs expose:
+- `save_to_bytes()`
+- `save_atomic(path, SaveCommitOptions)`
+- `save_atomic_with_backup(path, SaveCommitOptions)`
+
+`monkeybee-write` remains a serializer; staged commit is owned by the public facade / CLI adapter.
 
 **Self-consistency invariant:** Monkeybee must be able to parse its own output without errors in strict mode. This is a hard test requirement, not a soft aspiration. Every generated PDF is round-tripped through Monkeybee's strict-mode parser as part of the write-path test suite.
 
@@ -3526,13 +3547,30 @@ Every feature is assigned exactly one scope class:
 - `post_v1`
 - `experimental`
 
-The scope registry is machine-readable and CI-validated against:
+The canonical scope registry lives at `docs/scope_registry.yaml`.
+It is machine-readable and CI-validated against:
 - release gates
 - proof doctrine test classes
 - bead appendix
 - generated capability docs
+- README capability tables
+- CLI `capabilities --json`
+- workspace feature flags
+
+Each registry entry includes:
+- `feature_id`
+- `scope_class`
+- `support_classes`
+- `owning_crate`
+- `proof_class`
+- `schema_surfaces`
+- `bead_ids`
+- `notes`
 
 No feature may be `v1_gating` in one section and `post_v1` in another.
+
+`tagged_structure_preservation` MUST have an explicit scope class.
+Recommended initial classification: `v1_advisory`.
 
 ### Functional gates
 
@@ -3687,6 +3725,9 @@ Experimental algorithm details live in a dedicated annex.
 
 ### Experimental annex rule
 
+All research-heavy algorithm descriptions are informational unless a scope-registry entry marks them `v1_gating`.
+Mainline subsystem contracts must be satisfiable by the auditable baseline implementation.
+
 No baseline subsystem contract may require an experimental algorithm for correctness.
 Each experimental item must declare:
 - baseline implementation it competes with
@@ -3768,6 +3809,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-TEXT-004: Shaping, bidi, and font fallback
 - B-TEXT-005: Subsetting and ToUnicode generation for emitted PDFs
 - B-TEXT-006: Search, hit-testing, and selection primitives
+- B-TEXT-007: Final subset materialization for composed output
 
 ### Syntax beads
 - B-SYNTAX-001: Immutable parsed COS object representation
@@ -3810,6 +3852,8 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-COMPOSE-004: Form/widget appearance composition
 - B-COMPOSE-005: Font embedding planning and subsetting requests
 - B-COMPOSE-006: Content stream emission from high-level drawing/text operations
+- B-COMPOSE-007: Generated content stream assembly for pages, appearances, and flattening
+- B-COMPOSE-008: Resource closure handoff for serialization
 
 ### Write beads
 - B-WRITE-001: Object serialization
@@ -3817,10 +3861,8 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-WRITE-003: Stream compression
 - B-WRITE-004: Full document rewrite (deterministic mode)
 - B-WRITE-005: Incremental save (append mode)
-- B-WRITE-006: Content stream generation
 - B-WRITE-007: Self-consistency validation (parse own output in strict mode)
 - B-WRITE-008: Signature-safe preserve write path
-- B-WRITE-009: Font embedding and subsetting for generated content
 - B-WRITE-010: Output encryption (AES-256) [non-gating / post-baseline]
 - B-WRITE-011: WritePlan computation and classification
 - B-WRITE-012: Signature impact analysis for save planning

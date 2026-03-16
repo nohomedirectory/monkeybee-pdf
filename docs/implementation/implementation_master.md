@@ -204,6 +204,7 @@ monkeybee-pdf/
 │   │   │   ├── fuzz.rs           # fuzz testing coordination
 │   │   │   └── evidence.rs       # artifact generation
 │   │   └── Cargo.toml
+│   ├── monkeybee-paint/          # shared paint/appearance primitives (non-raster, page-independent)
 │   ├── monkeybee-native/         # all optional FFI/native bridges and broker adapters
 │   └── monkeybee-cli/            # command-line interface
 │       ├── src/
@@ -230,12 +231,13 @@ monkeybee-document      (depends on: core, bytes, syntax)    ← semantic layer 
 monkeybee-content       (depends on: core, document)         ← sink adapters: RenderSink, ExtractSink, InspectSink, EditSink
 monkeybee-text          (depends on: core, document, codec)  ← decode pipeline + authoring layout pipeline
     ↑
-monkeybee-render        (depends on: core, content, document, text, codec)  ← consumes content events, no own interpreter
-monkeybee-compose       (depends on: core, document, text, content)  ← authoring/builders, appearance gen
+monkeybee-paint         (depends on: core, text)
+monkeybee-render        (depends on: core, content, document, text, codec, paint)  ← consumes content events, no own interpreter
+monkeybee-compose       (depends on: core, document, text, content, paint)  ← authoring/builders, appearance gen
 monkeybee-write         (depends on: core, bytes, document, codec)   ← pure serializer
 monkeybee-edit          (depends on: core, document, content, compose, write)
-monkeybee-forms         (depends on: core, document, text, compose)
-monkeybee-annotate      (depends on: core, document, content, compose, forms)
+monkeybee-forms         (depends on: core, document, text, compose, paint)
+monkeybee-annotate      (depends on: core, document, content, compose, forms, paint)
 monkeybee-extract       (depends on: core, content, document, text)
 monkeybee-validate      (depends on: core, document)
 monkeybee-proof         (depends on: core, bytes, codec, security, parser, syntax, document, content, text, render, compose, write, edit, forms, annotate, extract, validate)
@@ -250,6 +252,11 @@ and graphics-state-aware content emission. `monkeybee-render` consumes the resul
 but is not a dependency of annotate/forms.
 
 Note: monkeybee-proof already lists security in its dependency list. Verified.
+
+`monkeybee` public modules:
+- `probe.rs`      # bounded pre-open inspection and complexity classification
+- `report.rs`     # CapabilityReport, WritePlanReport, DiffReport
+- `session.rs`    # Engine / Session / Snapshot facade
 
 ### Workspace Cargo.toml structure
 
@@ -303,8 +310,9 @@ Feature flags control the baseline-vs-experimental lane separation and optional 
 | `experimental-sdf` | monkeybee-render | Enable SDF glyph rendering path |
 | `wasm` | workspace | WASM-compatible build: no threads, no mmap, no system fonts |
 | `proof` | monkeybee-proof | Enable full proof harness (pulls in all reference renderers) |
+| `write-encryption` | monkeybee-write | Enable output encryption (default: off; non-gating) |
 
-Baseline v1 builds with: `tiny-skia`, `lcms2`, `openjpeg` (Compatible profile).
+Baseline v1 builds with: `tiny-skia`, `lcms2`, `openjpeg` (Compatible profile), and without `write-encryption`.
 Experimental features are opt-in and must beat the baseline under the proof harness before
 becoming default.
 
@@ -936,13 +944,16 @@ pub struct CacheConfig {
 /// All cache data structures are thread-safe (DashMap / sharded concurrent maps).
 pub struct CacheManager {
     pub config: CacheConfig,
-    pub decoded_streams: DashMap<(SnapshotId, ObjRef, u64), Arc<[u8]>>,
+    pub decoded_streams_local: DashMap<(SnapshotId, ObjRef, u64), Arc<[u8]>>,
+    pub decoded_streams_shared: DashMap<(ResourceFingerprint, u64), Arc<[u8]>>,
     pub doc_fonts: DashMap<(SnapshotId, ObjRef), Arc<ParsedFontInstance>>,
     pub shared_font_programs: DashMap<ResourceFingerprint, Arc<ParsedFontProgram>>,
     pub shared_icc_profiles: DashMap<ResourceFingerprint, Arc<ParsedIccProfile>>,
     pub shared_cmaps: DashMap<ResourceFingerprint, Arc<ParsedCMap>>,
+    pub glyph_bitmaps: DashMap<(ResourceFingerprint, GlyphId, QuantizedSize, QuantizedSubpixel), Arc<GlyphBitmap>>,
     pub page_plans: DashMap<(SnapshotId, usize), Arc<PagePlan>>,
-    pub raster_tiles: DashMap<(SnapshotId, usize, TileId, u32), Arc<TileData>>,
+    pub raster_tiles: DashMap<(SnapshotId, usize, TileId, u32, TileCompleteness, RenderProfileHash), Arc<TileData>>,
+    pub color_transforms: DashMap<(ResourceFingerprint, RenderingIntent, TargetSpace), Arc<ColorTransform>>,
 }
 
 /// Cache statistics for diagnostics and proof
@@ -953,6 +964,9 @@ pub struct CacheStats {
     pub current_bytes: usize,
     pub budget_bytes: usize,
 }
+
+pub struct RenderProfileHash(pub u64);
+pub enum TileCompleteness { Partial, Complete }
 ```
 
 ### Content stream rewriter (`monkeybee-edit::rewriter`)
@@ -1368,6 +1382,9 @@ PdfDocument
 - Ledger tests: compatibility ledger correctly categorizes known feature encounters.
 - Evidence tests: artifact generation produces valid, parseable output.
 - Ledger JSON schema tests: ledger output validates against the JSON schema (schema_version, input block, features array, repairs array, degradations array, summary block), version tracking fields (declared_version, effective_version) are populated correctly, schema versioning — breaking changes increment major version.
+- Corpus manifest tests: every fixture has an `ExpectationManifest`.
+- Regression tests: unknown degradations or scope-class violations fail unless triaged.
+- Triage fields: `approved`, `pending`, `known_bad`, `waived_until`, `owner`, `notes`.
 
 ## Subordinate implementation docs
 
@@ -1385,6 +1402,7 @@ Each of the following should be authored as the spec matures. They are design-to
 - `docs/implementation/compose.md` — document/page builders, resource naming, appearance generation, font embedding planning
 - `docs/implementation/writeback.md` — serialization, save modes, WritePlan computation, structural validation
 - `docs/implementation/extraction.md` — multi-surface text extraction, search primitives, metadata, diagnostics
+- `docs/implementation/proof-manifests.md` — expectation manifest schema, triage workflow, CI semantics
 
 ## Resolved design decisions
 
