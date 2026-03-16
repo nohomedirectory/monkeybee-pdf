@@ -725,6 +725,8 @@ The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 
 `monkeybee` is a dedicated facade crate at `crates/monkeybee/` and the only semver-stable public library crate.
 `monkeybee-diff` is an implementation crate that owns structural/text/render/save-impact comparison; `monkeybee` re-exports the stable diff API.
+`monkeybee-signature` is an implementation crate that owns signature dictionaries, byte-range maps,
+DocMDP/FieldMDP policy, timestamp/trust metadata, verification plumbing, and write-impact classification.
 All other workspace crates are implementation crates unless explicitly re-exported by `monkeybee`.
 The workspace layout is not itself the public API contract.
 
@@ -736,7 +738,7 @@ Monkeybee is a Cargo workspace with five explicit strata:
 3. **Semantic document layer (`monkeybee-document`)** — resolved page/resource/object graph built
    from syntax snapshots; it owns semantic meaning, not raw-byte fidelity.
 4. **Content layer** — parsed content-stream IR and interpreter shared by render/extract/inspect/edit.
-5. **Facade/report layer** — `monkeybee` (stable public API), `monkeybee-diff`, and `monkeybee-cli`.
+5. **Facade/report layer** — `monkeybee` (stable public API), `monkeybee-diff`, `monkeybee-signature`, and `monkeybee-cli`.
 
 `monkeybee-core` is intentionally small; it provides shared primitives rather than becoming a god crate.
 `monkeybee-syntax` is intentionally dumb but durable: it preserves what the parser saw and what the
@@ -758,6 +760,7 @@ and refined after full parse. It is not merely a workflow promise.
 ```
 pub struct CapabilityReport {
     pub signed: bool,
+    pub signature_summary: SignatureSummary,
     pub encrypted: bool,
     pub tagged: bool,
     pub structure_complexity: Option<StructureComplexity>,
@@ -780,6 +783,7 @@ pub struct SaveConstraintReport {
     pub encrypt_permissions: Option<PermissionBits>,
     pub allowed_incremental_ops: Vec<SaveOperationKind>,
     pub blocked_ops: Vec<BlockedSaveOperation>,
+    pub signature_impact: SignatureImpactReport,
 }
 ```
 
@@ -804,8 +808,15 @@ It may inspect:
 - approximate page count / object count when cheaply knowable
 
 `OpenProbe` returns a preliminary `CapabilityReport`, an estimated complexity class,
-a recommended `OperationProfile`, and any `RecoveryCandidateSummary` records that
+a recommended `OperationProfile`, an optional `PreliminaryAccessPlan`, and any `RecoveryCandidateSummary` records that
 can be determined cheaply.
+
+`AccessPlan` is a reusable artifact for lazy/remote sessions. It records:
+- page -> object/resource dependency closure
+- critical byte ranges for first paint
+- linearization-derived page hints when available
+- fallback xref-derived byte ranges when linearization is absent or damaged
+- viewport-priority fetch groups for region rendering
 
 The facade exposes:
 
@@ -1959,6 +1970,7 @@ Key responsibilities:
 Structured extraction and inspection.
 
 Key responsibilities:
+- Internal `LayoutGraph` IR: spans, lines, blocks, reading-order edges, tag links, table/column hypotheses, and confidence scores
 - Multi-surface text extraction built on `monkeybee-text`:
   - `PhysicalText` (glyphs, quads, exact geometry)
   - `LogicalText` (reading-order text with per-block confidence)
@@ -1969,6 +1981,20 @@ Key responsibilities:
 - Resource inventory (fonts, images, color spaces)
 - Object graph inspection and querying
 - Image extraction
+
+```
+pub struct ExtractResult {
+    pub layout_graph: Arc<LayoutGraph>,
+    pub surface: ExtractSurface,
+    pub report: ExtractReport,
+}
+
+pub enum ExtractSurface {
+    Physical(PhysicalText),
+    Logical(LogicalText),
+    Tagged(TaggedText),
+}
+```
 
 **Object graph inspection:**
 
@@ -2964,6 +2990,15 @@ When a redaction is applied, the engine first constructs a `RedactionPlan` and s
 
 Post-apply verification is mandatory: extraction must not recover redacted text, and surviving canary bytes/resources are scanned where feasible.
 
+`apply_redactions()` returns a `RedactionAssuranceReport`:
+- selected apply mode
+- text-extraction verification result
+- resource/canary leakage verification result
+- unresolved risks
+- proof artifact references
+
+Default policy is fail-closed: if the achieved assurance level is below caller policy, the save is rejected.
+
 The applied redaction must be irreversible — the original content must not be recoverable from the saved file. This means: do not merely cover the content with an opaque rectangle (the content would still be extractable). The selected apply mode guarantees actual removal or destruction of underlying content.
 
 *Widget (form field):* Appearance depends on the field type. Text fields: render the field value text within the widget rect using `/DA`. Checkboxes: render a check mark or empty box. Radio buttons: render a filled or empty circle. Choice fields: render the selected value or a dropdown indicator. Button fields: render the button label. The `/MK` (appearance characteristics) dictionary provides rotation, border color, background color, caption, and icon information.
@@ -3154,7 +3189,21 @@ The project must maintain a curated corpus of ugly, hard, and pathological PDFs.
 The corpus is split into `public/`, `restricted/`, `generated/`, and `minimized/` tiers.
 Every fixture carries provenance, license/sensitivity metadata, expected failure/repair tags, and redistribution status.
 Every fixture also carries an expectation manifest: expected tier assignments, allowed degradations, render-score thresholds, extraction goldens or invariants, signature expectations, and triage status (`approved`, `pending`, `known_bad`, etc.).
+Expectation manifests may also freeze tolerant-repair behavior:
+- expected chosen `RecoveryCandidateId`
+- expected `semantic_digest`
+- allowed alternative candidate ids
+- whether `write_impact` equivalence is required
+
+Changing the chosen repair candidate for an existing fixture is a proof regression unless explicitly triaged.
+
 Crashers and regressions must be minimized into the `minimized/` tier whenever feasible.
+`monkeybee-proof` includes an automated reducer that preserves one or more target signatures:
+- panic fingerprint
+- render-diff signature
+- extraction mismatch signature
+- repair-decision semantic digest
+- signature-impact classification
 The corpus must be indexed, categorized, and continuously exercised by CI.
 
 **Specific test case classes and what each proves:**
@@ -3841,6 +3890,15 @@ It is machine-readable and CI-validated against:
 - generated capability docs
 - README capability tables
 - workspace feature flags
+
+Build-time code generation produces:
+- `monkeybee-core::generated::scope_registry`
+- `scope-manifest.json`
+- `capability-codes.rs`
+
+The proof harness, CLI, generated README capability tables, and workspace feature-flag checks
+MUST consume these generated artifacts rather than hand-maintained enum copies.
+CI fails on any drift between `docs/scope_registry.yaml`, generated Rust code, and emitted capability docs.
 
 Crate-boundary sections and feature narratives MUST use scope-qualified language.
 No subsystem contract may say "must support" for a feature whose registry class is

@@ -12,6 +12,7 @@ This is not a philosophical essay and not the full codebase. It is the grounding
 monkeybee-pdf/
 ├── Cargo.toml                    # workspace root
 ├── crates/
+│   ├── monkeybee/                # stable public facade crate
 │   ├── monkeybee-core/           # shared primitives: object IDs, geometry, errors, execution context
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -21,6 +22,7 @@ monkeybee-pdf/
 │   │   │   ├── context.rs        # ExecutionContext (budgets, cancellation, providers)
 │   │   │   ├── diagnostics.rs    # DiagnosticSink trait, Diagnostic type, VecSink, CallbackSink, FilteringSink, CountingSink
 │   │   │   ├── version.rs        # PdfVersion tracking (input, feature, output), version-gated feature registry
+│   │   │   ├── scope.rs          # generated support/scope registry bindings
 │   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider, OracleProvider
 │   │   └── Cargo.toml
 │   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
@@ -28,6 +30,7 @@ monkeybee-pdf/
 │   │   │   ├── lib.rs
 │   │   │   ├── source.rs         # ByteSource implementations (mmap, in-memory, range-backed)
 │   │   │   ├── fetch.rs          # fetch scheduler and prefetch planning for remote/lazy sources
+│   │   │   ├── access_plan.rs    # reusable page/resource/byte-range access plans
 │   │   │   ├── revision.rs       # revision chain tracking
 │   │   │   └── span.rs           # raw span ownership for preserve mode
 │   │   └── Cargo.toml
@@ -151,6 +154,7 @@ monkeybee-pdf/
 │   │   │   ├── transaction.rs    # edit transaction framework
 │   │   │   ├── gc.rs             # resource GC and deduplication
 │   │   │   ├── redaction.rs      # high-assurance redaction application
+│   │   │   ├── assurance.rs      # redaction assurance reports and policy evaluation
 │   │   │   ├── rewriter.rs       # ContentStreamRewriter: parse-filter-inject-reemit pipeline for content stream edits
 │   │   │   └── optimize.rs       # compaction, recompression
 │   │   └── Cargo.toml
@@ -179,6 +183,7 @@ monkeybee-pdf/
 │   │   │   ├── physical.rs       # PhysicalText: exact glyph geometry
 │   │   │   ├── logical.rs        # LogicalText: reading-order with confidence
 │   │   │   ├── tagged.rs         # TaggedText: structure-tree-driven extraction
+│   │   │   ├── layout_graph.rs   # shared extraction IR for spans/blocks/order/tables/tags
 │   │   │   ├── search.rs         # SearchIndex, SelectionQuads, HitTest primitives
 │   │   │   ├── metadata.rs       # metadata extraction
 │   │   │   ├── structure.rs      # structure inspection
@@ -202,10 +207,13 @@ monkeybee-pdf/
 │   │   │   ├── ledger.rs         # compatibility ledger
 │   │   │   ├── benchmark.rs      # performance benchmarks
 │   │   │   ├── fuzz.rs           # fuzz testing coordination
+│   │   │   ├── reducer.rs        # automatic failure minimization preserving crash/divergence signature
 │   │   │   └── evidence.rs       # artifact generation
 │   │   └── Cargo.toml
 │   ├── monkeybee-paint/          # shared paint/appearance primitives (non-raster, page-independent)
 │   ├── monkeybee-native/         # all optional FFI/native bridges and broker adapters
+│   ├── monkeybee-diff/           # structural/text/render/save-impact diff engine
+│   ├── monkeybee-signature/      # signature dictionaries, byte-range maps, policy + verification
 │   └── monkeybee-cli/            # command-line interface
 │       ├── src/
 │       │   └── main.rs
@@ -241,6 +249,9 @@ monkeybee-annotate      (depends on: core, document, content, compose, forms, pa
 monkeybee-extract       (depends on: core, content, document, text)
 monkeybee-validate      (depends on: core, document)
 monkeybee-proof         (depends on: core, bytes, codec, security, parser, syntax, document, content, text, render, compose, write, edit, forms, annotate, extract, validate)
+monkeybee-diff          (depends on: core, document, content, extract, render, write)
+monkeybee-signature     (depends on: core, syntax, document, write, validate)
+monkeybee               (depends on: diff, signature, core, bytes, document, render, extract, edit, write, validate)
 monkeybee-cli           (depends on: all above)
 ```
 
@@ -264,6 +275,7 @@ Note: monkeybee-proof already lists security in its dependency list. Verified.
 [workspace]
 resolver = "2"
 members = [
+    "crates/monkeybee",
     "crates/monkeybee-core",
     "crates/monkeybee-bytes",
     "crates/monkeybee-codec",
@@ -282,6 +294,8 @@ members = [
     "crates/monkeybee-extract",
     "crates/monkeybee-validate",
     "crates/monkeybee-proof",
+    "crates/monkeybee-diff",
+    "crates/monkeybee-signature",
     "crates/monkeybee-cli",
 ]
 
@@ -1431,6 +1445,8 @@ PdfDocument
 - Evidence tests: artifact generation produces valid, parseable output.
 - Ledger JSON schema tests: ledger output validates against the JSON schema (schema_version, input block, features array, repairs array, degradations array, summary block), version tracking fields (declared_version, effective_version) are populated correctly, schema versioning — breaking changes increment major version.
 - Corpus manifest tests: every fixture has an `ExpectationManifest`.
+- Repair expectation tests: fixtures with ambiguous recovery assert chosen candidate id, semantic digest,
+  and write-impact class unless explicitly waived.
 - Regression tests: unknown degradations or scope-class violations fail unless triaged.
 - Triage fields: `approved`, `pending`, `known_bad`, `waived_until`, `owner`, `notes`.
 

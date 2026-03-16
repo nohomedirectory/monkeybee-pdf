@@ -49,6 +49,8 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | Crate | Responsibility |
 |---|---|
 | `monkeybee` | Stable public facade: semver-governed `Engine`, `OpenProbe`, `Session`, `Snapshot`, `EditTransaction`, `WritePlan`, `CapabilityReport`, `DiffReport`, and high-level open/render/extract/edit/save APIs |
+| `monkeybee-diff` | Structural, text, render, and save-impact comparison engine reused by the facade, proof harness, and CLI |
+| `monkeybee-signature` | Signature parsing, byte-range preservation, DocMDP/FieldMDP policy, verification wiring, and save-impact analysis |
 | `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution budgets, diagnostic streaming (DiagnosticSink), PDF version tracking, StreamHandle contract, provider traits (CryptoProvider, OracleProvider) |
 | `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduler (FetchScheduler trait), prefetch planning, revision chain, raw span ownership |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
@@ -84,6 +86,8 @@ monkeybee-pdf/
 ├── Cargo.toml
 ├── crates/
 │   ├── monkeybee/
+│   ├── monkeybee-diff/
+│   ├── monkeybee-signature/
 │   ├── monkeybee-core/
 │   ├── monkeybee-bytes/
 │   ├── monkeybee-codec/
