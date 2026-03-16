@@ -150,6 +150,27 @@ Every top-level API accepts an operation-scoped `ExecutionContext` carrying:
 `ExecutionContext` is never stored on `OpenSession`.
 Sessions are long-lived document handles; execution contexts are per-call control planes.
 
+### ExecutionContext as runtime bridge
+
+`ExecutionContext` is the contract between runtime-agnostic core crates and the
+asupersync-native orchestration layer.
+
+In asupersync-native callers (facade, CLI, proof), `ExecutionContext` is derived
+from `&Cx`:
+- `CancellationCheckpoint` delegates to `cx.checkpoint()` (budget-aware, trace-aware,
+  scheduler-cooperative)
+- `BudgetState` is derived from `cx.budget()` with monkeybee-specific field mapping:
+  `Budget.deadline` → `ExecutionContext.deadline`, `Budget.cost_quota` → operator count
+  and decompressed bytes budgets, `Budget.poll_quota` → checkpoint frequency,
+  `Budget.priority` → render priority (viewport-visible > prefetch > background)
+- `DiagnosticSink` emits to `cx.trace()` for LabRuntime observability
+
+In runtime-agnostic callers (WASM, third-party integrations), `ExecutionContext`
+uses simple implementations (AtomicBool cancellation, manual budget tracking).
+
+The bridge is intentionally zero-cost: a single function pointer indirection for
+checkpoint calls, which are already on the order of microseconds between operators.
+
 ### Diagnostic streaming model
 
 All diagnostics flow through a `DiagnosticSink` carried by `ExecutionContext`. The sink is a trait
@@ -730,6 +751,50 @@ This API ensures:
 - Write planning is inspectable before committing bytes
 - The engine's caches survive across snapshots (keyed by snapshot_id)
 
+### Outcome discipline
+
+Operations that can be cancelled return `Outcome<T, E>` rather than `Result<T, E>`.
+The four-valued Outcome distinguishes:
+- `Ok(T)` — operation succeeded with full result
+- `Err(E)` — domain error (malformed PDF, unsupported feature, validation failure)
+- `Cancelled(CancelReason)` — operation was cancelled (viewport change, user abort,
+  budget exhaustion, shutdown). Partial results may be available.
+- `Panicked(PanicPayload)` — unrecoverable failure (native decoder crash, bug).
+  Must be surfaced to supervision/diagnostics, never silently swallowed.
+
+The severity lattice is `Ok < Err < Cancelled < Panicked`. Aggregation across joins,
+races, retries, and supervision is monotone: the aggregate outcome is the most severe
+child outcome.
+
+`CancelReason` carries structured kind: `User`, `Timeout`, `FailFast`, `ParentCancelled`,
+`Shutdown`, `BudgetExhausted`. These map to different retry, diagnostic, and supervision
+policies.
+
+At library boundaries (FFI, C API, WASM), Outcome is collapsed to Result with
+structured error discrimination. Within the Rust API, Outcome is preserved.
+
+### Session lifecycle regions
+
+The monkeybee facade models session lifecycle as asupersync regions:
+
+| Lifecycle concept | Region model |
+|---|---|
+| `engine.open()` | Creates a session region (child of caller's region) |
+| `snapshot.render_page()` | Creates a render region (child of session, deadline budget) |
+| `snapshot.extract_text()` | Creates an extract region (child of session) |
+| `EditTransaction` scope | Creates a transaction region (child of session, tighter budget) |
+| `WritePlan.execute()` | Creates a write region (child of session) |
+| Native decoder invocation | Creates a quarantine region (FailFast policy, tight budget) |
+| Progressive tile batch | Creates a tile region (CollectAll policy — partial results acceptable) |
+
+Region ownership guarantees:
+- Closing a session cancels all child operations and waits for quiescence.
+- Cancelling a render cancels only that render's tiles, not sibling operations.
+- Native decoder panics are contained in the quarantine region and surface as
+  `Outcome::Panicked` to the parent, not as a process crash.
+- Budget tightening is automatic: a child region inherits the tighter of its own
+  budget and its parent's remaining budget via `Budget.combine()` (meet semiring).
+
 ```
 pub struct RenderResult {
     pub pixels: RasterSurface,
@@ -1241,7 +1306,10 @@ A page is rendered by:
 
 ### Cooperative cancellation in rendering
 
-The render pipeline checks the `ExecutionContext` cancellation token at the following checkpoints:
+The render pipeline checks `exec_ctx.checkpoint.check()` at the following checkpoints. In
+asupersync-native callers, this delegates to `cx.checkpoint()` which is budget-aware,
+trace-aware, and scheduler-cooperative in a single call. In WASM or standalone callers, it
+checks a simple AtomicBool cancellation token.
 
 1. **Per-operator:** After each content stream operator dispatch. This is the finest granularity and
    ensures that even a single pathological operator (e.g., a huge mesh shading) can be interrupted.
@@ -1252,12 +1320,18 @@ The render pipeline checks the `ExecutionContext` cancellation token at the foll
 4. **Per-resource:** Before decoding each image or font resource. Large JPEG 2000 or JBIG2 decodes
    are interruptible at the codec level (the decode pipeline checks cancellation between data blocks).
 
-When cancellation fires, the render pipeline returns a partial result with metadata indicating
-which pages/tiles completed and which were cancelled. The partial result is usable (not corrupted).
+When cancellation fires, the render pipeline returns `Outcome::Cancelled(reason)` with partial
+result metadata indicating which pages/tiles completed and which were cancelled. The partial result
+is usable (not corrupted). The `CancelReason` carries the specific cause: `User`, `Timeout`,
+`BudgetExhausted`, `ParentCancelled`, or `Shutdown`.
 
 Budget enforcement uses the same checkpoints: if the operator count, memory, or time budget is
-exceeded, the effect is identical to cancellation. The diagnostic carries the specific budget that
-was exhausted.
+exceeded, the effect is identical to cancellation with `CancelReason::BudgetExhausted`. The
+diagnostic carries the specific budget that was exhausted.
+
+asupersync's three-lane scheduler (cancel > timed > ready) ensures that cancellation cleanup
+gets scheduler priority over new work. This is critical for viewport-change cancel storms in
+progressive rendering: cancelled tiles drain before new viewport tiles begin.
 
 **Optional content (layers) handling:**
 
@@ -1869,7 +1943,8 @@ Key responsibilities:
 
 #### `monkeybee-proof`
 
-Automated validation and evidence generation.
+Automated validation and evidence generation. `monkeybee-proof` is asupersync-native
+and uses `LabRuntime` as its execution substrate.
 
 Key responsibilities:
 - Pathological corpus management (acquisition, indexing, categorization)
@@ -1883,6 +1958,44 @@ Key responsibilities:
 - Regression detection
 - Coverage tracking across corpus categories
 - Conformance validation integration (Arlington model, profile checks)
+- Deterministic concurrency testing via LabRuntime
+- Cancellation chaos testing and crashpack generation
+
+**LabRuntime proof integration:**
+
+The proof harness uses asupersync `LabRuntime` for all concurrency-sensitive testing:
+
+- **Deterministic concurrent testing:** All multi-page parallel render/extract tests
+  run under LabRuntime with fixed seeds. Same seed = same scheduling = reproducible
+  results. This catches cache races, shared font corruption, and DashMap contention
+  bugs that random testing misses.
+
+- **DPOR exploration:** Critical concurrency tests use DPOR (Dynamic Partial Order
+  Reduction) schedule exploration to systematically cover scheduling interleavings.
+
+- **Oracle suite:** Every proof run asserts:
+  - Quiescence oracle: no orphan tasks after session close
+  - Obligation leak oracle: no leaked permits/channels/resources
+  - Loser drain oracle: cancelled operations fully drained
+  - Cancellation protocol oracle: request → drain → finalize sequence observed
+
+- **Chaos injection:** Robustness tests use chaos presets:
+  - `with_light_chaos()` for CI regression (fast, reliable signal)
+  - `with_heavy_chaos()` for release-gate shakeout (deeper coverage)
+  - Focused cancellation campaigns for crash-safe save, progressive render, and
+    native decoder quarantine paths
+
+- **Crashpacks:** Concurrency failures automatically produce crashpacks with seed,
+  trace fingerprint, oracle failures, and replay command. These are CI artifacts
+  linked to the compatibility ledger.
+
+- **Futurelock detection:** Tests panic on futurelock (tasks stuck holding obligations
+  without making progress). This catches shutdown wedges and leaked cleanup
+  responsibility.
+
+- **Virtual time:** LabRuntime's virtual time wheel completes sleeps instantly. Proof
+  runs involving timeouts, deadlines, and progressive rendering waits execute at
+  scheduler speed with no wall-clock delays, dramatically accelerating CI proof runs.
 
 **Multi-oracle rendering arbitration:**
 
@@ -2045,8 +2158,34 @@ Engine-level caches use lock-free or sharded concurrent data structures:
 The `ExecutionContext` is cloneable per-task (each parallel render task gets its own copy with shared
 budget counters using atomic operations). Cancellation propagates to all clones.
 
-Rayon's scoped parallelism ensures that all parallel tasks complete before the scope exits,
-preventing dangling references to snapshot data.
+### Rayon ↔ asupersync bridge contract
+
+The bridge between asupersync (async orchestration) and Rayon (CPU parallelism)
+follows these invariants:
+
+1. **Lifecycle ownership:** asupersync regions own the lifecycle of all work,
+   including Rayon-dispatched compute. A Rayon job is always spawned from within
+   an asupersync scope and its result is always collected back into that scope.
+
+2. **Cancellation propagation:** ExecutionContext (derived from Cx) is passed into
+   Rayon closures. Rayon work checks `exec_ctx.checkpoint.check()` at every
+   content-stream operator, tile boundary, and resource decode point.
+
+3. **No async in Rayon:** Rayon closures are purely synchronous. They never call
+   `block_on()`, never create async runtimes, never hold async locks. The "async
+   Rayon sandwich" (async → rayon → async → rayon) is forbidden.
+
+4. **Oneshot bridge:** Results flow from Rayon to asupersync via oneshot channels.
+   The asupersync task awaits the oneshot (cancellable); the Rayon closure sends
+   the result when compute completes.
+
+5. **Budget respecting:** Rayon work respects the same budget as the enclosing
+   asupersync region. Budget exhaustion in Rayon triggers the same early-return
+   as cancellation.
+
+6. **Panic containment:** Rayon panics (from native decoders, malformed input) are
+   caught at the Rayon scope boundary and converted to `Outcome::Panicked` in the
+   asupersync region. They do not propagate across the bridge.
 
 ### Object identity
 
@@ -3271,18 +3410,28 @@ These are not aspirational targets. They are specific, scoped verification goals
 
 ### Runtime layering doctrine
 
-Core library crates are runtime-agnostic.
-`ExecutionContext` carries budgets, cancellation, determinism, and providers, but parse/render/write/edit
-must not require a specific async runtime.
+Core library crates are runtime-agnostic. They accept `&ExecutionContext` for
+cancellation, budgets, and diagnostics but never import asupersync directly.
 
-Async orchestration is an adapter concern used by:
-- range-backed byte acquisition
-- proof harness orchestration
-- artifact streaming
-- external process / oracle coordination
+The `monkeybee` facade, `monkeybee-bytes`, `monkeybee-proof`, and `monkeybee-cli`
+are asupersync-native. In these crates, asupersync is not an adapter — it is the
+canonical orchestration substrate:
 
-`asupersync` is the default orchestration runtime for CLI and proof, not a semantic dependency of
-the core engine model.
+- Session lifecycle is modeled as asupersync regions with parent-child ownership.
+- Operations return `Outcome<T, E>` (four-valued: Ok/Err/Cancelled/Panicked).
+- Budgets use asupersync's `Budget` semiring with automatic `combine()` tightening
+  for child operations.
+- Cancellation checkpoints in core crates delegate to `cx.checkpoint()` through
+  the `ExecutionContext` bridge.
+- The proof harness uses `LabRuntime` with DPOR, oracle suite, and chaos injection
+  for deterministic concurrency testing.
+- Progressive rendering uses asupersync watch channels for tile completion.
+- Fetch scheduling uses asupersync async I/O with structured region ownership.
+- Rayon remains the CPU-bound execution layer. The bridge contract is:
+  asupersync owns lifecycle and scheduling, Rayon owns pure compute.
+
+A minimal WASM build validates runtime independence: WASM uses a simple
+`ExecutionContext` impl without asupersync.
 
 ### Open strategies
 

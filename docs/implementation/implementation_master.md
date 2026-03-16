@@ -320,27 +320,63 @@ becoming default.
 
 ### Runtime layering doctrine
 
-Core library crates (`monkeybee-core`, `monkeybee-syntax`, `monkeybee-document`, `monkeybee-content`, `monkeybee-text`, `monkeybee-render`, `monkeybee-compose`, `monkeybee-write`, `monkeybee-edit`, `monkeybee-forms`, `monkeybee-annotate`, `monkeybee-extract`, `monkeybee-validate`) are runtime-agnostic. `ExecutionContext` carries budgets, cancellation, determinism, and providers, but parse/render/write/edit must not require a specific async runtime.
+Core library crates (`monkeybee-core`, `monkeybee-syntax`, `monkeybee-document`, `monkeybee-content`, `monkeybee-text`, `monkeybee-render`, `monkeybee-compose`, `monkeybee-write`, `monkeybee-edit`, `monkeybee-forms`, `monkeybee-annotate`, `monkeybee-extract`, `monkeybee-validate`) are runtime-agnostic. They accept `&ExecutionContext` for cancellation, budgets, and diagnostics but never import asupersync directly.
 
-Async orchestration is an adapter concern used by:
-- range-backed byte acquisition (`monkeybee-bytes` fetch scheduler)
-- proof harness orchestration (`monkeybee-proof`)
-- artifact streaming
-- external process / oracle coordination
+The `monkeybee` facade, `monkeybee-bytes`, `monkeybee-proof`, and `monkeybee-cli` are asupersync-native. In these crates, asupersync is not an adapter — it is the canonical orchestration substrate:
 
-`asupersync` is the default orchestration runtime for CLI and proof, not a semantic dependency of the core engine model. A minimal WASM build is a non-gating proof surface that validates this runtime independence.
+- Session lifecycle is modeled as asupersync regions with parent-child ownership.
+- Operations return `Outcome<T, E>` (four-valued: Ok/Err/Cancelled/Panicked).
+- Budgets use asupersync's `Budget` semiring with automatic `combine()` tightening for child operations.
+- Cancellation checkpoints in core crates delegate to `cx.checkpoint()` through the `ExecutionContext` bridge.
+- The proof harness uses `LabRuntime` with DPOR, oracle suite, and chaos injection for deterministic concurrency testing.
+- Progressive rendering uses asupersync watch channels for tile completion.
+- Fetch scheduling uses asupersync async I/O with structured region ownership.
+
+A minimal WASM build validates runtime independence: WASM uses a simple `ExecutionContext` impl without asupersync.
+
+### ExecutionContext as runtime bridge
+
+`ExecutionContext` is the contract between runtime-agnostic core crates and the asupersync-native orchestration layer.
+
+In asupersync-native callers (facade, CLI, proof), `ExecutionContext` is derived from `&Cx`:
+- `CancellationCheckpoint` trait impl delegates to `cx.checkpoint()` (budget-aware, trace-aware, scheduler-cooperative)
+- `BudgetState` is derived from `cx.budget()` with field mapping: `Budget.deadline` → deadline, `Budget.cost_quota` → operator/byte budgets, `Budget.poll_quota` → checkpoint frequency, `Budget.priority` → render priority
+- `DiagnosticSink` emits to `cx.trace()` for LabRuntime observability
+
+In runtime-agnostic callers (WASM, third-party integrations), `ExecutionContext` uses simple implementations (AtomicBool cancellation, manual budget tracking). The bridge is zero-cost: a single function pointer indirection for checkpoint calls.
 
 ### Async orchestration layer
 
-Monkeybee PDF uses `asupersync` as its async runtime and orchestration layer at the CLI/proof edge. Per the upstream `asupersync` skill and runtime guidance, Monkeybee should stay native-first: thread `&Cx<'_>` through async I/O workflows, structure child tasks inside explicit scopes, and bootstrap CLI and proof-harness entrypoints with `RuntimeBuilder` plus `LabRuntime` rather than treating Tokio as the ambient runtime.
+Monkeybee PDF uses `asupersync` as its async runtime and orchestration substrate. Per the upstream `asupersync` mega-skill guidance, Monkeybee threads `&Cx` through async I/O workflows, structures child tasks inside explicit scopes and regions, and bootstraps CLI and proof-harness entrypoints with `RuntimeBuilder` plus `LabRuntime`.
 
 Rayon remains the CPU-bound parallel execution layer. The architectural split is deliberate:
 
-- `asupersync` owns async file and directory I/O, corpus traversal, artifact streaming, external-process coordination, cancellation, timeout budgeting, and task supervision.
+- `asupersync` owns async file and directory I/O, corpus traversal, artifact streaming, external-process coordination, cancellation, timeout budgeting, session lifecycle regions, and task supervision.
 - Rayon owns page-level rendering fan-out, image and filter transforms, diff computation, extraction batches, compression work, and other bounded in-memory compute kernels.
-- CPU-heavy work should be handed off from an enclosing `asupersync` scope to Rayon and then rejoined in that same structured scope for aggregation, diagnostics, and persistence.
-- Detached background tasks are not the default. Long-lived background activity must remain runtime-supervised and explicitly owned.
+- CPU-heavy work is handed off from an enclosing `asupersync` scope to Rayon via oneshot channels and rejoined in that same structured scope for aggregation, diagnostics, and persistence.
+- Detached background tasks are not the default. Long-lived background activity must remain runtime-supervised and explicitly owned within asupersync regions.
 - Tokio compatibility, if ever required for a third-party library, belongs behind a narrow adapter boundary rather than in Monkeybee's core architecture.
+
+### Rayon ↔ asupersync bridge contract
+
+The bridge between asupersync (async orchestration) and Rayon (CPU parallelism) follows these invariants:
+
+1. **Lifecycle ownership:** asupersync regions own the lifecycle of all work, including Rayon-dispatched compute. A Rayon job is always spawned from within an asupersync scope and its result is always collected back into that scope.
+2. **Cancellation propagation:** ExecutionContext (derived from Cx) is passed into Rayon closures. Rayon work checks `exec_ctx.checkpoint.check()` at every content-stream operator, tile boundary, and resource decode point.
+3. **No async in Rayon:** Rayon closures are purely synchronous. They never call `block_on()`, never create async runtimes, never hold async locks. The "async Rayon sandwich" (async → rayon → async → rayon) is forbidden.
+4. **Oneshot bridge:** Results flow from Rayon to asupersync via oneshot channels. The asupersync task awaits the oneshot (cancellable); the Rayon closure sends the result when compute completes.
+5. **Budget respecting:** Rayon work respects the same budget as the enclosing asupersync region. Budget exhaustion in Rayon triggers the same early-return as cancellation.
+6. **Panic containment:** Rayon panics (from native decoders, malformed input) are caught at the Rayon scope boundary and converted to `Outcome::Panicked` in the asupersync region. They do not propagate across the bridge.
+
+### Outcome discipline
+
+Operations that can be cancelled return `Outcome<T, E>` rather than `Result<T, E>`. The four-valued Outcome distinguishes:
+- `Ok(T)` — operation succeeded with full result
+- `Err(E)` — domain error (malformed PDF, unsupported feature, validation failure)
+- `Cancelled(CancelReason)` — operation was cancelled (viewport change, user abort, budget exhaustion, shutdown). Partial results may be available.
+- `Panicked(PanicPayload)` — unrecoverable failure (native decoder crash, bug). Must be surfaced to supervision/diagnostics, never silently swallowed.
+
+The severity lattice is `Ok < Err < Cancelled < Panicked`. Aggregation is monotone. `CancelReason` carries structured kind: `User`, `Timeout`, `FailFast`, `ParentCancelled`, `Shutdown`, `BudgetExhausted`.
 
 ## Core data structures
 
@@ -1167,12 +1203,16 @@ fails in a new CI run is a blocking regression.
 
 ```
 CLI / proof / library workflow
-  -> RuntimeBuilder bootstrap
-  -> LabRuntime entry
-  -> Scope owns request region and cancellation budget
-  -> asupersync performs file and artifact I/O, scheduling, and supervision
-  -> Rayon executes CPU-bound kernels over in-memory page/document data
-  -> asupersync aggregates results, emits diagnostics, writes artifacts, and closes the region
+  -> RuntimeBuilder bootstrap (CLI) or LabRuntime (proof)
+  -> Root region created (engine lifetime)
+  -> engine.open() creates session region (child of root, owns session lifecycle)
+  -> render_page() / extract_text() create child regions (deadline budget, CollectAll policy)
+  -> ExecutionContext derived from &Cx at region boundary (bridge to runtime-agnostic core)
+  -> Core crates check exec_ctx.checkpoint.check() (delegates to cx.checkpoint())
+  -> Rayon executes CPU-bound kernels via oneshot bridge (cancel-safe, budget-aware)
+  -> asupersync aggregates Outcome results, emits diagnostics, writes artifacts
+  -> Region close guarantees quiescence (no orphan tasks, all finalizers complete)
+  -> Oracle suite asserts: no obligation leaks, losers drained, cancellation protocol honored
 ```
 
 ### Parse flow
@@ -1244,8 +1284,8 @@ PdfDocument
 - **`freetype-rs`** — optional hinted rasterization, isolated behind `monkeybee-native`
 - **`indexmap`** — ordered dictionaries
 - **`once_cell` / `std::sync::OnceLock`** — lazy initialization
-- **`asupersync`** — async runtime, structured concurrency, cancellation, and orchestration
-- **`rayon`** — CPU-bound parallelism composed under `asupersync` orchestration
+- **`asupersync`** — async runtime, structured concurrency, cancellation, Budget semiring, Outcome type, LabRuntime deterministic testing, watch/oneshot channels, DPOR, oracle suite, chaos injection. Used natively in facade, bytes, proof, and CLI crates.
+- **`rayon`** — CPU-bound parallelism. Lifecycle owned by asupersync regions; results bridged via oneshot channels.
 - **`clap`** — CLI argument parsing
 - **`serde` + `serde_json`** — structured output, compatibility ledger
 - **`sha2` / `md5`** — PDF encryption handlers
@@ -1258,7 +1298,7 @@ PdfDocument
 - Prefer pure-Rust where quality and performance are comparable.
 - Accept C/C++ bindings only for capabilities not yet available in pure Rust at required quality (e.g., JPEG 2000, complex font shaping).
 - Pin all dependency versions. Audit for `unsafe` in critical-path dependencies.
-- Core library crates are runtime-agnostic. `asupersync` is the CLI/proof default orchestration runtime, not a semantic dependency of the core engine model. Any async compatibility layer must stay quarantined at the edge.
+- Core library crates are runtime-agnostic (accept `&ExecutionContext`, never import asupersync). The facade, bytes, proof, and CLI crates are asupersync-native — asupersync is the orchestration substrate, not an adapter.
 - No dependency may introduce undefined behavior or memory unsafety that escapes its abstraction boundary.
 
 ## Test obligations by crate
