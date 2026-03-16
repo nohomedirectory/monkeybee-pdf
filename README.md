@@ -58,6 +58,7 @@ Monkeybee is a Rust workspace organized as layered crates with explicit preserva
 | `monkeybee-parser` | PDF syntax parsing, repair, tolerant/strict modes, raw token/span retention |
 | `monkeybee-syntax` | Syntax/COS preservation layer: immutable parsed objects, token/span provenance, xref provenance, object-stream membership, repair records. The preservation boundary. |
 | `monkeybee-document` | Semantic document graph built from syntax snapshots: page tree, inherited state, resource resolution, ownership classes, dependency graph contract, bounded cache management |
+| `monkeybee-catalog` | Catalog semantic subsystem: outlines, named destinations, page labels, name/number trees, viewer preferences, optional-content configurations, and embedded-file inventory |
 | `monkeybee-content` | Content-stream IR + event interpreter shared by render/extract/inspect/edit; consumer sink adapters (RenderSink, ExtractSink, InspectSink, EditSink) |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline (existing PDF text) and authoring pipeline (shaping/bidi/layout), subsetting, search/hit-test primitives |
 | `monkeybee-render` | Page rendering via content events/PagePlan: positioned glyphs, images, transparency, vector graphics, masks, blending; tile/band raster surface; cooperative cancellation; progressive rendering |
@@ -95,6 +96,7 @@ monkeybee-pdf/
 │   ├── monkeybee-parser/
 │   ├── monkeybee-syntax/
 │   ├── monkeybee-document/
+│   ├── monkeybee-catalog/
 │   ├── monkeybee-content/
 │   ├── monkeybee-text/
 │   ├── monkeybee-render/

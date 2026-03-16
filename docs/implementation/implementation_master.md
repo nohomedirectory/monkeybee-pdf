@@ -88,6 +88,17 @@ monkeybee-pdf/
 │   │   │   ├── transaction.rs    # EditTransaction, change tracking, snapshot-in/snapshot-out
 │   │   │   └── cache.rs          # CacheManager, CacheConfig, per-cache budgets, LRU eviction, hit/miss/eviction stats
 │   │   └── Cargo.toml
+│   ├── monkeybee-catalog/        # catalog semantics: outlines, destinations, name trees, page labels, viewer prefs, OCG configs, attachments
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── outlines.rs       # outline/bookmark trees
+│   │   │   ├── destinations.rs   # named destinations and destination arrays
+│   │   │   ├── page_labels.rs    # page label numbering
+│   │   │   ├── name_trees.rs     # name trees and number trees
+│   │   │   ├── viewer_prefs.rs   # viewer preferences, page mode, page layout
+│   │   │   ├── optional_content.rs # OCProperties, default configs, print/export states
+│   │   │   └── attachments.rs    # embedded-file inventory and AF relationships
+│   │   └── Cargo.toml
 │   ├── monkeybee-content/        # content-stream IR and event interpreter
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -236,18 +247,19 @@ monkeybee-syntax        (depends on: core, bytes, parser)    ← preservation bo
     ↑
 monkeybee-document      (depends on: core, bytes, syntax)    ← semantic layer built from syntax snapshots
     ↑
+monkeybee-catalog       (depends on: core, syntax, document)
 monkeybee-content       (depends on: core, document)         ← sink adapters: RenderSink, ExtractSink, InspectSink, EditSink
 monkeybee-text          (depends on: core, document, codec)  ← decode pipeline + authoring layout pipeline
     ↑
 monkeybee-paint         (depends on: core, text)
 monkeybee-render        (depends on: core, content, document, text, codec, paint)  ← consumes content events, no own interpreter
 monkeybee-compose       (depends on: core, document, text, content, paint)  ← authoring/builders, appearance gen
-monkeybee-write         (depends on: core, bytes, document, codec)   ← pure serializer
+monkeybee-write         (depends on: core, bytes, document, catalog, codec)   ← pure serializer
 monkeybee-edit          (depends on: core, document, content, compose, write)
 monkeybee-forms         (depends on: core, document, text, compose, paint)
 monkeybee-annotate      (depends on: core, document, content, compose, forms, paint)
 monkeybee-extract       (depends on: core, content, document, text)
-monkeybee-validate      (depends on: core, document)
+monkeybee-validate      (depends on: core, document, catalog)
 monkeybee-proof         (depends on: core, bytes, codec, security, parser, syntax, document, content, text, render, compose, write, edit, forms, annotate, extract, validate)
 monkeybee-diff          (depends on: core, document, content, extract, render, write)
 monkeybee-signature     (depends on: core, syntax, document, write, validate)
@@ -283,6 +295,7 @@ members = [
     "crates/monkeybee-parser",
     "crates/monkeybee-syntax",
     "crates/monkeybee-document",
+    "crates/monkeybee-catalog",
     "crates/monkeybee-content",
     "crates/monkeybee-text",
     "crates/monkeybee-render",

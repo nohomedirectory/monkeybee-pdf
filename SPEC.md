@@ -228,6 +228,70 @@ session close.
 
 Diagnostics are never silently dropped. If the `ExecutionContext` has no explicit sink configured,
 a default `VecSink` collects them. The API always returns the diagnostic collection alongside the
+
+### Decision trace and causal explainability contract
+
+Diagnostics answer "what happened." `TraceEventStream` answers "why this path
+was chosen instead of the alternatives."
+
+Every repair choice, fallback chain branch, provider resolution, cache
+miss-to-recompute transition, security-profile denial/isolation decision,
+ownership escalation, and save-plan escalation MUST emit a causal trace event.
+
+```
+pub struct OperationSpanId(pub u128);
+
+pub struct OperationSpan {
+    pub span_id: OperationSpanId,
+    pub parent: Option<OperationSpanId>,
+    pub operation_kind: OperationKind,
+    pub snapshot_id: Option<SnapshotId>,
+    pub page_index: Option<u32>,
+}
+
+pub enum DecisionKind {
+    RepairChoice,
+    FallbackChoice,
+    ProviderResolution,
+    SecurityGate,
+    CacheReuse,
+    CacheMiss,
+    OwnershipEscalation,
+    WritePlanEscalation,
+    RemoteFetchPriority,
+}
+
+pub struct DecisionRecord {
+    pub span_id: OperationSpanId,
+    pub decision_kind: DecisionKind,
+    pub subject: String,
+    pub chosen: String,
+    pub alternatives: Vec<String>,
+    pub confidence: Option<f64>,
+    pub reason: String,
+    pub causal_inputs: Vec<CausalRef>,
+}
+
+pub struct TraceEvent {
+    pub ts_monotonic_ns: u64,
+    pub span_id: OperationSpanId,
+    pub event: TraceEventKind,
+}
+
+pub enum TraceEventKind {
+    SpanStart(OperationSpan),
+    SpanEnd { outcome: TraceOutcome },
+    Decision(DecisionRecord),
+    Metric { key: String, value: f64 },
+    DiagnosticRef { diagnostic_code: String },
+}
+```
+
+`TraceEventStream` is a required proof artifact for:
+- ambiguous recovery
+- signature-impacting save plans
+- remote progressive render sessions
+- any proof-harness failure capsule
 operation result.
 
 Provider interfaces include `FontProvider`, `ColorProfileProvider`, `CryptoProvider`, and `OracleProvider`.
@@ -353,6 +417,37 @@ pub struct ActiveContentReport {
 
 `CapabilityReport` MUST include `active_content: ActiveContentReport`.
 The default v1 behavior is `PreserveButDenyExecute`.
+
+```
+pub struct ActiveContentInventory {
+    pub actions: Vec<ActionNode>,
+    pub javascript_blocks: Vec<JsBlockRef>,
+    pub launch_actions: Vec<ActionNode>,
+    pub uri_actions: Vec<ActionNode>,
+    pub remote_goto_actions: Vec<ActionNode>,
+    pub submit_form_actions: Vec<ActionNode>,
+    pub embedded_file_refs: Vec<FileSpecRef>,
+    pub rich_media_refs: Vec<RichMediaRef>,
+}
+
+pub struct SanitizationPlan {
+    pub policy: ActiveContentPolicy,
+    pub objects_to_strip: Vec<ObjRef>,
+    pub objects_to_preserve: Vec<ObjRef>,
+    pub objects_to_stub: Vec<ObjRef>,
+}
+
+pub struct SanitizationReceipt {
+    pub plan_digest: [u8; 32],
+    pub stripped: Vec<ObjRef>,
+    pub preserved: Vec<ObjRef>,
+    pub stubbed: Vec<ObjRef>,
+    pub warnings: Vec<Diagnostic>,
+}
+```
+
+`CapabilityReport` MUST grow an `active_content_inventory_digest` field, and
+the CLI MUST support `inspect --active-content` and `sanitize --receipt-json`.
 
 ---
 
@@ -826,6 +921,74 @@ engine.open_with_candidate(byte_source, open_options, candidate_id, &exec_ctx)
 
 `engine.open(...)` may accept a prior probe result to avoid duplicate work.
 
+### Complexity fingerprint and admission contract
+
+`OpenProbe` MUST emit a deterministic `ComplexityFingerprint` and an
+`AdmissionDecision` in addition to the preliminary `CapabilityReport`.
+
+The goal is not merely "can I open this file?" but "what class of file is this,
+what runtime envelope does it deserve, and what degradation/risk surface should
+the caller expect before committing to full open or expensive downstream work?"
+
+```
+pub enum ComplexityClass {
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Huge,
+    Pathological,
+}
+
+pub struct ComplexityFingerprint {
+    pub object_count_estimate: Option<u64>,
+    pub page_count_estimate: Option<u32>,
+    pub incremental_depth_estimate: u32,
+    pub stream_density_score: u32,
+    pub font_complexity_score: u32,
+    pub transparency_complexity_score: u32,
+    pub structure_complexity_score: u32,
+    pub signed_coverage_ratio: Option<f32>,
+    pub remote_first_paint_bytes_estimate: Option<u64>,
+    pub risky_decoder_set: Vec<DecoderType>,
+    pub active_content_score: u32,
+}
+
+pub struct BudgetRecommendation {
+    pub parse_budget: ResourceBudgets,
+    pub render_budget: ResourceBudgets,
+    pub extraction_budget: ResourceBudgets,
+    pub preferred_security_profile: SecurityProfile,
+}
+
+pub enum AdmissionDecision {
+    Admit {
+        class: ComplexityClass,
+        recommended_profile: OperationProfile,
+        budget: BudgetRecommendation,
+    },
+    AdmitDegraded {
+        class: ComplexityClass,
+        recommended_profile: OperationProfile,
+        budget: BudgetRecommendation,
+        expected_degradations: Vec<FeatureCode>,
+    },
+    Reject {
+        reason: AdmissionReason,
+        safe_probe_artifacts: Vec<ProbeArtifactRef>,
+    },
+}
+
+pub enum AdmissionReason {
+    BudgetHopeless,
+    ActiveContentPolicyBlocked,
+    PasswordRequired,
+    AmbiguousRecoveryBlocked,
+    TransportIntegrityFailed,
+    UnsupportedCriticalFeature,
+}
+```
+
 **API surface:**
 
 ```
@@ -1052,6 +1215,38 @@ When memory pressure exceeds all cache budgets, the engine degrades gracefully: 
 on demand rather than caching, re-interpreting content streams instead of reusing PagePlans. This
 degradation is instrumented (diagnostics report cache pressure events).
 
+### Resource canonicalization and deduplication contract
+
+```
+pub struct ResourceCanonicalForm {
+    pub semantic_fingerprint: ResourceFingerprint,
+    pub byte_fingerprint: Option<[u8; 32]>,
+    pub resource_kind: ResourceKind,
+    pub decode_parameters_digest: Option<[u8; 32]>,
+    pub provider_manifest_id: Option<String>,
+}
+
+pub enum DedupSafetyClass {
+    ByteExact,
+    SemanticEquivalent,
+    AppearanceEquivalent,
+    NotDeduplicable,
+}
+
+pub struct MaterializationPlan {
+    pub reused_existing: Vec<ObjRef>,
+    pub regenerated: Vec<ObjRef>,
+    pub dedup_merged: Vec<(ObjRef, ObjRef)>,
+    pub blocked_merges: Vec<BlockedMerge>,
+}
+```
+
+Dedup rules:
+- `ForeignPreserved` objects may not be semantically merged in preserve workflows
+- decoder choice, provider manifest, and decode params participate in canonical identity
+- appearance-equivalent merges are allowed only in explicit optimization transactions
+- `WritePlan` and `WriteReceipt` MUST record all dedup merges and blocked merges
+
 ### Crate boundaries
 
 #### `monkeybee-core`
@@ -1154,6 +1349,46 @@ browser connection limits). Requests are coalesced when ranges overlap or are ad
 a configurable gap threshold (default: 4096 bytes — it's cheaper to fetch a few extra bytes
 than to issue a separate request).
 
+### Remote transport integrity and sparse-availability contract
+
+Remote sessions MUST bind to a `TransportIdentity` and maintain a
+`ByteAvailabilityMap`. Range-backed correctness is not defined solely by
+"did bytes arrive?" but by "did they arrive from the same logical artifact?"
+
+```
+pub struct TransportIdentity {
+    pub source_fingerprint: [u8; 32],
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_length: Option<u64>,
+    pub digest_hint: Option<[u8; 32]>,
+}
+
+pub struct ByteAvailabilityMap {
+    pub epoch: FetchEpoch,
+    pub available_ranges: Vec<(u64, u64)>,
+    pub verified_ranges: Vec<(u64, u64)>,
+    pub suspect_ranges: Vec<(u64, u64)>,
+}
+
+pub struct FetchEpoch(pub u64);
+
+pub enum RangeConsistencyError {
+    ValidatorChanged,
+    ContentLengthChanged,
+    OverlappingConflict,
+    TruncatedBody,
+    Unsupported206Semantics,
+}
+```
+
+Rules:
+- all range responses within a session MUST agree on validator identity
+- validator drift freezes the session into explicit degraded mode
+- previously verified ranges remain trusted only within the same `FetchEpoch`
+- `OpenProbe`, `CapabilityReport`, and `WriteReceipt` MUST surface transport
+  integrity failures when they influence correctness
+
 **Integration with progressive rendering:** When the render pipeline encounters a stream whose
 bytes are not yet available, it:
 1. Records a placeholder in the tile output.
@@ -1238,6 +1473,28 @@ concurrent read access. The graph is immutable per snapshot — edits produce a 
 an incrementally updated graph (only the changed subgraph is recomputed).
 
 - Derived-artifact invalidation (PagePlan, resolved resources, decoded streams, widget appearances)
+
+#### `monkeybee-catalog`
+
+Document-catalog semantics that are broader than any one page and more
+structured than raw COS preservation:
+- outline / bookmark trees
+- named destinations and destination arrays
+- page labels
+- name trees and number trees
+- viewer preferences, page mode, and page layout
+- optional content configurations (`/OCProperties`, default configs, print/export states)
+- embedded-file inventory and AF relationships
+
+The catalog subsystem is the authoritative semantic model for these structures.
+Render/extract/write/diff/validate consume it; they do not each grow ad hoc
+partial models.
+
+Catalog round-trip invariants:
+- preserve sibling/child order in outline trees unless explicitly edited
+- preserve page-label numbering semantics across page insertion/deletion
+- preserve named-destination identity across full rewrite and incremental append
+- preserve OCG/OCMD semantics unless the edit explicitly changes visibility policy
 
 #### `monkeybee-content`
 
@@ -1996,6 +2253,49 @@ pub enum ExtractSurface {
 }
 ```
 
+### Extraction evidence contract
+
+`LogicalText` and `TaggedText` SHOULD optionally carry an evidence graph that
+lets downstream callers inspect why reading-order and table hypotheses were made.
+
+```
+pub struct ConfidenceBreakdown {
+    pub geometric_score: f32,
+    pub tagged_score: f32,
+    pub font_decode_score: f32,
+    pub column_detection_score: f32,
+    pub table_detection_score: f32,
+}
+
+pub struct SpanEvidence {
+    pub span_id: SpanId,
+    pub source_ops: Vec<ContentOpRef>,
+    pub source_mcid: Option<u32>,
+    pub confidence: ConfidenceBreakdown,
+}
+
+pub struct TableHypothesis {
+    pub bbox: Rectangle,
+    pub rows: u32,
+    pub cols: u32,
+    pub confidence: f32,
+    pub evidence_spans: Vec<SpanId>,
+}
+
+pub struct ReadingOrderEvidence {
+    pub spans: Vec<SpanEvidence>,
+    pub edges: Vec<ReadingOrderEdge>,
+    pub table_hypotheses: Vec<TableHypothesis>,
+}
+
+pub struct ReadingOrderEdge {
+    pub before: SpanId,
+    pub after: SpanId,
+    pub reason: String,
+    pub weight: f32,
+}
+```
+
 **Object graph inspection:**
 
 The inspection API provides programmatic access to the document's internal structure:
@@ -2440,6 +2740,45 @@ any object it modified was also modified by the first (via snapshot_id compariso
 are reported to the caller, who must resolve them (typically by rebasing the second transaction
 on the new snapshot). The engine does not automatically merge conflicting transactions.
 
+### Transaction lineage, rebase, and undo contract
+
+```
+pub struct TransactionIntent {
+    pub edit_intent: EditIntent,
+    pub human_reason: String,
+    pub expected_write_mode: Option<WriteMode>,
+    pub preserve_constraints: Vec<PreserveConstraint>,
+}
+
+pub struct ConflictSet {
+    pub conflicting_objects: Vec<ObjRef>,
+    pub affected_pages: Vec<u32>,
+    pub signature_impact: SignatureImpactReport,
+    pub structure_impact: Option<StructureEditRisk>,
+}
+
+pub struct RebasePlan {
+    pub base_snapshot: SnapshotId,
+    pub target_snapshot: SnapshotId,
+    pub replayed_changes: Vec<ChangeEntry>,
+    pub rejected_changes: Vec<RejectedChange>,
+    pub new_ownership_transitions: Vec<OwnershipTransitionRecord>,
+}
+
+pub struct UndoJournalEntry {
+    pub snapshot_before: SnapshotId,
+    pub snapshot_after: SnapshotId,
+    pub inverse_change_set: Vec<ChangeEntry>,
+}
+```
+
+Required invariants:
+- every committed transaction has a stable lineage record
+- every user-visible conflict has an object-level `ConflictSet`
+- rebasing is explicit, deterministic under deterministic mode, and auditable
+- undo is implemented as ordinary forward movement to a new snapshot, never
+  mutation of an existing snapshot
+
 Resource GC, deduplication, unreachable-object pruning, and rewrite-time compaction are explicit edit operations, not incidental writer side effects.
 
 Full-rewrite mode may canonicalize only `Owned` objects. Preserve-mode output must not silently take ownership of foreign or opaque structures.
@@ -2478,6 +2817,44 @@ Before any write, Monkeybee computes a `WritePlan` that classifies each touched 
 
 `WritePlan` is surfaced to the API/CLI and to the compatibility ledger. Signature-safe workflows
 must be explainable before bytes are emitted, not inferred after the fact.
+
+### Signature safety proof artifact contract
+
+Every successful write MUST optionally produce a `WriteReceipt`. For incremental
+append workflows, `WriteReceipt` is not a convenience artifact; it is the
+machine-readable attestation that the save respected preserve constraints.
+
+```
+pub struct BytePreservationMap {
+    pub immutable_prefix_end: u64,
+    pub preserved_ranges: Vec<(u64, u64)>,
+    pub touched_ranges: Vec<(u64, u64)>,
+    pub signed_ranges: Vec<(u64, u64)>,
+}
+
+pub struct SignedCoverageEntry {
+    pub signature_ref: ObjRef,
+    pub covered_ranges: Vec<(u64, u64)>,
+    pub affected_objects: Vec<ObjRef>,
+    pub invalidated: bool,
+    pub invalidation_reason: Option<String>,
+}
+
+pub struct WriteReceipt {
+    pub schema_version: String,
+    pub snapshot_id: SnapshotId,
+    pub write_mode: WriteMode,
+    pub write_plan_digest: [u8; 32],
+    pub bytes_appended: u64,
+    pub preservation: BytePreservationMap,
+    pub signature_coverage: Vec<SignedCoverageEntry>,
+    pub ownership_transitions: Vec<OwnershipTransitionRecord>,
+    pub post_write_validation: Vec<ValidationFinding>,
+}
+```
+
+`WritePlan.execute()` SHOULD return:
+`OperationSuccess<WriteResult { bytes, receipt: Option<WriteReceipt> }>`
 
 **WritePlan classification rules:**
 
@@ -3499,6 +3876,45 @@ renderer binaries).
 3. `ledger/` — per-document compatibility ledger JSON files
 4. `diffs/` — render comparison images for any page with MS-SSIM below threshold
 5. `timing.json` — per-test-class timing data for performance regression detection
+6. `capsules/` — self-contained failure capsules for every material proof failure
+
+### Failure capsule doctrine
+
+Every proof-harness regression, oracle disagreement above threshold, ambiguous
+repair drift, or native-decoder crash MUST emit a `FailureCapsule`.
+
+```
+pub struct DecoderAttestation {
+    pub decoder: DecoderType,
+    pub backend: String,
+    pub isolated: bool,
+    pub version: String,
+    pub verdict: String,
+    pub crash_fingerprint: Option<String>,
+}
+
+pub struct FailureCapsule {
+    pub input_sha256: String,
+    pub minimized_fixture: Option<String>,
+    pub oracle_manifest: OracleManifest,
+    pub compatibility_ledger: CompatibilityLedger,
+    pub trace_stream_ref: Option<String>,
+    pub write_receipt_ref: Option<String>,
+    pub decoder_attestations: Vec<DecoderAttestation>,
+    pub repro_command: String,
+    pub failure_kind: String,
+}
+
+pub struct RepairStabilityRecord {
+    pub fixture_id: String,
+    pub expected_candidate: RecoveryCandidateId,
+    pub actual_candidate: RecoveryCandidateId,
+    pub semantic_digest_changed: bool,
+}
+```
+
+`monkeybee-proof` MUST emit `capsules/` alongside `ledger/`, `diffs/`, and
+`regressions.json`.
 
 **Regression detection:**
 - The proof harness compares `proof-report.json` against a committed baseline
