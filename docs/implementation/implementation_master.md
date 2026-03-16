@@ -325,7 +325,7 @@ Core library crates (`monkeybee-core`, `monkeybee-syntax`, `monkeybee-document`,
 The `monkeybee` facade, `monkeybee-bytes`, `monkeybee-proof`, and `monkeybee-cli` are asupersync-native. In these crates, asupersync is not an adapter — it is the canonical orchestration substrate:
 
 - Session lifecycle is modeled as asupersync regions with parent-child ownership.
-- Operations return `Outcome<T, E>` (four-valued: Ok/Err/Cancelled/Panicked).
+- Public operations return `OperationOutcome<T>` = `Outcome<OperationSuccess<T>, MonkeybeeError>` (four-valued: Ok/Err/Cancelled/Panicked).
 - Budgets use asupersync's `Budget` semiring with automatic `combine()` tightening for child operations.
 - Cancellation checkpoints in core crates delegate to `cx.checkpoint()` through the `ExecutionContext` bridge.
 - The proof harness uses `LabRuntime` with DPOR, oracle suite, and chaos injection for deterministic concurrency testing.
@@ -369,6 +369,14 @@ The bridge between asupersync (async orchestration) and Rayon (CPU parallelism) 
 6. **Panic containment:** Rayon panics (from native decoders, malformed input) are caught at the Rayon scope boundary and converted to `Outcome::Panicked` in the asupersync region. They do not propagate across the bridge.
 
 ### Outcome discipline
+
+Public operations return `OperationOutcome<T>` rather than raw `Result<T, E>`:
+
+```
+pub type OperationOutcome<T> = Outcome<OperationSuccess<T>, MonkeybeeError>;
+```
+
+`OperationSuccess<T>` carries the value, diagnostics, an optional `OperationReport` (Probe/Render/Extract/Write/Diff), `BudgetSummary`, and `CacheSummary`.
 
 Operations that can be cancelled return `Outcome<T, E>` rather than `Result<T, E>`. The four-valued Outcome distinguishes:
 - `Ok(T)` — operation succeeded with full result

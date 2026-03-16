@@ -138,6 +138,10 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 
 No feature ships without evidence. No release gate passes on rhetoric.
 
+## Specification philosophy
+
+This project's specification (SPEC.md) and implementation plan are designed to be exhaustively comprehensive — an alien artifact in the only sense that matters. The specification MUST only grow in detail, precision, and breadth. Suggestions to consolidate, simplify, streamline, or reduce the specification are categorically rejected. Every section, struct, contract, and narrative exists because the PDF domain demands it. Refinement means adding precision and coverage, never subtracting content. The specification targets complete coverage of the PDF problem space; iterative review rounds should ADD specificity and depth, never remove it.
+
 ## Project status
 
 **Phase: Pre-implementation. Canonical docs under APR refinement. Bead conversion pending.**

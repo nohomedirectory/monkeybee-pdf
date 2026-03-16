@@ -39,6 +39,8 @@ Monkeybee aspires to feel like an alien artifact in the only sense that matters:
 
 Monkeybee keeps the alien-artifact ambition, but v1 is gated on a correct baseline engine, not on landing every advanced algorithm before first release.
 
+**Anti-reduction doctrine:** This specification is the soul of the project and MUST only grow in detail, precision, and comprehensiveness. Suggestions to "consolidate," "simplify," "streamline," "merge sections," "remove redundancy," or "condense" are categorically rejected. Every section, struct, enum, contract, and narrative exists because the domain demands it. Refinement means adding precision, not removing content. The specification targets exhaustive coverage of the PDF problem space; any proposal that would reduce its surface area, remove detail, or flatten its structure is antithetical to the project's goals. Reviewers and automated refinement rounds must ADD specificity, never subtract it.
+
 **Delivery rule:**
 1. Every gated subsystem ships with a simple, auditable baseline path.
 2. Advanced algorithms land behind pluggable traits / feature flags.
@@ -104,9 +106,27 @@ Monkeybee adopts explicit, named operational modes that encode mutually competin
   **Ambiguity rule:** if multiple recovery strategies produce materially different semantic
   outcomes (page count, object graph, text decode, signature coverage, or write impact) and no
   deterministic tiebreaker exists, tolerant mode emits `parse.repair.ambiguous`.
-  By default, `engine.open()` returns the highest-confidence candidate plus the ambiguity record;
+  By default, `engine.open()` returns the highest-confidence candidate plus a `RepairDecision`
+  that records every materially different `RecoveryCandidate`.
   `ForensicPreserve` may instead reject ambiguous recovery unless
   `allow_ambiguous_recovery=true`.
+
+```
+pub struct RecoveryCandidate {
+    pub candidate_id: RecoveryCandidateId,
+    pub confidence: f64,
+    pub semantic_digest: [u8; 32],
+    pub page_count: u32,
+    pub write_impact: WriteImpactPreview,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+pub struct RepairDecision {
+    pub chosen: RecoveryCandidateId,
+    pub alternatives: Vec<RecoveryCandidateSummary>,
+    pub reason: String,
+}
+```
 - **Preserve mode:** Byte-preserving where possible. Does not rewrite, renumber, or reformat objects the engine does not semantically own. This mode exists to support signature-safe workflows and incremental-update integrity. The parser in preserve mode retains raw byte spans, whitespace, and formatting for objects it does not modify.
 
 **Write modes:**
@@ -135,8 +155,9 @@ Modes are low-level contracts. Most callers should start from an `OperationProfi
   - parse=tolerant, write=deterministic, security=strict, open=in_memory_remote,
     provider_policy=pinned_only
 
-`ExecutionContext::from_profile(profile)` materializes budgets, cache policy, provider policy,
-determinism, and default write/open behavior from the preset.
+`ExecutionContext::from_profile(profile)` materializes budgets, cache policy,
+provider policy, optional provider overrides, determinism, and default
+write/open behavior from the preset.
 
 ### Execution context doctrine
 
@@ -144,8 +165,19 @@ Every top-level API accepts an operation-scoped `ExecutionContext` carrying:
 - Resource budgets (objects, decompressed bytes, operators, recursion depth)
 - Cooperative cancellation / deadline
 - Determinism settings for CI and proof
-- Provider registry
+- Provider policy and optional per-operation provider overrides
 - Trace / metrics sink
+
+```
+pub struct DeterminismSettings {
+    pub deterministic_output: bool,    // canonical serialization order, stable hashers
+    pub pinned_fallback_fonts: bool,   // use pinned font pack instead of system fonts
+    pub fixed_thread_count: Option<usize>,  // for reproducible benchmarks
+    pub stable_task_order: bool,
+    pub canonical_float_reductions: bool,
+    pub deterministic_diagnostic_order: bool,
+}
+```
 
 `ExecutionContext` is never stored on `OpenSession`.
 Sessions are long-lived document handles; execution contexts are per-call control planes.
@@ -199,6 +231,18 @@ a default `VecSink` collects them. The API always returns the diagnostic collect
 operation result.
 
 Provider interfaces include `FontProvider`, `ColorProfileProvider`, `CryptoProvider`, and `OracleProvider`.
+Default provider instances live on `MonkeybeeEngine`.
+`ExecutionContext` does not own the provider registry; it carries only the
+policy and any per-call override layer used to resolve providers.
+
+```
+pub struct ProviderOverrides {
+    pub font_provider: Option<Arc<dyn FontProvider>>,
+    pub color_profile_provider: Option<Arc<dyn ColorProfileProvider>>,
+    pub crypto_provider: Option<Arc<dyn CryptoProvider>>,
+    pub oracle_provider: Option<Arc<dyn OracleProvider>>,
+}
+```
 
 ### Provider trait contracts
 
@@ -279,6 +323,36 @@ Each module declares:
 - version/hash for manifesting
 
 Canonical CI/proof runs record the active feature-module manifest alongside the oracle manifest.
+
+### Active content policy
+
+Decoder security and active-content handling are separate control planes.
+JavaScript, action dictionaries, embedded files, rich media, and external
+references are governed by `ActiveContentPolicy`.
+
+```
+pub enum ActiveContentPolicy {
+    PreserveButDenyExecute,
+    StripOnWrite,
+    ErrorOnPresence,
+    AllowTrustedHandlers,
+}
+
+pub struct ActiveContentReport {
+    pub has_open_action: bool,
+    pub has_additional_actions: bool,
+    pub has_javascript: bool,
+    pub has_launch: bool,
+    pub has_uri: bool,
+    pub has_submit_form: bool,
+    pub has_remote_goto: bool,
+    pub has_embedded_files: bool,
+    pub has_rich_media: bool,
+}
+```
+
+`CapabilityReport` MUST include `active_content: ActiveContentReport`.
+The default v1 behavior is `PreserveButDenyExecute`.
 
 ---
 
@@ -536,7 +610,7 @@ The PDF transparency model (ISO 32000-1 §11.6, ISO 32000-2 §11.7) is a full Po
 
 **Blend mode interactions:** PDF defines 16 blend modes: Normal, Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight, Difference, Exclusion, Hue, Saturation, Color, Luminosity. The last four (Hue, Saturation, Color, Luminosity) are non-separable — they operate on the composite color value rather than per-channel. The engine must implement all 16. The hard cases: blend modes stacked inside nested transparency groups with different isolation/knockout settings; blend modes applied to elements that are themselves soft-masked; blend modes in different color spaces requiring conversion before blending.
 
-**Overprint and overprint mode:** Overprint (`/OP`, `/op`) controls whether painting in one colorant erases other colorants in the same area. Overprint mode (`/OPM`) modifies the behavior for DeviceCMYK: OPM=1 means a zero component value does not overwrite the corresponding backdrop component (the "nonzero overprint" rule). This matters for CMYK-heavy print-oriented PDFs and is a common source of visual differences between renderers. The engine must: (a) track the overprint state in the graphics state, (b) implement the OPM=1 nonzero rule for DeviceCMYK, (c) extend overprint semantics to Separation and DeviceN color spaces (overprint applies per-component based on the colorant names).
+**Overprint and overprint mode:** Overprint (`/OP`, `/op`) controls whether painting in one colorant erases other colorants in the same area. Overprint mode (`/OPM`) modifies the behavior for DeviceCMYK: OPM=1 means a zero component value does not overwrite the corresponding backdrop component (the "nonzero overprint" rule). This matters for CMYK-heavy print-oriented PDFs and is a common source of visual differences between renderers. Baseline v1 MUST track overprint state and emit explicit diagnostics when OPM=1 or Separation/DeviceN overprint semantics are not available on the active support class. Full OPM=1 nonzero-overprint behavior becomes Tier 1 only after scope-registry promotion and proof-harness coverage.
 
 #### Producer quirk catalog
 
@@ -649,11 +723,12 @@ The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 
 ### Workspace layout
 
-`monkeybee` is the only semver-stable public library crate.
+`monkeybee` is a dedicated facade crate at `crates/monkeybee/` and the only semver-stable public library crate.
+`monkeybee-diff` is an implementation crate that owns structural/text/render/save-impact comparison; `monkeybee` re-exports the stable diff API.
 All other workspace crates are implementation crates unless explicitly re-exported by `monkeybee`.
 The workspace layout is not itself the public API contract.
 
-Monkeybee is a Cargo workspace with four explicit strata:
+Monkeybee is a Cargo workspace with five explicit strata:
 1. **Byte/revision layer** — immutable source bytes plus appended revisions.
 2. **Syntax/COS layer (`monkeybee-syntax`)** — immutable parsed objects, token/span provenance,
    xref provenance, object-stream membership, raw formatting retention, and repair records.
@@ -661,6 +736,7 @@ Monkeybee is a Cargo workspace with four explicit strata:
 3. **Semantic document layer (`monkeybee-document`)** — resolved page/resource/object graph built
    from syntax snapshots; it owns semantic meaning, not raw-byte fidelity.
 4. **Content layer** — parsed content-stream IR and interpreter shared by render/extract/inspect/edit.
+5. **Facade/report layer** — `monkeybee` (stable public API), `monkeybee-diff`, and `monkeybee-cli`.
 
 `monkeybee-core` is intentionally small; it provides shared primitives rather than becoming a god crate.
 `monkeybee-syntax` is intentionally dumb but durable: it preserves what the parser saw and what the
@@ -690,10 +766,20 @@ pub struct CapabilityReport {
     pub has_javascript: bool,
     pub risky_decoder_set: Vec<DecoderType>,
     pub edit_safety: EditSafetyClass,
+    pub save_constraints: SaveConstraintReport,
     pub preserve_constraints: Vec<PreserveConstraint>,
     pub expected_degradations: Vec<FeatureCode>,
     pub recovery_confidence: RecoveryConfidence,
     pub ambiguity_count: u32,
+    pub active_content: ActiveContentReport,
+}
+
+pub struct SaveConstraintReport {
+    pub doc_mdp: Option<DocMdpPolicy>,
+    pub field_mdp: Vec<FieldMdpPolicy>,
+    pub encrypt_permissions: Option<PermissionBits>,
+    pub allowed_incremental_ops: Vec<SaveOperationKind>,
+    pub blocked_ops: Vec<BlockedSaveOperation>,
 }
 ```
 
@@ -717,8 +803,15 @@ It may inspect:
 - likely risky decoder set
 - approximate page count / object count when cheaply knowable
 
-`OpenProbe` returns a preliminary `CapabilityReport`, an estimated complexity class, and a
-recommended `OperationProfile`.
+`OpenProbe` returns a preliminary `CapabilityReport`, an estimated complexity class,
+a recommended `OperationProfile`, and any `RecoveryCandidateSummary` records that
+can be determined cheaply.
+
+The facade exposes:
+
+```
+engine.open_with_candidate(byte_source, open_options, candidate_id, &exec_ctx)
+```
 
 `engine.open(...)` may accept a prior probe result to avoid duplicate work.
 
@@ -753,6 +846,12 @@ This API ensures:
 
 ### Outcome discipline
 
+Public operations return `OperationOutcome<T>` rather than raw `Result<T, E>`:
+
+```
+pub type OperationOutcome<T> = Outcome<OperationSuccess<T>, MonkeybeeError>;
+```
+
 Operations that can be cancelled return `Outcome<T, E>` rather than `Result<T, E>`.
 The four-valued Outcome distinguishes:
 - `Ok(T)` — operation succeeded with full result
@@ -770,8 +869,9 @@ child outcome.
 `Shutdown`, `BudgetExhausted`. These map to different retry, diagnostic, and supervision
 policies.
 
-At library boundaries (FFI, C API, WASM), Outcome is collapsed to Result with
-structured error discrimination. Within the Rust API, Outcome is preserved.
+At FFI boundaries (C API, WASM bindings), `OperationOutcome<T>` may be collapsed
+to a `Result`-shaped representation with explicit cancellation/panic tags.
+Within the Rust API, `OperationOutcome<T>` is preserved.
 
 ### Session lifecycle regions
 
@@ -821,33 +921,45 @@ pub struct ExtractReport {
 }
 ```
 
-### Library API error contract
+### Library API result contract
 
-Every public API that processes PDF data returns a `Result<T, MonkeybeeError>` where:
+Every public API that processes PDF data returns `OperationOutcome<T>` where:
 
 - `Err(MonkeybeeError)` indicates a fatal failure — the operation did not produce a usable result.
   Examples: file cannot be opened, decryption fails with wrong password, no valid xref found
   even after repair.
 - `Ok(result)` indicates the operation completed. The result may include degradations.
 
-Successful results carry a `Diagnostics` collection alongside the primary value:
+Successful operations carry diagnostics and an operation-specific report alongside
+the primary value:
 
 ```
-pub struct WithDiagnostics<T> {
+pub struct OperationSuccess<T> {
     pub value: T,
     pub diagnostics: Vec<Diagnostic>,
     pub has_errors: bool,      // true if any Error-severity diagnostics were emitted
     pub has_warnings: bool,    // true if any Warning-severity diagnostics were emitted
+    pub report: Option<OperationReport>,
+    pub budget_summary: BudgetSummary,
+    pub cache_summary: CacheSummary,
+}
+
+pub enum OperationReport {
+    Probe(CapabilityReport),
+    Render(RenderReport),
+    Extract(ExtractReport),
+    Write(WriteReport),
+    Diff(DiffReport),
 }
 ```
 
-API methods return `Result<WithDiagnostics<T>, MonkeybeeError>`. The caller can:
+API methods return `OperationOutcome<T>`. The caller can:
 1. Check `result.has_errors` to detect degraded results
 2. Inspect `result.diagnostics` for specific degradation details
 3. Ignore diagnostics entirely if they only care about the primary value
 
 The `DiagnosticSink` on `ExecutionContext` receives diagnostics in real time during processing.
-The `WithDiagnostics` collection is the post-hoc summary. Both exist because different callers
+The `OperationSuccess` collection is the post-hoc summary. Both exist because different callers
 have different needs: a viewer wants real-time progress; a batch tool wants a summary.
 
 **Error coarsening rule:** Subsystem-specific errors (ParseError, RenderError, WriteError) are
@@ -871,12 +983,28 @@ All caches are governed by a single `CachePolicy`.
 - deterministic mode behavior
 - wasm/native default profiles
 
+Every cache key belongs to a `CacheNamespace`:
+
+```
+CacheNamespace = (
+  snapshot_id,
+  security_profile,
+  provider_manifest_id,
+  determinism_class,
+  view_state_hash
+)
+```
+
+`view_state_hash` covers any setting that can change visible or extracted output
+without changing document bytes (for example optional-content configuration,
+substitute-font policy, and active-content policy).
+
 Canonical caches:
 - `ParsedObjectCache`      key=(document_id, revision_id, objref)
 - `DecodedStreamCache`     key=(resource_fingerprint, filter_chain_hash)
 - `ParsedFontCache`        key=(font_fingerprint)
-- `PagePlanCache`          key=(snapshot_id, page_index, dependency_fingerprint, profile_hash)
-- `RasterTileCache`        key=(snapshot_id, page_index, tile_id, dpi, completeness, profile_hash)
+- `PagePlanCache`          key=(cache_namespace, page_index, dependency_fingerprint, pageplan_mode_hash)
+- `RasterTileCache`        key=(cache_namespace, page_index, tile_id, dpi, completeness, render_profile_hash)
 - `ColorTransformCache`    key=(icc_fingerprint, intent, target_space)
 - `ResolvedResourceCache`  key=(snapshot_id, page_index, inheritance_fingerprint)
 
@@ -1259,8 +1387,11 @@ Key responsibilities:
 - Vector graphics: path construction, stroking, filling, clipping, winding rules
 - Color management: DeviceRGB, DeviceCMYK, DeviceGray, CalRGB, CalGray, Lab, ICCBased, Indexed, Separation, DeviceN, Pattern
 - Transparency: groups, soft masks, blend modes, isolated/knockout, alpha compositing
-- Patterns: tiling patterns, shading patterns (all function and axial/radial/mesh types)
-- Graphics state: CTM, clipping, line properties, rendering intent, overprint
+- Patterns: tiling patterns plus function/axial/radial shadings in the baseline;
+  mesh shadings are target-qualified and may degrade explicitly until promoted by
+  the scope registry.
+- Graphics state: CTM, clipping, line properties, rendering intent, and overprint
+  state tracking; full OPM=1 semantics follow the support-class/scope-registry table.
 - Page rendering: media box, crop box, bleed/trim/art boxes, rotation, user unit
 - Optional content (layers): OCG visibility, OCMD membership, default/print/export states
 - Output targets: raster (PNG/JPEG), vector (SVG), region render, thumbnail render, and extensible backend interface
@@ -1906,6 +2037,9 @@ Text extraction reuses the same content stream interpretation pipeline as the re
 
 Semantic and multi-surface comparison between documents or snapshots.
 
+`monkeybee-diff` is a required implementation crate, not a report-only concept.
+Its outputs are re-exported by the public `monkeybee` facade.
+
 Key responsibilities:
 - structural object/page/resource deltas
 - text deltas (physical/logical/tagged surfaces)
@@ -2363,6 +2497,8 @@ before any bytes are written.
 - `full_rewrite_reasons`
 - `structure_impact`
 - `accessibility_impact`
+- `permission_impact`
+- `byte_patch_plan`
 
 After `WritePlan`, the writer must compile a concrete `BytePatchPlan`:
 
@@ -2377,7 +2513,8 @@ BytePatchPlan {
 }
 ```
 
-`BytePatchPlan` is the last inspectable artifact before byte emission.
+`BytePatchPlan` is the last inspectable artifact before byte emission and MUST
+be computable in dry-run mode.
 Preserve-mode and signature-safe guarantees are made against `BytePatchPlan`, not only against
 object-level classifications.
 
@@ -3703,6 +3840,11 @@ It is machine-readable and CI-validated against:
 - bead appendix
 - generated capability docs
 - README capability tables
+- workspace feature flags
+
+Crate-boundary sections and feature narratives MUST use scope-qualified language.
+No subsystem contract may say "must support" for a feature whose registry class is
+`post_v1`, `experimental`, or target-qualified non-baseline.
 - CLI `capabilities --json`
 - workspace feature flags
 
