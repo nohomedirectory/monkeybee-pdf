@@ -13,3 +13,85 @@ oracle:
 rounds:
   output_dir: .apr/rounds/monkeybee-pdf
   impl_every_n: 3
+
+template: |
+  First, read this README:
+
+  ```
+  <contents of README will be included by oracle>
+  ```
+
+  ---
+
+  NOW: Carefully review this entire plan for me and come up with your best
+  revisions in terms of better architecture, new features, changed features,
+  etc. to make it better, more robust/reliable, more performant, more
+  compelling/useful, etc.
+
+  CRITICAL CONSTRAINT — ALIEN ARTIFACT DOCTRINE:
+  This specification aspires to be an alien artifact: a disturbing combination
+  of breadth, depth, coherence, and evidence. Your revisions MUST be purely
+  ADDITIVE. You must NEVER propose consolidating, simplifying, streamlining,
+  merging sections, removing redundancy, condensing, trimming, shortening, or
+  reducing the specification in any way. Every section, struct, enum, contract,
+  and narrative exists because the PDF domain demands it. The specification
+  must only GROW in detail, precision, and comprehensiveness. If you see
+  something that seems redundant, the correct response is to add MORE
+  specificity to differentiate the overlapping sections, not to merge them.
+  Propose new structs, new enums, new contracts, new subsystems, new proof
+  surfaces, new edge-case coverage. Make it deeper, wider, more precise.
+  Never shallower, narrower, or more concise.
+
+  For each proposed change, give me your detailed analysis and
+  rationale/justification for why it would make the project better along
+  with the git-diff style change versus the original plan shown below:
+
+  ```
+  <contents of spec will be included by oracle>
+  ```
+
+template_with_impl: |
+  First, read this README:
+
+  ```
+  <contents of README will be included by oracle>
+  ```
+
+  ---
+
+  And here is a document detailing the implementation; you should also keep
+  the implementation in mind as you think about the specification, since
+  ultimately the specification needs to be translated into code eventually!
+
+  ```
+  <contents of implementation will be included by oracle>
+  ```
+
+  ---
+
+  NOW: Carefully review this entire plan for me and come up with your best
+  revisions in terms of better architecture, new features, changed features,
+  etc. to make it better, more robust/reliable, more performant, more
+  compelling/useful, etc.
+
+  CRITICAL CONSTRAINT — ALIEN ARTIFACT DOCTRINE:
+  This specification aspires to be an alien artifact: a disturbing combination
+  of breadth, depth, coherence, and evidence. Your revisions MUST be purely
+  ADDITIVE. You must NEVER propose consolidating, simplifying, streamlining,
+  merging sections, removing redundancy, condensing, trimming, shortening, or
+  reducing the specification in any way. Every section, struct, enum, contract,
+  and narrative exists because the PDF domain demands it. The specification
+  must only GROW in detail, precision, and comprehensiveness. If you see
+  something that seems redundant, the correct response is to add MORE
+  specificity to differentiate the overlapping sections, not to merge them.
+  Propose new structs, new enums, new contracts, new subsystems, new proof
+  surfaces, new edge-case coverage. Make it deeper, wider, more precise.
+  Never shallower, narrower, or more concise.
+
+  For each proposed change, give me your detailed analysis and
+  rationale/justification for why it would make the project better along
+  with the git-diff style change versus the original plan shown below:
+
+  ```
+  <contents of spec will be included by oracle>
+  ```
