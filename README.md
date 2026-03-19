@@ -64,13 +64,18 @@ Monkeybee now has three explicit lanes:
   PDFs with simple, auditable implementations and a locked substrate.
 - **Experimental backends (non-gating):** advanced render, color, encode, or decode paths that
   remain optional until they beat the baseline under proof.
-- **Post-v1 intelligence/forensics surfaces:** temporal replay, richer semantic graph queries,
+- **Post-v1 intelligence/collaboration surfaces:** richer semantic graph queries,
   anchor-driven automation, and stronger provenance layers that are architected now without being
   allowed to destabilize the baseline.
+
+Visible workflows in `SPEC.md` now include not only hostile rendering, annotation/edit round trips,
+and progressive open, but also Workflow 13: **Render and interact with 3D PDF content** on
+PRC/U3D annotations.
 
 Baseline v1 must prove all of the following:
 
 - **Reader-kernel correctness** on hard, pathological, real-world PDFs that simpler engines mishandle or refuse.
+- **Interactive 3D PDF rendering on PRC and U3D content** — the first open-source implementation and a native baseline capability rather than a post-v1 escape hatch.
 - **Persistent immutable snapshots** backed by a content-addressed substrate rather than whole-document cloning.
 - **Exact dependency-tracked invalidation** so small edits only recompute affected pages, resources, and derived artifacts.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent semantic drift.
@@ -82,6 +87,9 @@ Baseline v1 must prove all of the following:
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, and surfaced — never silently swallowed.
 - **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, and invalidation causes in a way users can act on.
+
+Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
+accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1.
 
 ## Compatibility doctrine
 
@@ -131,6 +139,8 @@ Workspace crates:
 | `monkeybee-content` | Content-stream IR + interpreter shared by render/extract/inspect/edit; graphics-state algebra and sink adapters |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline for existing PDF text, authoring pipeline for generated text, subsetting, search/hit-test primitives |
 | `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, tile/band surfaces, cooperative cancellation, progressive rendering |
+| `monkeybee-3d` | PRC/U3D parsing, unified scene graph, wgpu rendering (Vulkan/Metal/DX12/WebGPU), named views, cross-sections, illustration modes |
+| `monkeybee-gpu` | Optional GPU-accelerated 2D rendering backend via wgpu, shared device/queue with the 3D pipeline, compute shader path rasterization, hardware compositing |
 | `monkeybee-compose` | High-level authoring and composition: document/page builders, appearance synthesis, resource naming, font embedding planning |
 | `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, preservation-aware `WritePlan` execution, xref/trailer emission, structural validation, final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content-stream rewrite pipeline |
@@ -138,6 +148,7 @@ Workspace crates:
 | `monkeybee-paint` | Shared page-independent paint and appearance primitives reused by render, compose, forms, and annotate |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
 | `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, layout graph, semantic anchors, typed query/selection helpers, diagnostics |
+| `monkeybee-forensics` | Hidden-content detection, redaction audits, post-signing modification analysis, exploit-pattern detection, producer/font fingerprinting |
 | `monkeybee-validate` | Arlington/profile validation, write preflight, signature byte-range checks |
 | `monkeybee-diff` | Structural, text, render, save-impact, and revision-frame comparison engine reused by the facade, proof harness, and CLI |
 | `monkeybee-signature` | Signature parsing, byte-range preservation, DocMDP/FieldMDP policy, verification plumbing, and save-impact analysis |
@@ -169,6 +180,10 @@ before subsystem fan-out.
 Only after Slice F is ratified does Monkeybee fan out into the reader kernel, preserve loop,
 progressive/remote, and proof slices.
 
+The reader-kernel slice explicitly includes baseline 3D annotation detection and baseline 3D
+render for PRC/U3D annotations (PRC/U3D parsing plus static 3D scene rendering) so that 3D PDF
+support is part of the v1 proof surface rather than a deferred niche lane.
+
 ## Repo structure
 
 ```
@@ -193,6 +208,8 @@ monkeybee-pdf/
 │   ├── monkeybee-content/
 │   ├── monkeybee-text/
 │   ├── monkeybee-render/
+│   ├── monkeybee-3d/
+│   ├── monkeybee-gpu/
 │   ├── monkeybee-compose/
 │   ├── monkeybee-write/
 │   ├── monkeybee-edit/
@@ -200,6 +217,7 @@ monkeybee-pdf/
 │   ├── monkeybee-paint/
 │   ├── monkeybee-annotate/
 │   ├── monkeybee-extract/
+│   ├── monkeybee-forensics/
 │   ├── monkeybee-validate/
 │   ├── monkeybee-proof/
 │   ├── monkeybee-diff/
@@ -250,6 +268,11 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 
 No feature ships without evidence. No release gate passes on rhetoric. No architectural promise is
 accepted until a proof surface exists for it.
+
+The current spec inventory names 104 algorithms and techniques across baseline, post-baseline, and
+experimental lanes (57 pre-existing plus 47 restored or added), including restored 3D rendering,
+GPU backends, PDF 2.0 supplements, forensics, subpixel text, advanced path geometry, compression,
+and hot-path optimizations.
 
 ## Specification philosophy
 

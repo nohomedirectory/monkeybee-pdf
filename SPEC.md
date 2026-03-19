@@ -61,7 +61,7 @@ signature-safe save planning — into one coherent computational model.
 - Monkeybee is not trying to achieve perfect semantic recovery from every hostile file ever made.
 - Monkeybee is not trying to finish the entire PDF category in one stroke.
 - Monkeybee must not become incoherent because agents can generate enormous quantities of code. Deeper coherence, not decorative sprawl.
-- Monkeybee is not adding 3D PDF support, OCR, document understanding, accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1. Those are post-v1 lanes.
+- Monkeybee is not adding OCR, document understanding, accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1. Those are post-v1 lanes.
 
 - Monkeybee is not making v1 depend on theorem provers, zero-knowledge proofs, CRDT collaboration, reactive execution, or AI agents. Those may be layered later, but the baseline must stand without them.
 - Monkeybee is not exposing unconstrained LLM-edit surfaces that can mutate PDFs without stable anchors, typed proposals, policy checks, or receipts.
@@ -118,6 +118,7 @@ Monkeybee defines six release slices:
    - open/parse/repair
    - inspect/extract
    - baseline raster render
+   - baseline 3D content rendering (PRC/U3D parsing, static scene render)
    - deterministic full rewrite
    - strict parse-own-output validation
 
@@ -141,7 +142,7 @@ Monkeybee defines six release slices:
    - CI scorecards and regression gates
    - invariant certificates, hypothesis ledgers, and failure capsules
 
-5. **Slice E — Intelligence / forensics / collaboration (post-v1)**
+5. **Slice E — Intelligence / collaboration (post-v1)**
    - temporal revision replay and historical inspection surfaces
    - spatial-semantic graph + typed query interface
    - agent-safe edit proposals anchored by stable semantic IDs
@@ -628,6 +629,30 @@ current snapshot, policy, ownership rules, and preservation constraints before a
 Proof surfaces: anchor-stability tests across safe rewrites, query determinism checks, proposal
 validation logs, and edit receipts that point back to anchor IDs and substrate digests.
 
+### Workflow 13: Render and interact with 3D PDF content
+
+A user opens a PDF containing 3D annotations (PRC or U3D data streams). Monkeybee parses the 3D
+data, builds a scene graph, and renders via wgpu. The user can orbit, pan, zoom, switch named
+views, toggle rendering modes (solid, wireframe, transparent, illustration), apply cross-sections,
+and navigate the product structure tree. This works natively on desktop (Vulkan/Metal/DX12) and
+in the browser (WebGPU).
+
+Proof surfaces: 3D content detection and parsing on corpus, scene graph construction validation,
+render comparison against Adobe Acrobat screenshots, named view interpolation tests, cross-section
+geometry verification.
+
+### Workflow 14: Document security forensics
+
+A user loads a PDF and requests a security/forensics analysis. Monkeybee detects hidden content
+(white-on-white text, off-page content, content clipped behind images), insufficient redactions
+(content still extractable under opaque rectangles), post-signing modifications (classify changes
+as permitted or suspicious), known CVE-pattern signatures in parsed structures, producer
+fingerprinting from structural patterns (not just the `/Producer` string), and font fingerprinting
+via glyph outline matching.
+
+Proof surfaces: hidden content detection on known-planted corpus, redaction sufficiency audit on
+intentionally bad redactions, post-signing modification classification accuracy.
+
 ---
 
 ## Part 2 — Compatibility target
@@ -884,6 +909,54 @@ For V5 (R5-R6), key derivation uses SHA-256/SHA-384/SHA-512:
 - Files where the permissions integer is incorrect but the encryption is otherwise valid. Do not reject a file solely because its stated permissions seem wrong — decrypt and let the user decide.
 
 **Non-standard security handlers:** The engine detects non-standard security handlers (any `/Filter` value other than `/Standard` in the encryption dictionary) and reports them as Tier 3. It does not attempt to implement proprietary DRM schemes (Adobe LiveCycle Policy Server, FileOpen, etc.).
+
+### PDF 2.0 normative supplements
+
+Monkeybee tracks the normative supplements that materially affect modern PDF 2.0 interoperability.
+These are not decorative checkboxes; they affect decryption, integrity reporting, structure
+preservation, color management, and extraction fidelity.
+
+**AES-GCM authenticated encryption (ISO/TS 32003):** AES-GCM provides authenticated encryption
+(integrity + confidentiality in one operation). The engine must support AES-GCM for decryption
+when the `/SubFilter` indicates GCM mode. For output encryption (post-baseline), AES-GCM SHOULD be
+the preferred algorithm over AES-CBC. The key derivation and per-object key computation follow the
+same V5/R6 scheme but with GCM mode selection.
+
+**Document integrity protection (ISO/TS 32004):** Document integrity dictionaries (`/DID`)
+provide modification detection beyond signature `/ByteRange`. The engine must parse `/DID`
+entries, verify integrity hashes when present, and surface integrity violations in
+`CapabilityReport` and the compatibility ledger.
+
+**Structure namespaces (ISO/TS 32005):** PDF 2.0 introduces namespace-qualified structure element
+types. The engine must resolve role mapping chains through namespace declarations, handle standard
+structure namespaces (PDF 2.0, MathML), and preserve namespace declarations during round-trip.
+
+**Hash algorithm agility (ISO/TS 32001):** Beyond SHA-256/384/512, support SHA-3 and SHAKE
+families when specified in signature or integrity dictionaries. The `CryptoProvider` trait must
+accept algorithm identifiers from the ISO/TS 32001 registry.
+
+**Associated files (AF relationships):** PDF 2.0 `/AF` dictionaries associate files with any
+object, not only the document catalog. The catalog crate must parse `/AF` arrays, track
+relationship types (`/AFRelationship`), and preserve AF linkages during round-trip. The extraction
+crate must enumerate all AF-linked files.
+
+**Page-level output intents:** PDF 2.0 allows `/OutputIntents` on individual pages, not just the
+document catalog. The color pipeline must check for page-level output intents before falling back
+to document-level intents.
+
+**Black point compensation:** When `/BlackPointCompensation` is `true` in a rendering intent, the
+color conversion pipeline must apply BPC (scale the source black point to the destination black
+point rather than mapping to absolute zero). This affects ICC profile evaluation and perceptual
+shadow detail.
+
+**Geospatial features:** PDF 2.0 measure dictionaries define coordinate system transforms for
+geospatial PDFs. The engine must parse `/Measure` dictionaries, expose coordinate system metadata
+through extraction, and preserve measure dictionaries during round-trip. Rendering of geospatial
+annotations is Tier 2.
+
+**Requirement handlers:** The `/Requirements` array in the catalog declares viewer capabilities
+required to process the document. The engine must parse requirement dictionaries, check handler
+availability, and report unsatisfied requirements in `CapabilityReport`.
 
 ### Tiered compatibility doctrine
 
@@ -2166,6 +2239,27 @@ Each font type places different demands on the engine:
 - The font matrix (`/FontMatrix`) transforms from glyph space to text space. Common values are `[0.001 0 0 0.001 0 0]` (1000 units per em, like Type 1) or `[1 0 0 1 0 0]` (glyph coordinates are directly in text space units).
 - Type 3 rendering must establish a new graphics state with the font matrix composed into the text rendering matrix. Color operators in the glyph stream apply to the glyph (unlike Type 1/TrueType where the glyph inherits the current color state based on the rendering mode).
 
+#### Subpixel text rendering
+
+For screen-resolution rendering (≤150 DPI), subpixel positioning materially improves text
+clarity:
+
+- **LCD subpixel geometry:** Detect display RGB stripe orientation (horizontal RGB, horizontal
+  BGR, vertical RGB, vertical BGR). Render glyphs at 3x horizontal resolution with per-subpixel
+  coverage.
+- **ClearType-style filtering:** Apply a 3-tap or 5-tap low-pass filter kernel to suppress color
+  fringing while preserving subpixel sharpness. The filter weights are configurable (default:
+  `[1/4, 1/2, 1/4]` for the 3-tap path).
+- **Gamma-correct blending:** Perform alpha blending in linear light rather than sRGB space to
+  avoid darkening artifacts at glyph edges. Convert sRGB → linear before blending, blend, then
+  convert linear → sRGB.
+- **Subpixel positioning:** Position glyphs at 1/4 pixel granularity. For each quantized subpixel
+  position already represented in the glyph cache key, rasterize a distinct glyph bitmap that
+  accounts for the fractional pixel offset in the coverage computation.
+
+Subpixel rendering is optional. It is disabled by default for print-quality DPI and proof runs.
+When enabled, it is the default for the `ViewerFast` profile at ≤150 DPI.
+
 **Color space resolution chain:**
 
 When a color operator sets a color, the engine must resolve the color space and convert to the output color space. The resolution chain:
@@ -2312,6 +2406,53 @@ The renderer must maintain a compositing stack: each transparency group pushes a
 - Nested groups (arbitrary nesting depth)
 - Different blend modes at each nesting level
 - Soft masks applied to groups
+
+#### `monkeybee-3d`
+
+Interactive 3D content parsing and rendering. This is a flagship differentiator: native handling
+for PRC/U3D-backed 3D annotations rather than detect-and-ignore behavior.
+
+Key responsibilities:
+- PRC format parsing (ISO 14739-1:2014): compressed B-rep, tessellated mesh extraction, product
+  structure trees, PMI (Product Manufacturing Information)
+- U3D format parsing (ECMA-363 4th Edition): mesh sets, point sets, line sets, CLOD
+  (Continuous Level of Detail) progressive mesh decoding
+- Unified scene graph: both PRC and U3D are mapped to a common scene representation with meshes,
+  materials, lights, cameras, and transforms
+- Rendering via wgpu (Vulkan/Metal/DX12 native, WebGPU in browser):
+  - PBR lighting model (Cook-Torrance BRDF with metallic-roughness workflow)
+  - Shadow mapping (cascaded shadow maps for large scenes)
+  - Screen-space ambient occlusion (SSAO)
+  - Transparency sorting (order-independent transparency via weighted blended OIT)
+  - Mesh decimation / LOD selection (quadric error metrics, Garland-Heckbert)
+- Named view interpolation (smooth camera transitions between predefined viewpoints)
+- Rendering modes: solid, wireframe, transparent, illustration, hidden line
+- Cross-section plane computation (real-time CSG intersection with arbitrary planes)
+- Product structure navigation (part tree traversal, visibility toggling per part)
+- 3D annotation integration: parse 3D and RichMedia annotation dictionaries, extract
+  activation/deactivation behaviors, handle JavaScript triggers (detect and report, not execute)
+- 2D/3D compositing: 3D content rendered to texture, composited into the 2D page at the
+  annotation rect
+
+The 3D crate shares the wgpu device/queue with `monkeybee-gpu` when both are active. The scene
+graph is immutable per snapshot. 3D rendering respects `ExecutionContext` budgets including vertex
+count, texture memory, and shader workload limits.
+
+#### `monkeybee-gpu`
+
+Optional GPU-accelerated 2D rendering backend via wgpu.
+
+Key responsibilities:
+- Compute shader path rasterization (GPU-native exact area coverage)
+- Parallel tile compositing on GPU
+- Hardware-accelerated transparency group blending
+- GPU texture atlas for glyph caching
+- Shared wgpu device/queue with `monkeybee-3d`
+- Implements the render backend trait as a drop-in replacement for `tiny-skia` on capable hardware
+- Fallback to CPU when GPU is unavailable or when document complexity exceeds GPU memory budget
+
+The GPU backend is experimental and non-gating. It competes with the CPU baseline under the
+strategy-tournament framework and becomes default only if it wins on proof metrics.
 
 #### `monkeybee-compose`
 
@@ -2708,6 +2849,31 @@ Text extraction reuses the same content stream interpretation pipeline as the re
 - **Artificial spacing:** Some producers insert explicit spaces between every character for tracking/justification. The extraction pipeline should detect artificially spaced text (uniform gaps significantly smaller than a normal word space) and collapse the spacing.
 - **Text in patterns and form XObjects:** Text appearing inside tiling patterns or form XObjects must be extracted with the correct transformation applied (the pattern matrix or form matrix composed with the invoking CTM).
 - **Marked content for reading order:** Tagged PDFs use marked content sequences (`BMC`/`BDC`/`EMC`) with structure tags that define logical reading order. When available, the extraction pipeline should prefer the tagged reading order over geometric heuristics. However, most real-world PDFs are not tagged; geometric heuristics are the primary path.
+
+#### `monkeybee-forensics`
+
+Document security analysis and forensic inspection.
+
+Key responsibilities:
+- Hidden content detection: white-on-white text, off-page content, content behind opaque images,
+  invisible text rendering-mode abuse, content outside CropBox but inside MediaBox
+- Redaction sufficiency audit: verify that existing redaction annotations or overlays actually
+  removed underlying content rather than merely obscuring it visually
+- Post-signing modification forensics: classify modifications in incremental updates after the last
+  signature as permitted (per DocMDP policy) or suspicious
+- Known CVE pattern detection: structural patterns matching historical PDF exploit signatures such
+  as malformed streams, recursive objects, and crafted JavaScript trigger structures
+- Producer fingerprinting: identify actual producing software from structural patterns beyond the
+  `/Producer` string
+- Font fingerprinting: match glyph outlines against known font databases to identify real font
+  identity when metadata is missing or wrong
+- Steganographic channel detection: LSB analysis on embedded images and inspection of unusual data
+  in padding or whitespace regions
+- Metadata consistency analysis: cross-validate Info dictionary, XMP, font metadata, producer
+  signatures, and structural patterns for inconsistencies
+
+Forensics is read-only by default: it consumes the same document/content/signature surfaces as the
+rest of the engine but never mutates the document model as part of analysis.
 
 #### `monkeybee-diff`
 
@@ -3832,6 +3998,23 @@ The PDF path model is built on cubic Bézier curves and straight-line segments. 
 
 *Rectangle shortcut:* The `re` operator (x y w h re) creates a closed rectangular subpath. This is by far the most common path construction in PDFs (used for backgrounds, table cells, form fields, clipping regions). The renderer should fast-path rectangle detection for both rasterization and clipping.
 
+#### Advanced path geometry operations
+
+- **Exact offset curves for stroke expansion:** Stroke expansion is computed using algebraic
+  offset curves for cubic Bézier segments, not polygon approximation. For a cubic `P(t)` with
+  normal `N(t)` and half-width `w`, the offset curve is `P(t) + w·N(t)`. This is a degree-5
+  rational curve; it is approximated by a sequence of cubics with error bounded by the flatness
+  tolerance.
+- **Minkowski sum for round joins/caps:** Round line joins and round line caps are computed as
+  exact circular arcs (quadratic rational Bézier segments) rather than polygon approximations.
+  This produces mathematically perfect round geometry at any zoom level.
+- **Path boolean operations:** Union, intersection, and difference of arbitrary path regions,
+  needed for advanced clipping composition and content-stream optimization. Uses the
+  Weiler-Atherton or Greiner-Hormann algorithm with Shewchuk predicates for robustness.
+- **Arc-length parameterization for dash patterns:** Dash patterns require computing arc length
+  along Bézier curves. Use Gauss-Legendre quadrature (5-point, exact for degree ≤9 polynomials)
+  for arc length estimation, with adaptive subdivision when the integrand varies too rapidly.
+
 5. **Text operators** (`BT`, `ET`, `Tc`, `Tw`, `Tz`, `TL`, `Tf`, `Tr`, `Ts`, `Td`, `TD`, `Tm`, `T*`, `Tj`, `TJ`, `'`, `"`): text state manipulation and text rendering. In render mode, these resolve fonts, decode strings, position glyphs, and draw them. In extraction mode, these produce character/position records.
 
 6. **Color operators** (`CS`, `cs`, `SC`, `SCN`, `sc`, `scn`, `G`, `g`, `RG`, `rg`, `K`, `k`): set the current color state for subsequent painting operations.
@@ -4706,6 +4889,9 @@ The following crates and features have WASM-specific constraints:
 | monkeybee-text | No system font discovery | Explicit `FontProvider` required; Base 14 metrics compiled in |
 | monkeybee-render | No threads | Sequential page rendering via `cfg(target_arch = "wasm32")` |
 | monkeybee-render | SIMD via wasm-simd128 | Conditional compilation for WASM SIMD paths |
+| monkeybee-3d | WebGPU availability varies by browser | Feature-detect WebGPU, degrade to static placeholder when unavailable |
+| monkeybee-gpu | WebGPU availability varies by browser | Keep CPU baseline active when GPU backend is unavailable |
+| monkeybee-forensics | No native databases or OS inspection | Keep analysis pure-Rust and data-driven; no host probes |
 | monkeybee-proof | Not applicable | Proof harness is native-only |
 | monkeybee-cli | Not applicable | CLI is native-only |
 | all crates | No `std::time::Instant` | Use `web_time` crate or abstract via trait |
@@ -4781,6 +4967,55 @@ This produces mathematically exact anti-aliasing with zero supersampling overhea
 - Quadratic Bézier segments (from TrueType fonts): the signed area integral is a degree-4 polynomial — cheaper than the cubic case.
 
 **Winding number accumulation with SIMD:** The per-pixel winding accumulation across a scanline row is a prefix sum (each pixel's final value is the sum of all contributions from the left). Prefix sums are SIMD-friendly: use SSE2/AVX2 for 4/8-wide parallel prefix sums. For a 1000-pixel-wide scanline, this reduces the accumulation step to ~125 SIMD operations instead of 1000 scalar additions.
+
+#### GPU-accelerated rendering pipeline (experimental)
+
+When wgpu is available, the engine can offload key rendering operations to the GPU:
+
+- **Compute shader path rasterization:** Port the exact analytic area coverage algorithm to a
+  compute shader. Each workgroup processes one tile; threads within the workgroup cooperatively
+  scan path edges and accumulate winding numbers in shared memory. The GPU path produces
+  bit-identical output to the CPU path, verified by the proof harness.
+- **Parallel tile compositing:** Transparency group compositing across tiles runs as independent
+  GPU compute dispatches. The tile grid maps directly to workgroups and targets the
+  transparency-heavy cases where CPU compositing is most expensive, with expected 10-50x speedups
+  on those workloads.
+- **Texture atlas glyph caching:** Frequently used glyphs are rasterized once and stored in a GPU
+  texture atlas (`4096×4096`, `R8` format). Text rendering becomes textured-quad drawing rather
+  than per-glyph rasterization, which is orders of magnitude faster on text-heavy pages.
+- **Hardware blending for separable modes:** The 12 separable PDF blend modes map directly to GPU
+  blend equations. The 4 non-separable modes (Hue, Saturation, Color, Luminosity) use compute
+  shader fallback when the backend is active.
+
+#### Advanced compression techniques (experimental)
+
+- **Zopfli maximum-compression Flate output:** For documents where file size matters more than
+  write speed, use Zopfli for Deflate compression. Zopfli produces 3-8% smaller output than
+  standard zlib at roughly 100x the compression time and is available as a write-mode option.
+- **Content stream optimization:** Before compression, analyze content streams for redundant state
+  operators (setting a color that is already current, saving/restoring state with no intervening
+  changes) and coalesce them. This reduces stream size by roughly 5-20% on producer-generated
+  content.
+- **Cross-stream deduplication:** Identify identical decoded stream data referenced by different
+  objects, common in merged documents or producer-generated duplication, and record dedup
+  opportunities in the optimization plan.
+
+#### Performance micro-optimizations
+
+- **Perfect hashing for operator dispatch:** The 73 PDF operators form a fixed set. Use a
+  compile-time minimal perfect hash for zero-collision O(1) operator dispatch rather than
+  string-heavy matching.
+- **SIMD batch color conversion:** Process 4 (SSE2) or 8 (AVX2) pixels simultaneously through the
+  ICC color conversion pipeline. The tetrahedral interpolation inner loop is naturally
+  SIMD-friendly: 4 vertex lookups plus 3 lerps per pixel.
+- **Vectorized string search:** Text search in extracted content uses SIMD-accelerated substring
+  search (SSE4.2 `PCMPESTRI` or AVX2 `VPCMPESTRI`) for the inner loop with Rabin-Karp
+  fingerprinting for the outer loop.
+- **Branch-free pixel blending:** The separable blend-mode inner loop uses conditional moves or
+  SIMD select instructions instead of branches, reducing misprediction on mode-switching spans.
+- **Bloom filters for name tree lookup:** Large name trees (10,000+ entries, common in documents
+  with many named destinations) use a Bloom filter for fast negative lookup before actual tree
+  traversal.
 
 #### Robust geometric predicates for clipping and intersection
 
@@ -4953,8 +5188,10 @@ Recommended initial classification: `v1_advisory`.
 
 - [ ] Parser handles all corpus categories with correct Tier 1/2/3 classification.
 - [ ] Renderer produces trustworthy visual output on representative hard documents.
+- [ ] 3D annotation detection, PRC/U3D parsing, and baseline 3D rendering work on representative fixtures.
 - [ ] Text extraction with positions works on representative documents.
 - [ ] Annotation creation, save, and round-trip work on representative documents.
+- [ ] Security forensics surfaces detect hidden content, bad redactions, and suspicious post-signing edits on representative fixtures.
 - [ ] Document generation produces valid, renderable output.
 - [ ] Page-level editing (add, remove, reorder) works with structural validity.
 - [ ] Metadata inspection and modification work.
@@ -4999,6 +5236,7 @@ Each gated test class has a defined pass threshold and responsible crate:
 | producer-quirks | parser + render | ≥90% of quirk fixtures render correctly | MS-SSIM ≥0.95 |
 | incremental-update | parser + write | 100% of corpus fixtures | Parse-save-reparse |
 | encryption-read | parser | 100% of standard handlers (V1-V5) | Decrypt success |
+| 3d-render | 3d + render | ≥95% of PRC/U3D fixtures render correctly | Screenshot similarity + scene-graph validation |
 | annotation-roundtrip | annotate + write | 100% of annotation types | Geometry ≤0.5pt drift |
 | page-mutation | edit + document | 100% of mutation ops | Structural validity |
 | generation | compose + write | 100% of generation tests | Strict-mode self-parse + ref render |
@@ -5011,6 +5249,9 @@ Each gated test class has a defined pass threshold and responsible crate:
 | historical-replay | bytes + substrate + document | 100% of multi-revision fixtures | Frame-local render/extract/diff consistency |
 | hypothesis-recovery | parser + proof | ≥99% candidate-selection stability on ambiguous corpus or explicit unresolved classification | Candidate digests + evidence |
 | semantic-anchor-stability | extract | ≥95% stable anchors on semantically unchanged regions | Anchor/alias precision |
+| hidden-content-forensics | forensics + extract | ≥95% planted-fixture detection | Precision/recall on known hidden content |
+| redaction-audit | forensics + edit | ≥95% intentionally bad redactions detected | Audit precision/recall |
+| post-signing-forensics | forensics + signature | ≥95% correct classification on signed corpus | Permitted-vs-suspicious accuracy |
 | redaction-safety | edit | Non-gating in v1 unless B-EDIT-003 is separately promoted |
 
 **Regression policy:** A test class that was passing in the previous CI run and fails in the
@@ -5094,6 +5335,10 @@ The following table consolidates the baseline/experimental classification from a
 | Preservation algebra + invariant certificates | Baseline | Required for explainable save planning and signature evidence |
 | Recovery hypothesis tracking | Baseline | Required for truthful tolerant parsing on ambiguous inputs |
 | Temporal revision replay | v1_supported_non_gating | High-value forensic surface built on the incremental substrate |
+| Document forensics | v1_supported_non_gating | High-value security surface on top of baseline parse/signature/extract data |
+| Hidden content detection | v1_supported_non_gating | Baseline forensic detector for deceptive page content |
+| Redaction sufficiency audit | v1_supported_non_gating | Baseline forensic audit for unsafe visual-only redactions |
+| Post-signing modification forensics | v1_supported_non_gating | High-value signed-document analysis surface |
 | Spatial-semantic graph + stable anchors | v1_advisory | Valuable for extraction/automation; not a v1 gate |
 | Agent-safe JSON/WASM edit API | Post-v1 | Depends on anchor stability and policy surfaces |
 | Collaborative CRDT merge | Post-v1 | Built on serializable deltas; not part of the v1 kernel |
@@ -5102,17 +5347,36 @@ The following table consolidates the baseline/experimental classification from a
 | All standard filters (Flate, LZW, ASCII85, etc.) | Baseline | Required for real-world PDFs |
 | JBIG2 decode | Baseline on `native-compatible`/`native-hardened`; explicit degradation on `wasm-strict` unless a proven pure-Rust path exists | Target-qualified support |
 | JPEG 2000 decode | Baseline on `native-compatible`/`native-hardened`; explicit degradation on `wasm-strict` unless a proven pure-Rust path exists | Target-qualified support |
+| 3D PDF rendering (PRC/U3D) | Baseline (Slice A) | Flagship differentiator and first-class reader-kernel surface |
+| 3D named views and rendering modes | Baseline | Core 3D interactivity surface |
+| 3D cross-sections | v1_supported_non_gating | Valuable 3D interaction feature without blocking the core loop |
+| GPU 2D rendering | Experimental | Must beat the CPU baseline under the proof harness |
 | Encryption V1-V5 (read) | Baseline | Required for real-world PDFs |
+| AES-GCM decryption | Baseline | PDF 2.0 normative supplement |
+| Document integrity dictionaries | Baseline (read) | PDF 2.0 normative supplement |
 | Encryption (write) | Post-baseline / out of v1 gating | Not needed for v1 proof; deferred entirely from v1 release gates |
+| Hash algorithm agility (SHA-3 / SHAKE) | Post-baseline | Depends on CryptoProvider capability expansion |
+| Associated files (AF) | Baseline (read), v1_advisory (write) | PDF 2.0 attachment relationships must be visible and preserved where possible |
+| Structure namespaces | v1_advisory | Preserve and resolve namespace-qualified structure roles |
+| Requirement handlers | Baseline (read) | Must report unsatisfied declared viewer requirements |
 | Mesh shadings (types 4-7) | Post-baseline | Rare, complex, not v1-gating |
 | Overprint/OPM=1 | Post-baseline | CMYK-specific, not v1-gating |
+| Page-level output intents | Baseline | PDF 2.0 color-management correctness |
+| Black point compensation | Baseline | Required for correct ICC evaluation in some workflows |
+| Geospatial features | Tier 2 | Parse and preserve, not a baseline render gate |
 | Exact analytic coverage raster | Experimental | Must beat tiny-skia baseline |
+| Subpixel text rendering | v1_supported_non_gating | Quality improvement for viewer-like profiles, not proof-canonical by default |
 | Spectral color pipeline | Experimental | Must beat lcms2 baseline |
 | SDF glyph rendering | Experimental | Optional, WASM-focused |
 | Adaptive mesh subdivision | Experimental | Depends on mesh shading (post-baseline) |
 | Bayesian repair scoring | Experimental | Baseline uses strategy-order heuristic |
 | MS-SSIM render comparison | Baseline | Required for proof harness |
 | Entropy-optimal encoding | Post-baseline | Optimization, not correctness |
+| Zopfli compression | Experimental | File-size optimization, not correctness-critical |
+| Content stream optimization | Post-baseline | Optimization and compaction, not baseline correctness |
+| Path boolean operations | Post-baseline | Advanced clipping and optimization surface |
+| Perfect hash operator dispatch | Baseline | Zero-risk performance gain on a fixed operator set |
+| SIMD batch color conversion | Baseline | Hot-path acceleration aligned with the baseline color pipeline |
 | Probabilistic layout analysis | Post-baseline | Baseline uses geometric heuristics |
 | Arlington validation (core) | Baseline | Catalog, page tree, fonts gated |
 | Arlington validation (full) | Post-baseline | Full spec coverage deferred |
@@ -5266,6 +5530,30 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-RENDER-011: Overprint and overprint mode implementation [experimental until corpus-backed]
 - B-RENDER-012: SIMD-optimized compositing inner loops
 
+### 3D beads
+- B-3D-001: PRC format parser (ISO 14739-1:2014) — compressed B-rep, tessellated mesh extraction
+- B-3D-002: U3D format parser (ECMA-363) — mesh/point/line sets, CLOD progressive mesh decoding
+- B-3D-003: Unified scene graph construction from PRC and U3D
+- B-3D-004: wgpu render pipeline setup (device/queue/swapchain, shared with monkeybee-gpu)
+- B-3D-005: PBR lighting model (Cook-Torrance BRDF, metallic-roughness)
+- B-3D-006: Shadow mapping (cascaded shadow maps)
+- B-3D-007: Screen-space ambient occlusion (SSAO)
+- B-3D-008: Mesh decimation and LOD selection (Garland-Heckbert quadric error metrics)
+- B-3D-009: Named view system and camera interpolation
+- B-3D-010: Rendering mode switching (solid/wireframe/transparent/illustration/hidden-line)
+- B-3D-011: Cross-section plane computation (real-time CSG intersection)
+- B-3D-012: Product structure tree navigation and part visibility
+- B-3D-013: 3D/RichMedia annotation dictionary parsing and activation behavior
+- B-3D-014: 2D/3D compositing (render 3D to texture, composite into page)
+- B-3D-015: Order-independent transparency (weighted blended OIT)
+
+### GPU beads
+- B-GPU-001: wgpu device/queue management and shared resource pool
+- B-GPU-002: Compute shader path rasterization (exact area coverage on GPU)
+- B-GPU-003: Parallel tile compositing on GPU
+- B-GPU-004: GPU texture atlas for glyph caching
+- B-GPU-005: Hardware blend mode implementation (separable modes via GPU blend, non-separable via compute)
+
 ### Compose beads
 - B-COMPOSE-001: Document/page/content builders for new documents
 - B-COMPOSE-002: Resource naming and assembly
@@ -5325,6 +5613,14 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-EXTRACT-005: Diagnostic report generation
 - B-EXTRACT-006: Spatial-semantic graph and stable anchor generation
 - B-EXTRACT-007: Anchor aliasing and agent-facing proposal validation hooks
+
+### Forensics beads
+- B-FORENSICS-001: Hidden content detection (white-on-white, off-page, behind-image, invisible text)
+- B-FORENSICS-002: Redaction sufficiency audit
+- B-FORENSICS-003: Post-signing modification forensics and classification
+- B-FORENSICS-004: Known CVE pattern detection
+- B-FORENSICS-005: Producer fingerprinting from structural patterns
+- B-FORENSICS-006: Font fingerprinting via glyph outline matching
 
 ### Proof beads
 - B-PROOF-001: Pathological corpus acquisition and indexing
@@ -5386,3 +5682,50 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-ALIEN-017: Collaborative delta / CRDT merge layer
 - B-ALIEN-018: Reactive document binding DSL and sandbox
 - B-ALIEN-019: Strategy tournament and offline auto-tuning harness
+- B-ALIEN-020: Subpixel text rendering (LCD geometry, ClearType filtering, gamma-correct blending)
+- B-ALIEN-021: GPU 2D rendering backend (compute shader rasterizer, hardware compositing)
+- B-ALIEN-022: Zopfli maximum-compression Flate output
+- B-ALIEN-023: Content stream optimization (redundant operator elimination, coalescing)
+- B-ALIEN-024: Path boolean operations (Weiler-Atherton with robust predicates)
+- B-ALIEN-025: Arc-length parameterization for exact dash patterns (Gauss-Legendre quadrature)
+- B-ALIEN-026: SIMD batch ICC color conversion (4/8-wide pixel processing)
+- B-ALIEN-027: Perfect hash operator dispatch (compile-time generated, zero-collision)
+- B-ALIEN-028: Vectorized string search (SSE4.2/AVX2 accelerated)
+- B-ALIEN-029: Post-quantum signature support (ML-DSA, SLH-DSA hybrid PAdES)
+- B-ALIEN-030: Vello-style hybrid GPU rendering exploration
+
+## Part 10 — Algorithm inventory summary
+
+The current spec inventory names 104 algorithms and techniques.
+
+- Original current-spec inventory: 57
+- 3D rendering: +15
+  - PRC parsing, U3D/CLOD parsing, BVH construction, Cook-Torrance BRDF, cascaded shadow maps,
+    SSAO, OIT transparency sorting, Garland-Heckbert mesh decimation, cross-section CSG, view
+    interpolation, illustration-mode edge detection, toon shading, 2D/3D compositing, product
+    structure traversal, progressive mesh decoding
+- GPU 2D: +5
+  - compute shader rasterization, GPU tile compositing, texture atlas management, hardware blend
+    equations, shared device/queue management
+- PDF 2.0 crypto supplements: +3
+  - AES-GCM authenticated encryption, document integrity dictionary verification, SHA-3/SHAKE hash
+    evaluation
+- Subpixel text: +4
+  - LCD subpixel geometry, ClearType filtering kernel, gamma-correct linear blending,
+    fractional-pixel glyph rasterization
+- Advanced paths: +4
+  - algebraic offset curves, Minkowski-sum round geometry, Weiler-Atherton path booleans,
+    Gauss-Legendre arc-length quadrature
+- Forensics: +7
+  - hidden content detection, redaction sufficiency scan, post-signing modification classification,
+    CVE pattern matching, producer fingerprinting, font outline fingerprinting, steganographic
+    channel analysis
+- Compression: +3
+  - Zopfli optimal Deflate, content-stream operator coalescing, cross-stream deduplication
+- Performance micro-optimizations: +5
+  - perfect hash dispatch, SIMD batch ICC, vectorized string search, branch-free blending, Bloom
+    filter name trees
+- Post-quantum signatures: +1
+  - ML-DSA/SLH-DSA hybrid PAdES
+
+**Total:** 57 + 47 = 104 named algorithms and techniques.

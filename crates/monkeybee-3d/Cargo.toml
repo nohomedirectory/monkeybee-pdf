@@ -1,0 +1,10 @@
+[package]
+name = "monkeybee-3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "3D PDF parsing and rendering primitives for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+log.workspace = true

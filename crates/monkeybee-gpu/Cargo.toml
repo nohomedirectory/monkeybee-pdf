@@ -1,0 +1,10 @@
+[package]
+name = "monkeybee-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Optional GPU-backed 2D rendering surfaces for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+log.workspace = true

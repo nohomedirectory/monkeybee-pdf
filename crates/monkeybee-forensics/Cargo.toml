@@ -1,0 +1,10 @@
+[package]
+name = "monkeybee-forensics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Security and forensic inspection surfaces for Monkeybee PDF"
+
+[dependencies]
+monkeybee-core.workspace = true
+log.workspace = true

@@ -178,6 +178,28 @@ monkeybee-pdf/
 │   │   │   ├── progressive.rs    # ProgressiveRenderState, placeholder tracking, refinement
 │   │   │   └── backend/          # output backends (raster via tile sink, svg)
 │   │   └── Cargo.toml
+│   ├── monkeybee-3d/             # 3D content: PRC/U3D parsing, scene graph, wgpu rendering
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── prc.rs            # PRC format parser
+│   │   │   ├── u3d.rs            # U3D format parser
+│   │   │   ├── scene.rs          # unified scene graph
+│   │   │   ├── render.rs         # wgpu 3D render pipeline
+│   │   │   ├── views.rs          # named views, camera interpolation
+│   │   │   ├── modes.rs          # rendering modes (solid/wireframe/etc)
+│   │   │   ├── section.rs        # cross-section computation
+│   │   │   ├── structure.rs      # product structure tree
+│   │   │   └── composite.rs      # 2D/3D compositing
+│   │   └── Cargo.toml
+│   ├── monkeybee-gpu/            # optional GPU 2D rendering backend via wgpu
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── device.rs         # wgpu device/queue management (shared with 3d)
+│   │   │   ├── raster.rs         # compute shader path rasterization
+│   │   │   ├── composite.rs      # GPU tile compositing
+│   │   │   ├── atlas.rs          # glyph texture atlas
+│   │   │   └── blend.rs          # hardware blend modes
+│   │   └── Cargo.toml
 │   ├── monkeybee-compose/        # high-level authoring and composition
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -246,6 +268,16 @@ monkeybee-pdf/
 │   │   │   ├── structure.rs
 │   │   │   ├── asset.rs
 │   │   │   └── diagnostic.rs
+│   │   └── Cargo.toml
+│   ├── monkeybee-forensics/      # document security analysis and forensic inspection
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── hidden.rs         # hidden content detection
+│   │   │   ├── redaction_audit.rs # redaction sufficiency verification
+│   │   │   ├── post_sign.rs      # post-signing modification forensics
+│   │   │   ├── cve_patterns.rs   # known exploit pattern detection
+│   │   │   ├── producer_fp.rs    # producer fingerprinting
+│   │   │   └── font_fp.rs        # font fingerprinting
 │   │   └── Cargo.toml
 │   ├── monkeybee-validate/       # conformance validation
 │   │   ├── src/
@@ -323,12 +355,15 @@ monkeybee-text          (depends on: core, substrate, document, codec)
     ↑
 monkeybee-paint         (depends on: core, text)
 monkeybee-render        (depends on: core, substrate, content, document, text, codec, paint)
+monkeybee-3d            (depends on: core, substrate, document, content, codec)
+monkeybee-gpu           (depends on: core, render, paint)
 monkeybee-compose       (depends on: core, substrate, document, text, content, paint)
 monkeybee-write         (depends on: core, bytes, substrate, document, catalog, codec, validate)
 monkeybee-edit          (depends on: core, substrate, document, content, compose, write)
 monkeybee-forms         (depends on: core, substrate, document, text, compose, paint)
 monkeybee-annotate      (depends on: core, substrate, document, content, compose, forms, paint)
 monkeybee-extract       (depends on: core, substrate, content, document, text)
+monkeybee-forensics     (depends on: core, substrate, document, content, extract, signature)
 monkeybee-validate      (depends on: core, substrate, document, catalog)
 monkeybee-diff          (depends on: core, substrate, document, content, extract, render, write)
 monkeybee-signature     (depends on: core, substrate, syntax, document, write, validate)
@@ -376,12 +411,15 @@ members = [
     "crates/monkeybee-text",
     "crates/monkeybee-paint",
     "crates/monkeybee-render",
+    "crates/monkeybee-3d",
+    "crates/monkeybee-gpu",
     "crates/monkeybee-compose",
     "crates/monkeybee-write",
     "crates/monkeybee-edit",
     "crates/monkeybee-forms",
     "crates/monkeybee-annotate",
     "crates/monkeybee-extract",
+    "crates/monkeybee-forensics",
     "crates/monkeybee-validate",
     "crates/monkeybee-proof",
     "crates/monkeybee-diff",
@@ -398,6 +436,8 @@ dashmap = "6"
 rayon = "1"
 thiserror = "2"
 blake3 = "1"
+wgpu = "24"
+naga = "24"
 ```
 
 ### Feature flag strategy
@@ -421,6 +461,9 @@ preview surfaces that are intentionally non-gating.
 | `experimental-raster` | monkeybee-render | Enable exact analytic area coverage rasterizer |
 | `experimental-color` | monkeybee-render | Enable spectral-aware color pipeline |
 | `experimental-sdf` | monkeybee-render | Enable SDF glyph rendering path |
+| `wgpu-3d` | monkeybee-3d | Enable 3D PDF rendering via wgpu (default: on in native) |
+| `wgpu-gpu2d` | monkeybee-gpu | Enable GPU 2D rendering backend (experimental, default: off) |
+| `forensics` | monkeybee-forensics | Enable document forensics analysis (default: on) |
 | `unstable-semantic-query` | monkeybee / monkeybee-extract | Expose preview semantic graph + anchor query API (post-v1 preview) |
 | `unstable-temporal-replay` | monkeybee / monkeybee-substrate | Expose preview historical replay API beyond proof/internal use |
 | `external-attestation` | monkeybee-substrate / monkeybee-write | Enable attachment of external attestations to invariant certificates |
@@ -428,9 +471,9 @@ preview surfaces that are intentionally non-gating.
 | `proof` | monkeybee-proof | Enable full proof harness (pulls in all reference renderers) |
 | `write-encryption` | monkeybee-write | Enable output encryption (default: off; non-gating) |
 
-Baseline v1 builds with `tiny-skia`, `lcms2`, `openjpeg` (Compatible profile), and without
-`write-encryption`, `unstable-semantic-query`, `unstable-temporal-replay`, or
-`external-attestation`.
+Baseline v1 builds with `tiny-skia`, `lcms2`, `openjpeg` (Compatible profile), `forensics`, and
+`wgpu-3d` on native targets, and without `write-encryption`, `unstable-semantic-query`,
+`unstable-temporal-replay`, `external-attestation`, or the experimental `wgpu-gpu2d` backend.
 
 ## Runtime and concurrency model
 
@@ -1363,6 +1406,52 @@ pub struct MissingResource {
 }
 ```
 
+### 3D scene model (`monkeybee-3d::scene`)
+
+```rust
+pub struct Scene3D {
+    pub meshes: Vec<Mesh>,
+    pub materials: Vec<Material>,
+    pub lights: Vec<Light>,
+    pub cameras: Vec<Camera>,
+    pub transform_tree: TransformNode,
+    pub named_views: Vec<NamedView>,
+    pub product_structure: Option<ProductStructureTree>,
+}
+
+pub struct Mesh {
+    pub vertices: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+    pub material_id: usize,
+    pub lod_levels: Vec<LodLevel>,
+}
+
+pub struct NamedView {
+    pub name: String,
+    pub camera: Camera,
+    pub rendering_mode: RenderingMode3D,
+    pub visible_parts: Option<Vec<PartId>>,
+    pub cross_sections: Vec<CrossSectionPlane>,
+}
+
+pub enum RenderingMode3D {
+    Solid,
+    Wireframe,
+    Transparent,
+    Illustration,
+    HiddenLine,
+    SolidWireframe,
+}
+
+pub struct CrossSectionPlane {
+    pub normal: [f32; 3],
+    pub distance: f32,
+    pub cap_color: Option<[f32; 4]>,
+}
+```
+
 ### Dependency graph (`monkeybee-document::depgraph`)
 
 ```rust
@@ -1640,6 +1729,8 @@ PdfSnapshot + extract profile
 - **`openjpeg-sys` or `jpeg2k`** — JPXDecode, isolated behind `monkeybee-native`
 - **`lcms2`** — ICC evaluation, isolated behind `monkeybee-native`
 - **`freetype-rs`** — optional hinted rasterization, isolated behind `monkeybee-native`
+- **`wgpu`** — GPU abstraction for 3D rendering and optional 2D GPU backend
+- **`naga`** — shader translation/validation support for wgpu pipelines
 - **`indexmap`** — ordered dictionaries
 - **`dashmap`** — concurrent maps for caches, substrate store, and query metadata
 - **`blake3`** — baseline digest engine for substrate nodes, roots, deltas, and receipts
@@ -1757,6 +1848,20 @@ PdfSnapshot + extract profile
 - Progressive rendering tests: missing resources produce correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles.
 - Query reuse tests: repeated renders on unchanged snapshot reuse page-plan/tile materializations.
 
+### monkeybee-3d
+- Unit tests: PRC parser on known PRC files, U3D parser on known U3D files, scene graph construction from both formats.
+- Render tests: 3D annotations rendered and compared against Adobe Acrobat screenshots at defined camera positions.
+- Named view tests: camera interpolation produces smooth transitions, all named views are reachable.
+- Cross-section tests: cross-section planes produce geometrically correct cut surfaces.
+- Round-trip tests: 3D annotation dictionaries survive load-save-reload without data loss.
+- WASM tests: 3D renders in WebGPU-capable browsers.
+
+### monkeybee-gpu
+- Unit tests: device/queue lifecycle, shader module compilation, atlas allocation.
+- Render parity tests: GPU output matches the CPU baseline within proof thresholds.
+- Stress tests: transparency-heavy and text-heavy pages stay within GPU memory budgets.
+- Fallback tests: unsupported adapters and budget overruns cleanly fall back to the CPU path.
+
 ### monkeybee-paint
 - Unit tests: path, color, and stroke primitives used by compose/render/annotate.
 - Appearance tests: paint-state normalization remains consistent across appearance generation and raster consumption.
@@ -1812,6 +1917,12 @@ PdfSnapshot + extract profile
 - Semantic graph tests: graph node/edge construction is deterministic for fixed extract profile.
 - Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
+
+### monkeybee-forensics
+- Unit tests: hidden content detection on planted corpus fixtures including white-on-white text, off-page content, and image-obscured text.
+- Redaction audit tests: intentionally bad redactions (opaque overlay only) are detected while proper redactions pass.
+- Post-signing tests: classify modifications on signed-then-modified corpus files with permitted-vs-suspicious expectations.
+- Fingerprinting tests: producer and font fingerprinting remain stable on curated fixtures with known provenance.
 
 ### monkeybee-diff
 - Unit tests: structural, text, render, and save-impact diffs on known fixture pairs.

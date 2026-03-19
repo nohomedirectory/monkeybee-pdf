@@ -1,0 +1,1 @@
+I’ve isolated concrete spec contradictions to turn into patches: remove the annotation↔render appearance dependency, unify duplicated cache rules around document-scoped identity instead of bare ObjRef, tighten native-decoder containment, and scale back tagged-structure mutation to match the anti-goals.

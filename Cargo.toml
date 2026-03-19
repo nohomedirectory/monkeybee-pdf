@@ -4,9 +4,12 @@ members = [
     "crates/monkeybee-core",
     "crates/monkeybee-parser",
     "crates/monkeybee-render",
+    "crates/monkeybee-3d",
+    "crates/monkeybee-gpu",
     "crates/monkeybee-write",
     "crates/monkeybee-annotate",
     "crates/monkeybee-extract",
+    "crates/monkeybee-forensics",
     "crates/monkeybee-proof",
     "crates/monkeybee-cli",
 ]
@@ -33,14 +36,19 @@ env_logger = "0.11"
 flate2 = "1"
 image = "0.25"
 clap = { version = "4", features = ["derive"] }
+wgpu = "24"
+naga = "24"
 
 # Internal crate deps
 monkeybee-core = { path = "crates/monkeybee-core" }
 monkeybee-parser = { path = "crates/monkeybee-parser" }
 monkeybee-render = { path = "crates/monkeybee-render" }
+monkeybee-3d = { path = "crates/monkeybee-3d" }
+monkeybee-gpu = { path = "crates/monkeybee-gpu" }
 monkeybee-write = { path = "crates/monkeybee-write" }
 monkeybee-annotate = { path = "crates/monkeybee-annotate" }
 monkeybee-extract = { path = "crates/monkeybee-extract" }
+monkeybee-forensics = { path = "crates/monkeybee-forensics" }
 monkeybee-proof = { path = "crates/monkeybee-proof" }
 
 [workspace.dev-dependencies]
