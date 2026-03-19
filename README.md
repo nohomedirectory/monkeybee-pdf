@@ -44,10 +44,10 @@ At minimum, the substrate must unify:
 - parsed COS syntax with provenance
 - semantic object graphs and ownership classes
 - content interpretation and graphics-state transitions
-- derived surfaces such as page plans, extraction outputs, semantic anchors, and diffs
-- cross-document import provenance, alias maps, and semantic-normal-form evidence
-- edit deltas, write plans, receipts, and temporal lineage
-- proof artifacts, reproducibility manifests, compatibility ledgers, oracle-disagreement records, and invariant certificates
+- derived surfaces such as page plans, render-chunk graphs, extraction outputs, semantic anchors, truth/provenance surfaces, and diffs
+- cross-document import provenance, alias maps, import-closure certificates, and semantic-normal-form evidence
+- edit deltas, invalidation witnesses, write plans, emission journals, receipts, and temporal lineage
+- proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, and invariant certificates
 
 This matters because several promises that are easy to state and hard to make real — cheap
 snapshots, structural sharing, exact invalidation, explainable diffs, temporal replay, and
@@ -78,22 +78,22 @@ Baseline v1 must prove all of the following:
 - **Reader-kernel correctness** on hard, pathological, real-world PDFs that simpler engines mishandle or refuse.
 - **Interactive 3D PDF rendering on PRC and U3D content** — the first open-source implementation and a native baseline capability rather than a post-v1 escape hatch.
 - **Persistent immutable snapshots** backed by a content-addressed substrate rather than whole-document cloning.
-- **Exact dependency-tracked invalidation** so small edits only recompute affected pages, resources, and derived artifacts.
+- **Exact dependency-tracked invalidation** so small edits only recompute affected pages, resources, and derived artifacts, with witnessable reuse/recompute causality.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent semantic drift.
-- **Cross-document import integrity**: copy/merge/split workflows remap resources and identities explicitly, preserve provenance, and never silently collide.
+- **Cross-document import integrity**: copy/merge/split workflows remap resources and identities explicitly, preserve provenance, emit import-closure evidence, and never silently collide.
 - **Annotation and form round trips** on ugly files, including appearance regeneration and preserve-mode save planning.
-- **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated.
+- **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated, and canonical writes can be replayed from emission evidence.
 - **Policy-complete operation planning**: open/import/save decisions compose security, active-content, provider, and determinism policy up front and reject invalid combinations before execution.
 - **Write receipts and invariant certificates** for save, diff, and redaction workflows.
 - **Durable persisted artifacts**: file-backed saves and persisted proof artifacts publish atomically and never leave ledgers, receipts, or manifests pointing at partial blobs.
 - **Ambiguity truthfulness**: materially different repair candidates stay visible as a bounded hypothesis set rather than being silently collapsed.
-- **Extraction usefulness**: text with positions, metadata, structure inspection, asset inspection, diagnostics, and the early semantic surfaces needed for anchor stability.
+- **Extraction usefulness**: text with positions, metadata, structure inspection, asset inspection, diagnostics, explicit truth surfaces, and the early semantic layers needed for anchor stability.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, and surfaced — never silently swallowed.
-- **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, typed oracle-disagreement records, and plan-selection evidence linked back to ledgers and failure capsules.
+- **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, typed oracle-consensus and oracle-disagreement records, blind-spot ledgers, and plan-selection evidence linked back to ledgers and failure capsules.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
-- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests, not ad hoc timing logs.
-- **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, and invalidation causes in a way users can act on.
+- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, not ad hoc timing logs.
+- **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, invalidation causes, and transport continuity in a way users can act on.
 
 Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
 accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1.
@@ -272,27 +272,27 @@ Workspace crates:
 | `monkeybee-security` | Security profiles, worker isolation, budget broker, hostile-input policy |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
 | `monkeybee-parser` | PDF tokenization, syntax parsing, repair, encryption handling, tolerant/strict/preserve ingestion |
-| `monkeybee-substrate` | Persistent incremental kernel: node digests, content-addressed store, snapshot roots, lineage, store lifecycle, hypothesis sets, query engine, materialized acceleration indexes, invalidation, temporal replay scaffolding, invariant certificate generation |
+| `monkeybee-substrate` | Persistent incremental kernel: node digests, content-addressed store, snapshot roots, lineage, store lifecycle, hypothesis sets, query engine, materialized acceleration indexes, exact invalidation plus invalidation witnesses, temporal replay scaffolding, and invariant certificate generation |
 | `monkeybee-syntax` | Syntax/COS preservation layer: immutable parsed objects, token/span provenance, xref provenance, object-stream membership, formatting retention, repair records. The preservation boundary |
-| `monkeybee-document` | Semantic document graph built from syntax snapshots and substrate roots: page tree, inherited state, resource resolution, ownership classes, dependency graph contract, transaction/change journal, semantic object indexes, cross-document import/remap provenance, and semantic-normal-form evidence |
+| `monkeybee-document` | Semantic document graph built from syntax snapshots and substrate roots: page tree, inherited state, resource resolution, ownership classes, dependency graph contract, transaction/change journal, semantic object indexes, cross-document import/remap provenance, import-closure evidence, and semantic-normal-form evidence |
 | `monkeybee-catalog` | Catalog semantics: outlines, named destinations, page labels, name/number trees, viewer preferences, optional-content configs, embedded-file inventory, collections, presentation metadata, and document-level rich-structure roots |
 | `monkeybee-content` | Content-stream IR + interpreter shared by render/extract/inspect/edit; graphics-state algebra and sink adapters |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline for existing PDF text, authoring pipeline for generated text, subsetting, search/hit-test primitives |
-| `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, prepress proof modes, tile/band surfaces, cooperative cancellation, progressive rendering |
+| `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, prepress proof modes, tile/band surfaces, render-chunk graphs, cooperative cancellation, and progressive rendering |
 | `monkeybee-3d` | PRC/U3D parsing, unified scene graph, wgpu rendering (Vulkan/Metal/DX12/WebGPU), named views, cross-sections, illustration modes |
 | `monkeybee-gpu` | Optional GPU-accelerated 2D rendering backend via wgpu, shared device/queue with the 3D pipeline, compute shader path rasterization, hardware compositing |
 | `monkeybee-compose` | High-level authoring and composition: document/page builders, appearance synthesis, resource naming, font embedding planning |
-| `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, preservation-aware `WritePlan` execution, xref/trailer emission, structural validation, final compression/encryption |
+| `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, preservation-aware `WritePlan` execution, replayable emission journals, xref/trailer emission, structural validation, and final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content-stream rewrite pipeline |
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, FDF/XFDF interchange, flattening, widget/signature bridge, and static-XFA helpers |
 | `monkeybee-paint` | Shared page-independent paint and appearance primitives reused by render, compose, forms, and annotate |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
-| `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, accessibility semantics, action/link inventories, rich-structure cataloging, semantic anchors, typed query/selection helpers, diagnostics |
+| `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, accessibility semantics, text-truth/provenance surfaces, action/link inventories, rich-structure cataloging, semantic anchors, typed query/selection helpers, diagnostics |
 | `monkeybee-forensics` | Hidden-content detection, redaction audits, post-signing modification analysis, active-content analysis, print-risk analysis, exploit-pattern detection, producer/font fingerprinting |
 | `monkeybee-validate` | Arlington/profile validation, print preflight, PDF/UA-style audit, PAdES/LTV checks, write preflight, signature byte-range checks |
 | `monkeybee-diff` | Structural, text, render, save-impact, and revision-frame comparison engine reused by the facade, proof harness, and CLI |
 | `monkeybee-signature` | Signature parsing, byte-range preservation, PAdES/DSS/VRI modeling, OCSP/CRL/TSA handling, signature creation, DocMDP/FieldMDP policy, verification plumbing, and save-impact analysis |
-| `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, reproducibility manifests, oracle-disagreement records, plan-selection evidence, benchmark witnesses, certificate recomputation, regression gates |
+| `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, reproducibility manifests, oracle-consensus/disagreement records, blind-spot ledgers, plan-selection evidence, benchmark witnesses, certificate recomputation, and regression gates |
 | `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, native-isolation attestations, subprocess-friendly broker hooks |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, prepress/signature/accessibility reporting, diffing, plan-save previews, diagnostics, proof execution |
 
@@ -407,12 +407,14 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 - A **compatibility ledger** that tracks every detected degradation, unsupported feature zone, and
   failure category.
 - A **hypothesis ledger** for ambiguous repairs so materially different candidates remain visible.
+- **Oracle-consensus records and blind-spot ledgers** so release-facing claims reflect both how
+  disputed expectations were chosen and where fixture coverage is still thin.
 - **Write receipts and invariant certificates** for save-impact, preserve-mode, and redaction workflows.
 - **Anchor-stability and temporal-replay harnesses** on representative fixtures so post-v1 surfaces
   are forced to grow from stable primitives instead of hand-waving.
 - **Performance baselines** on representative hard workloads.
-- **Schema-versioned benchmark witnesses** that bind support class, render determinism class, and
-  threshold verdicts to reproducibility manifests.
+- **Schema-versioned benchmark witnesses** that bind support class, render determinism class,
+  runtime-topology evidence, and threshold verdicts to reproducibility manifests.
 - **Durable artifact publication rules** so saved outputs, ledgers, capsules, and witnesses are
   published atomically and never reference partial child artifacts.
 

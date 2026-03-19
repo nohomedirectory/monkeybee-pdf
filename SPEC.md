@@ -53,6 +53,7 @@ signature-safe save planning — into one coherent computational model.
 9. Save planning, signature safety, and byte-preservation claims must be derivable from explicit preservation rules and surfaced as machine-readable receipts before bytes are emitted.
 10. Ambiguous recovery must remain visible as a bounded hypothesis set with causal evidence. Monkeybee must never silently pick a materially different interpretation without explanation.
 11. External-facing intelligence surfaces (queries, semantic anchors, agent-facing edit APIs, diff explanations) must be deterministic, typed, and auditable rather than free-form magic.
+12. Every caller-visible fact emitted by Monkeybee — text span, semantic anchor, diff claim, render-region diagnosis, import alias, validation finding, or save-impact explanation — MUST carry typed provenance and an explicit trust class rather than only an unstructured confidence string.
 
 ### Anti-goals
 
@@ -361,6 +362,55 @@ pub enum TraceEventKind {
 - remote progressive render sessions
 - any proof-harness failure capsule
 operation result.
+
+### Provenance trust lattice
+
+Caller-visible evidence in Monkeybee must distinguish "what we know" from "how we know it."
+Confidence alone is not enough; the engine needs a typed provenance and trust model that follows
+facts from syntax preservation through extraction, diffing, save planning, proof, and
+agent-facing automation.
+
+```
+pub enum ProvenanceTrustClass {
+    SourceExact,
+    SourceRepaired,
+    SourceSynthesized,
+    ProviderSupplied,
+    OracleConsensusDerived,
+    HeuristicInferred,
+}
+
+pub struct ProvenanceAtom {
+    pub trust_class: ProvenanceTrustClass,
+    pub source_span: Option<ByteSpanRef>,
+    pub source_object: Option<ObjRef>,
+    pub hypothesis_set_id: Option<HypothesisSetId>,
+    pub evidence_refs: Vec<CausalRef>,
+    pub confidence: Option<f64>,
+}
+
+pub struct SurfaceProvenanceSummary {
+    pub exact_count: u64,
+    pub repaired_count: u64,
+    pub synthesized_count: u64,
+    pub provider_supplied_count: u64,
+    pub oracle_consensus_count: u64,
+    pub heuristic_count: u64,
+}
+```
+
+Rules:
+- `CapabilityReport`, `RenderReport`, `ExtractReport`, `DiffReport`, `WriteReceipt`,
+  and agent-facing query/edit surfaces MUST expose a `SurfaceProvenanceSummary`
+- per-span, per-anchor, per-region, and per-object provenance MUST be retrievable
+  on demand
+- any semantic or structural claim derived from ambiguous recovery MUST retain the
+  originating `HypothesisSetId`
+- preserve-mode and signature-sensitive workflows may claim `SourceExact` or
+  `SourceRepaired` for source-backed facts, but they may never silently upgrade a
+  provider-supplied or heuristic fact into a stronger trust class
+- provider-oracle fallbacks and consensus-derived proof facts remain useful, but
+  they must stay labeled as such all the way out to public APIs and proof artifacts
 
 Provider interfaces include `FontProvider`, `ColorProfileProvider`, `CryptoProvider`, and `OracleProvider`.
 Default provider instances live on `MonkeybeeEngine`.
@@ -1511,6 +1561,7 @@ pub struct CapabilityReport {
     pub active_content: ActiveContentReport,
     pub substrate_digest: [u8; 32],
     pub temporal_revision_depth: u32,
+    pub provenance_summary: Option<SurfaceProvenanceSummary>,
     pub hypothesis_summary: Option<HypothesisSetSummary>,
     pub semantic_surface: Option<SemanticSurfaceSummary>,
     pub prepress_summary: Option<PrepressSummary>,
@@ -1990,6 +2041,8 @@ pub struct RenderReport {
     pub placeholder_regions: Vec<PlaceholderRef>,
     pub missing_resources: Vec<ResourceKey>,
     pub substituted_fonts: Vec<FontSubstitution>,
+    pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub provenance_summary: Option<SurfaceProvenanceSummary>,
     pub budget_events: Vec<BudgetEvent>,
 }
 
@@ -2002,6 +2055,9 @@ pub struct ExtractReport {
     pub unmappable_spans: Vec<TextGap>,
     pub substituted_fonts: Vec<FontSubstitution>,
     pub degraded_regions: Vec<RegionRef>,
+    pub truth_summaries: Vec<PageTruthSummary>,
+    pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub provenance_summary: Option<SurfaceProvenanceSummary>,
 }
 ```
 
@@ -2092,6 +2148,49 @@ This is a major improvement over the current plan because it converts several am
 "exact invalidation," "cache reuse across snapshots," "only rerender the touched page," "diff only
 changed structure," and "history replay without reparsing the world" — into one reusable
 architectural mechanism.
+
+### Invalidation witness contract
+
+Exact invalidation is not only a cache-internal doctrine. Monkeybee MUST be able to surface why a
+result was reused, partially reused, or recomputed so proof and user-facing explainability can
+audit the claim directly.
+
+```
+pub enum ReuseVerdict {
+    FullReuse,
+    PartialReuse,
+    Recompute,
+}
+
+pub struct DependencyDelta {
+    pub changed_node: NodeDigest,
+    pub change_kind: String,
+    pub affected_queries: Vec<QueryKey>,
+}
+
+pub struct InvalidationWitness {
+    pub witness_id: String,
+    pub query_key: QueryKey,
+    pub snapshot_before: SnapshotId,
+    pub snapshot_after: SnapshotId,
+    pub reuse_verdict: ReuseVerdict,
+    pub dependency_deltas: Vec<DependencyDelta>,
+    pub trace_digest: [u8; 32],
+}
+```
+
+Rules:
+- `PagePlan`, rendered tiles, extraction surfaces, semantic graphs, write plans,
+  diff reports, and materialized acceleration indexes MUST be able to emit an
+  `InvalidationWitness`
+- proof fixtures MUST include exact-invalidation expectations at artifact
+  granularity, for example: changing an annotation appearance invalidates only
+  the affected page chunks/tiles and their dependent write/diff surfaces
+- reuse without an admissible witness is a correctness bug in
+  `proof-canonical` mode
+- `MaterializationReceipt`, `TraceEventStream`, and cache statistics MAY
+  summarize witness outcomes, but the underlying witness remains the canonical
+  causal artifact
 
 ### Cache management doctrine
 
@@ -2342,6 +2441,35 @@ Rules:
 - previously verified ranges remain trusted only within the same `FetchEpoch`
 - `OpenProbe`, `CapabilityReport`, and `WriteReceipt` MUST surface transport
   integrity failures when they influence correctness
+
+```
+pub struct RangeDigestRecord {
+    pub range: (u64, u64),
+    pub digest: [u8; 32],
+    pub fetch_epoch: FetchEpoch,
+}
+
+pub struct SparseDigestMap {
+    pub verified: Vec<RangeDigestRecord>,
+}
+
+pub struct TransportContinuityReceipt {
+    pub transport_identity: TransportIdentity,
+    pub epochs_seen: Vec<FetchEpoch>,
+    pub digest_map: SparseDigestMap,
+    pub continuity_failures: Vec<RangeConsistencyError>,
+}
+```
+
+Additional rules:
+- when the upstream transport provides cryptographic digests or digest-qualified
+  range attestations, Monkeybee SHOULD bind them into a
+  `TransportContinuityReceipt` rather than relying only on weak validators
+- canonical remote fixtures SHOULD prefer digest-backed transport identities so
+  mixed-object or mixed-epoch feeds cannot silently masquerade as one document
+- write receipts for range-backed sessions MAY reference the continuity receipt
+  when transport trust materially influenced correctness, preserve, or signature
+  claims
 
 **Integration with progressive rendering:** When the render pipeline encounters a stream whose
 bytes are not yet available, it:
@@ -2782,6 +2910,52 @@ Key responsibilities:
 - Output targets: raster (PNG/JPEG), vector (SVG), region render, thumbnail render, and extensible backend interface
 - Render backend selections always advertise a `RenderDeterminismClass`; proof-canonical output,
   backend-deterministic output, and viewer-adaptive output are distinct evidence classes
+
+### Render chunk graph
+
+`PagePlan` remains the shared page-scoped IR, but progressive refinement,
+reuse, disagreement localization, and backend parity all benefit from a middle
+layer that is richer than tiles and more reusable than a page-wide flat op list.
+
+```
+pub enum RenderChunkKind {
+    GlyphRun,
+    ImageXObject,
+    FormXObject,
+    TransparencyGroup,
+    ShadingSpan,
+    AnnotationAppearance,
+}
+
+pub struct RenderChunk {
+    pub chunk_id: [u8; 32],
+    pub kind: RenderChunkKind,
+    pub bbox: Rectangle,
+    pub dependency_digests: Vec<NodeDigest>,
+}
+
+pub struct RenderChunkEdge {
+    pub parent: [u8; 32],
+    pub child: [u8; 32],
+    pub blend_mode: Option<BlendMode>,
+    pub ocg_state: Option<ObjRef>,
+}
+
+pub struct RenderChunkGraph {
+    pub chunks: Vec<RenderChunk>,
+    pub edges: Vec<RenderChunkEdge>,
+}
+```
+
+Rules:
+- `RenderChunkGraph` is a derived artifact layered above `PagePlan`, not a
+  replacement for it
+- tile scheduling and progressive placeholder refinement MAY consume chunk
+  graphs rather than only raw page-wide draw-op streams
+- partial reuse and invalidation SHOULD be expressible at chunk granularity when
+  that yields a sharper witness than page- or tile-level reasoning
+- oracle-disagreement tooling SHOULD localize disagreements to chunk ids when
+  possible so proof output can point to the exact visual substructure in dispute
 
 **Output backend architecture:**
 
@@ -3516,6 +3690,63 @@ pub struct ReadingOrderEdge {
 }
 ```
 
+### Extraction truth surface contract
+
+Extraction usefulness and anchor stability depend on not overstating what the
+engine actually knows. Monkeybee therefore surfaces explicit truth classes for
+decoded text and anchor continuity, not just generic confidence.
+
+```
+pub enum TextTruthClass {
+    UnicodeExact,
+    UnicodeRecovered,
+    GlyphOnly,
+    ReadingOrderInferred,
+    TableStructureInferred,
+    Unmappable,
+}
+
+pub struct TextTruthSpan {
+    pub page_index: u32,
+    pub bbox: Rectangle,
+    pub truth_class: TextTruthClass,
+    pub provenance: ProvenanceAtom,
+}
+
+pub struct PageTruthSummary {
+    pub page_index: u32,
+    pub class_counts: Vec<(TextTruthClass, u64)>,
+}
+
+pub enum AnchorContinuityClass {
+    Exact,
+    AliasMapped,
+    HeuristicReidentified,
+    Lost,
+}
+
+pub struct AnchorStabilityWitness {
+    pub anchor_id: SemanticAnchorId,
+    pub before_snapshot: SnapshotId,
+    pub after_snapshot: SnapshotId,
+    pub continuity: AnchorContinuityClass,
+    pub alias_target: Option<SemanticAnchorId>,
+    pub failure_reason: Option<String>,
+}
+```
+
+Rules:
+- `ExtractReport` SHOULD surface page-level truth summaries and make
+  `TextTruthSpan` retrieval available on demand
+- invisible OCR text, recovered Unicode, heuristic reading order, and inferred
+  table structure MUST stay explicitly labeled rather than being silently
+  promoted to stronger truth classes
+- anchor-stability proof lanes MUST distinguish exact preservation,
+  alias-map continuity, heuristic re-identification, and outright anchor loss
+- semantic anchors derived from ambiguous recovery or heuristic layout remain
+  valuable, but their truth surface and provenance MUST remain attached to the
+  anchor-facing API and proof artifacts
+
 **Object graph inspection:**
 
 The inspection API provides programmatic access to the document's internal structure:
@@ -3761,6 +3992,47 @@ Rules:
 - unresolved disagreements remain blocking for promotion until they are resolved
   or triaged with a manifest-qualified waiver
 
+```
+pub enum OracleVerdictClass {
+    Unanimous,
+    MajorityConsensus,
+    SplitDecision,
+    NoConsensus,
+}
+
+pub struct OracleConsensusRecord {
+    pub fixture_id: String,
+    pub page_index: Option<u32>,
+    pub verdict_class: OracleVerdictClass,
+    pub participating_oracles: Vec<String>,
+    pub winning_interpretation: Option<String>,
+    pub disagreement_axes: Vec<String>,
+}
+
+pub struct BlindSpotLedgerEntry {
+    pub feature_id: String,
+    pub proof_class: String,
+    pub exercised_fixture_count: u32,
+    pub producer_diversity_count: u32,
+    pub support_classes_seen: Vec<String>,
+    pub gap_reason: String,
+}
+
+pub struct BlindSpotLedger {
+    pub entries: Vec<BlindSpotLedgerEntry>,
+}
+```
+
+Additional rules:
+- canonical proof runs SHOULD emit `oracle-consensus/` and `blind-spots/`
+  artifact sets alongside typed disagreement records
+- `OracleConsensusRecord` explains how a rendered or structural expectation was
+  chosen even when the case is not blocking
+- blind-spot ledgers track where fixture depth, producer diversity, or support
+  class coverage remain too thin to justify strong release-facing claims
+- release-facing capability claims SHOULD be suppressible when blind-spot
+  coverage is below threshold, even if isolated fixtures pass
+
 **Conformance infrastructure (Arlington model):**
 
 The Arlington PDF Model is a machine-readable description of every dictionary, array, and value constraint in the PDF specification. The engine should use it for:
@@ -3851,6 +4123,8 @@ pub struct SemanticNode {
     pub text_excerpt: Option<String>,
     pub depends_on: Vec<ObjRef>,
     pub source_span_ids: Vec<SpanId>,
+    pub provenance: Option<ProvenanceAtom>,
+    pub truth_class: Option<TextTruthClass>,
 }
 
 pub struct EditProposal {
@@ -3867,6 +4141,12 @@ Required properties:
 - anchor IDs are deterministic for a given snapshot + extraction profile
 - safe rewrites and incremental appends SHOULD preserve anchor IDs for semantically unchanged
   regions; when they cannot, Monkeybee emits an alias map rather than silently drifting
+- anchor-bearing semantic nodes SHOULD expose provenance and text-truth classes
+  when the anchor derives from extracted content rather than only structural
+  topology
+- anchor stability receipts and proof artifacts SHOULD use
+  `AnchorStabilityWitness` so callers can distinguish exact preservation,
+  alias-map continuity, heuristic re-identification, and loss
 - agent-facing or external edit APIs operate on typed `EditProposal`s and yield ordinary
   `EditTransaction` receipts; they do not bypass ownership, policy, preservation, or signature
   planning rules
@@ -4117,6 +4397,47 @@ Rules:
   silently gain authority in the target document; they are reclassified under
   the target policy and may be degraded or rejected explicitly
 
+### Import closure certificate
+
+Cross-document import is strong enough to deserve its own proof artifact rather
+than living only as an internal remap table.
+
+```
+pub enum AliasSafetyClass {
+    CollisionFree,
+    RemappedSafely,
+    PreservedOpaque,
+    Blocked,
+}
+
+pub struct AliasResolutionRecord {
+    pub source_object: ObjRef,
+    pub target_object: ObjRef,
+    pub safety_class: AliasSafetyClass,
+    pub reason: String,
+}
+
+pub struct ImportClosureCertificate {
+    pub certificate_id: String,
+    pub source_snapshot: SnapshotId,
+    pub target_snapshot: SnapshotId,
+    pub imported_roots: Vec<ObjRef>,
+    pub closure_size: u64,
+    pub alias_resolutions: Vec<AliasResolutionRecord>,
+    pub semantic_normal_form_digest: [u8; 32],
+    pub blocked_imports: Vec<BlockedMerge>,
+}
+```
+
+Rules:
+- copy-page, merge, split, and resource-import workflows MUST be able to emit
+  an `ImportClosureCertificate`
+- the certificate proves closure completeness, alias stability, and
+  no-silent-collision behavior for the committed import, not merely the planned
+  mapping
+- proof fixtures for import workflows MUST validate closure completeness,
+  semantic-normal-form stability, and blocked-import accounting
+
 ### Edit intent contract
 
 Every `EditTransaction` declares an `EditIntent`:
@@ -4190,6 +4511,7 @@ pub struct RebasePlan {
     pub target_snapshot: SnapshotId,
     pub replayed_changes: Vec<ChangeEntry>,
     pub rejected_changes: Vec<RejectedChange>,
+    pub conflicts: Vec<RebaseConflictKind>,
     pub new_ownership_transitions: Vec<OwnershipTransitionRecord>,
 }
 
@@ -4197,6 +4519,23 @@ pub struct UndoJournalEntry {
     pub snapshot_before: SnapshotId,
     pub snapshot_after: SnapshotId,
     pub inverse_change_set: Vec<ChangeEntry>,
+}
+
+pub enum RebaseConflictKind {
+    AnchorMoved,
+    OwnershipEscalation,
+    PreserveConstraintViolation,
+    DeletedTarget,
+    AliasCollision,
+    AppearanceStale,
+}
+
+pub struct RebaseReceipt {
+    pub base_snapshot: SnapshotId,
+    pub input_delta: [u8; 32],
+    pub rebased_delta: [u8; 32],
+    pub conflicts: Vec<RebaseConflictKind>,
+    pub applied_rewrites: Vec<String>,
 }
 ```
 
@@ -4206,6 +4545,11 @@ Required invariants:
 - rebasing is explicit, deterministic under deterministic mode, and auditable
 - undo is implemented as ordinary forward movement to a new snapshot, never
   mutation of an existing snapshot
+- `EditTransaction::commit()` and explicit rebase APIs MAY emit a
+  `RebaseReceipt`; when they do, deterministic mode MUST fix replay order and
+  tie-break behavior
+- agent-facing edit APIs MUST consume this same rebase/conflict algebra rather
+  than inventing a parallel mutation model later
 
 Resource GC, deduplication, unreachable-object pruning, and rewrite-time compaction are explicit edit operations, not incidental writer side effects.
 
@@ -4413,12 +4757,55 @@ pub struct WriteReceipt {
     pub ownership_transitions: Vec<OwnershipTransitionRecord>,
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
+    pub provenance_summary: Option<SurfaceProvenanceSummary>,
+    pub transport_continuity: Option<TransportContinuityReceipt>,
+    pub emission_journal: Option<EmissionJournal>,
     pub post_write_validation: Vec<ValidationFinding>,
 }
 ```
 
 `WritePlan.execute()` SHOULD return:
 `OperationSuccess<WriteResult { bytes, receipt: Option<WriteReceipt> }>`
+
+```
+pub struct SerializedByteAddressMap {
+    pub object_offsets: Vec<(ObjRef, u64)>,
+    pub xref_offset: u64,
+    pub trailer_offset: u64,
+    pub eof_offset: u64,
+}
+
+pub enum SerializationDecisionKind {
+    PreserveVerbatim,
+    RewriteCanonical,
+    AppendIncremental,
+    CompressStream,
+    LeaveUncompressed,
+    PackIntoObjectStream,
+    EmitPlainIndirectObject,
+}
+
+pub struct SerializationDecision {
+    pub object_ref: Option<ObjRef>,
+    pub decision: SerializationDecisionKind,
+    pub reason: String,
+}
+
+pub struct EmissionJournal {
+    pub object_order: Vec<ObjRef>,
+    pub decisions: Vec<SerializationDecision>,
+    pub byte_map: SerializedByteAddressMap,
+}
+```
+
+Rules:
+- deterministic writes in `proof-canonical` mode MUST be replayable from
+  `WritePlan + EmissionJournal + policy_digest`
+- `WriteReceipt` SHOULD embed or reference an `EmissionJournal`; when journal
+  size is large, it may be published as a separate content-addressed artifact
+- serializer regressions SHOULD diff emission journals and byte-address maps,
+  not only final output bytes, so changes in packing, ordering, or compression
+  policy stay explainable
 
 
 ### Invariant certificate contract
@@ -5619,6 +6006,7 @@ CompatibilityLedger {
   diagnostics: [DiagnosticEntry], // warnings, notes, errors
   ambiguities: [AmbiguityEntry],  // competing recovery candidates and why they differed
   plan_selection_refs: [ArtifactRef], // write/import/open/backend selections relevant to this run
+  oracle_consensus_refs: [ArtifactRef], // typed consensus records, if arbitration established the expectation
   oracle_disagreement_refs: [ArtifactRef], // typed disagreement records, if any
   pages: [PageLedger],           // per-page feature/diagnostic breakdown
   summary: LedgerSummary,
@@ -5741,6 +6129,12 @@ downstream tools (dashboards, CI gates, regression detectors) can consume progra
       "digest": "plan123..."
     }
   ],
+  "oracle_consensus_refs": [
+    {
+      "kind": "render_consensus",
+      "digest": "consensus789..."
+    }
+  ],
   "oracle_disagreement_refs": [
     {
       "kind": "render_arbitration",
@@ -5791,6 +6185,7 @@ feature summaries. Concretely, the schema family should include:
 - semantic-surface summaries (layout graph present, semantic anchors present, anchor policy)
 - reproducibility manifest IDs for the enclosing proof run
 - plan-selection references for open/save/import/backend decisions that materially affected outcome
+- typed oracle-consensus references when arbitration established the expected interpretation
 - typed oracle-disagreement references when consensus arbitration was required
 
 This does **not** mean the ledger becomes a dumping ground for giant internal graphs. Large artifacts
@@ -5810,6 +6205,8 @@ The following outputs are schema-versioned external interfaces:
 - `OracleManifest`
 - `ReproducibilityManifest`
 - `PlanSelectionRecord`
+- `BlindSpotLedger`
+- `OracleConsensusRecord`
 - `OracleDisagreementRecord`
 
 Backward compatibility is guaranteed within a major version for all of the above.
@@ -5866,6 +6263,12 @@ pub struct BenchmarkWitness {
     pub render_determinism_class: RenderDeterminismClass,
     pub fixture_set_digest: [u8; 32],
     pub warm_cache: bool,
+    pub cpu_topology: String,
+    pub allocator: String,
+    pub simd_class: String,
+    pub numa_policy: String,
+    pub storage_class: String,
+    pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
     pub metrics: Vec<MetricObservation>,
     pub threshold_verdicts: Vec<ThresholdVerdict>,
 }
@@ -5890,8 +6293,8 @@ Rules:
 - every canonical benchmark class emits at least one `BenchmarkWitness` linked to
   the enclosing `ReproducibilityManifest`
 - benchmark witnesses record support class, render determinism class, cache
-  temperature, fixture set, and threshold verdicts; ad hoc timing logs are not
-  release evidence
+  temperature, fixture set, hardware/runtime topology, and threshold verdicts;
+  ad hoc timing logs are not release evidence
 - README, release notes, dashboards, and CLI capability/performance summaries
   may cite only witness-backed metrics from canonical runs or explicitly labeled
   non-canonical runs
@@ -5921,7 +6324,9 @@ renderer binaries).
 10. `reproducibility.json` — canonical or ad hoc run manifest for the entire CI/proof invocation
 11. `plan-selections/` — typed plan-selection records for save/import/backend/open decisions
 12. `oracle-disagreements/` — typed disagreement records with resolution status and gating class
-13. `benchmark-witnesses/` — schema-versioned benchmark evidence with threshold verdicts and render determinism classes
+13. `oracle-consensus/` — typed consensus records describing how expected interpretations were selected
+14. `blind-spots/` — coverage-gap ledgers used to suppress overconfident release-facing claims
+15. `benchmark-witnesses/` — schema-versioned benchmark evidence with threshold verdicts and render determinism classes
 
 
 
@@ -6174,6 +6579,37 @@ Gates use sustained throughput and regression budget against previous canonical 
 
 *Memory profile:* defined allocator, artifact-store policy, and corpus subset.
 Gates use peak RSS and peak decoded-bytes counters.
+
+### Numeric robustness profile
+
+Monkeybee names mathematically stronger kernels all over the spec. The engine
+must also be able to say which robustness class was actually active for a given
+run so proof artifacts and caller-visible reports stay reproducible.
+
+```
+pub enum NumericKernelClass {
+    FastFloat,
+    GuardedFloat,
+    AdaptiveExactPredicate,
+    ExactFallback,
+}
+
+pub struct NumericRobustnessProfile {
+    pub path_geometry: NumericKernelClass,
+    pub clipping: NumericKernelClass,
+    pub mesh_subdivision: NumericKernelClass,
+    pub hit_testing: NumericKernelClass,
+    pub color_interpolation: NumericKernelClass,
+    pub blend_boundary_logic: NumericKernelClass,
+}
+```
+
+Rules:
+- `RenderReport`, `ExtractReport`, and canonical `BenchmarkWitness` artifacts
+  SHOULD surface the active `NumericRobustnessProfile`
+- `proof-canonical` mode MUST pin the active profile
+- any downgrade from a stronger to a weaker numeric kernel is a
+  plan-selection event and must remain visible in trace/evidence artifacts
 
 **WASM-friendly core target:**
 
@@ -6487,8 +6923,19 @@ Each registry entry includes:
 - `owning_crate`
 - `proof_class`
 - `schema_surfaces`
+- `witness_surfaces`
+- `evidence_gating`
+- `adoption_leverage_rank`
 - `bead_ids`
 - `notes`
+
+Rules:
+- any artifact that can block, substantiate, or materially qualify a
+  release-facing claim MUST appear as a named witness surface in the registry
+- generated capability docs MUST distinguish feature support from evidence
+  support (for example: "implemented" versus "implemented + witness-backed")
+- scope-registry evidence gates MAY suppress optimistic capability claims when
+  required witness surfaces or blind-spot coverage are missing
 
 No feature may be `v1_gating` in one section and `post_v1` in another.
 
@@ -6538,6 +6985,7 @@ Recommended initial classification: `v1_advisory`.
 - [ ] Ambiguous-repair fixtures produce hypothesis-set evidence rather than silent collapse.
 - [ ] Temporal replay and semantic-anchor stability harnesses run on representative fixtures.
 - [ ] Canonical proof runs emit reproducibility manifests, plan-selection records, and typed oracle-disagreement artifacts linked from ledgers and capsules.
+- [ ] Canonical proof runs emit oracle-consensus records and blind-spot ledgers wherever arbitration or coverage thresholds materially affect release-facing claims.
 
 ### Test obligation matrix
 
@@ -6563,12 +7011,12 @@ Each gated test class has a defined pass threshold and responsible crate:
 | substrate-delta | substrate + document | 100% of edit fixtures | Changed-subgraph reuse + digest stability |
 | historical-replay | bytes + substrate + document | 100% of multi-revision fixtures | Frame-local render/extract/diff consistency |
 | hypothesis-recovery | parser + proof | ≥99% candidate-selection stability on ambiguous corpus or explicit unresolved classification | Candidate digests + evidence |
-| cross-document-import | document + edit + write | 100% of copy/merge/split fixtures | Provenance map completeness + render/structure validity |
+| cross-document-import | document + edit + write | 100% of copy/merge/split fixtures | Provenance map completeness + import-closure certificate + render/structure validity |
 | policy-composition | core + security + write | 100% invalid combinations rejected, 100% canonical combinations stable | Conflict classification + policy digest stability |
-| query-acceleration | substrate + extract | ≥95% of large-query fixtures use fresh indexes or explicit scan fallback | Index freshness + fallback accounting |
+| query-acceleration | substrate + extract | ≥95% of large-query fixtures use fresh indexes or explicit scan fallback | Index freshness + invalidation-witness completeness |
 | reproducibility-manifest | proof | 100% of canonical proof runs | Schema-valid manifest + artifact linkage completeness |
 | oracle-disagreement | proof | 100% of above-threshold oracle splits emit typed records | Resolution completeness + blocking-state correctness |
-| semantic-anchor-stability | extract | ≥95% stable anchors on semantically unchanged regions | Anchor/alias precision |
+| semantic-anchor-stability | extract | ≥95% stable anchors on semantically unchanged regions | Anchor continuity precision + truth-surface correctness |
 | hidden-content-forensics | forensics + extract | ≥95% planted-fixture detection | Precision/recall on known hidden content |
 | redaction-audit | forensics + edit | ≥95% intentionally bad redactions detected | Audit precision/recall |
 | post-signing-forensics | forensics + signature | ≥95% correct classification on signed corpus | Permitted-vs-suspicious accuracy |

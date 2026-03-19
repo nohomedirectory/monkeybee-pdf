@@ -15,6 +15,14 @@ fault-domain containment, render determinism classes, native isolation classes,
 and schema-versioned benchmark witnesses. Those are implementation obligations,
 not proof-theater garnish.
 
+This revision also promotes a set of witness-bearing internal surfaces that now
+need explicit implementation homes instead of remaining implied by adjacent
+machinery: typed provenance/trust summaries, invalidation witnesses,
+transport-continuity receipts, replayable serializer emission journals,
+import-closure certificates, extraction truth surfaces, anchor-stability
+witnesses, oracle-consensus records, blind-spot ledgers, and richer
+benchmark-topology evidence.
+
 The most important architectural refinement since the prior revision is simple to state and
 consequential in practice: Monkeybee is no longer described merely as a layered
 parser/document/render/write stack. It now has a baseline computational kernel —
@@ -166,7 +174,7 @@ monkeybee-pdf/
 │   │   │   ├── context.rs        # ExecutionContext, budgets, determinism, provider/view state
 │   │   │   ├── diagnostics.rs    # DiagnosticSink, Diagnostic, sink adapters
 │   │   │   ├── version.rs        # PdfVersion tracking and version-gated feature registry
-│   │   │   ├── scope.rs          # generated support/scope registry bindings
+│   │   │   ├── scope.rs          # generated support/scope registry bindings, witness surfaces, evidence gating
 │   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider, OracleProvider
 │   │   └── Cargo.toml
 │   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
@@ -906,6 +914,33 @@ pub struct FontHealthSummary {
     pub cid_vertical_metric_font_count: u32,
 }
 
+pub enum ProvenanceTrustClass {
+    SourceExact,
+    SourceRepaired,
+    SourceSynthesized,
+    ProviderSupplied,
+    OracleConsensusDerived,
+    HeuristicInferred,
+}
+
+pub struct ProvenanceAtom {
+    pub trust_class: ProvenanceTrustClass,
+    pub source_span: Option<ByteSpanRef>,
+    pub source_object: Option<ObjRef>,
+    pub hypothesis_set_id: Option<HypothesisSetId>,
+    pub evidence_refs: Vec<CausalRef>,
+    pub confidence: Option<f64>,
+}
+
+pub struct SurfaceProvenanceSummary {
+    pub exact_count: u64,
+    pub repaired_count: u64,
+    pub synthesized_count: u64,
+    pub provider_supplied_count: u64,
+    pub oracle_consensus_count: u64,
+    pub heuristic_count: u64,
+}
+
 pub struct CapabilityReport {
     pub signed: bool,
     pub signature_summary: SignatureSummary,
@@ -925,6 +960,7 @@ pub struct CapabilityReport {
     pub active_content: ActiveContentReport,
     pub substrate_digest: [u8; 32],
     pub temporal_revision_depth: u32,
+    pub provenance_summary: Option<SurfaceProvenanceSummary>,
     pub hypothesis_summary: Option<HypothesisSetSummary>,
     pub semantic_surface: Option<SemanticSurfaceSummary>,
     pub font_health_summary: Option<FontHealthSummary>,
@@ -1015,6 +1051,15 @@ pub struct RichStructureSummary {
     pub rendition_tree_count: u32,
 }
 ```
+
+Implementation notes:
+- `CapabilityReport` is a caller-facing aggregation surface, so its provenance
+  summary must be computed from the same typed provenance atoms used by
+  extraction, diff, render, and write receipts rather than synthesized later as
+  a doc-level guess
+- preserve-sensitive and signature-sensitive surfaces may never silently
+  promote heuristic or provider-supplied facts into source-exact claims just
+  because a higher layer found them convenient
 
 ### Execution context (`monkeybee-core::context`)
 
@@ -1282,12 +1327,36 @@ pub struct MaterializationReceipt {
     pub dependent_queries: Vec<QueryKey>,
     pub materialization_digest: [u8; 32],
     pub reused: bool,
+    pub reuse_verdict: ReuseVerdict,
+    pub invalidation_witness: Option<InvalidationWitness>,
 }
 
 pub enum QueryStatus {
     Clean,
     Dirty,
     Materializing,
+}
+
+pub enum ReuseVerdict {
+    FullReuse,
+    PartialReuse,
+    Recompute,
+}
+
+pub struct DependencyDelta {
+    pub changed_node: NodeDigest,
+    pub change_kind: String,
+    pub affected_queries: Vec<QueryKey>,
+}
+
+pub struct InvalidationWitness {
+    pub witness_id: String,
+    pub query_key: QueryKey,
+    pub snapshot_before: SnapshotId,
+    pub snapshot_after: SnapshotId,
+    pub reuse_verdict: ReuseVerdict,
+    pub dependency_deltas: Vec<DependencyDelta>,
+    pub trace_digest: [u8; 32],
 }
 ```
 
@@ -1324,6 +1393,8 @@ Implementation notes:
 - materialized indexes are explicit substrate nodes with the same invalidation discipline as any other derived artifact
 - partial remote indexes are allowed, but freshness and missing-range state must stay visible to callers and proof artifacts
 - query fallback to scan is legal only with a receipt/trace entry explaining why a fresh index was unavailable
+- `InvalidationWitness` is the canonical causal artifact for reuse/recompute claims; proof-canonical
+  runs may summarize it, but may not replace it with hand-written explanations only
 
 ### Hypothesis sets and ambiguity tracking (`monkeybee-substrate::hypothesis`)
 
@@ -1412,10 +1483,52 @@ pub struct WriteReceipt {
     pub ownership_transitions: Vec<OwnershipTransitionRecord>,
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
+    pub provenance_summary: Option<SurfaceProvenanceSummary>,
+    pub transport_continuity: Option<TransportContinuityReceipt>,
+    pub emission_journal: Option<EmissionJournal>,
     pub post_write_validation: Vec<ValidationFinding>,
     pub redaction_verification: Option<RedactionVerificationSummary>,
 }
+
+pub struct SerializedByteAddressMap {
+    pub object_offsets: Vec<(ObjRef, u64)>,
+    pub xref_offset: u64,
+    pub trailer_offset: u64,
+    pub eof_offset: u64,
+}
+
+pub enum SerializationDecisionKind {
+    PreserveVerbatim,
+    RewriteCanonical,
+    AppendIncremental,
+    CompressStream,
+    LeaveUncompressed,
+    PackIntoObjectStream,
+    EmitPlainIndirectObject,
+}
+
+pub struct SerializationDecision {
+    pub object_ref: Option<ObjRef>,
+    pub decision: SerializationDecisionKind,
+    pub reason: String,
+}
+
+pub struct EmissionJournal {
+    pub object_order: Vec<ObjRef>,
+    pub decisions: Vec<SerializationDecision>,
+    pub byte_map: SerializedByteAddressMap,
+}
 ```
+
+Implementation notes:
+- `EmissionJournal` is the serializer replay surface for deterministic and
+  preserve-aware saves; output-byte diffs without the corresponding journal are
+  insufficient debugging evidence for canonical save regressions
+- write receipts should carry transport continuity evidence whenever remote
+  range trust materially influenced preserve, signature, or correctness claims
+- provenance summaries on receipts are aggregated facts, not narrative prose;
+  every caller-visible save-impact claim needs a typed provenance path back to
+  source, repair, or synthesized evidence
 
 ### Temporal replay (`monkeybee-substrate::temporal`)
 
@@ -1451,6 +1564,7 @@ pub struct CompatibilityLedger {
     pub hypotheses: Vec<HypothesisLedgerEntry>,
     pub receipts: Vec<ReceiptDigestRef>,
     pub plan_selection_refs: Vec<ArtifactDigestRef>,
+    pub oracle_consensus_refs: Vec<ArtifactDigestRef>,
     pub oracle_disagreement_refs: Vec<ArtifactDigestRef>,
     pub pages: Vec<PageLedger>,
     pub summary: LedgerSummary,
@@ -1551,6 +1665,51 @@ pub struct OracleDisagreementRecord {
     pub blocking: bool,
 }
 
+pub enum OracleVerdictClass {
+    Unanimous,
+    MajorityConsensus,
+    SplitDecision,
+    NoConsensus,
+}
+
+pub struct OracleConsensusRecord {
+    pub fixture_id: String,
+    pub page_index: Option<u32>,
+    pub verdict_class: OracleVerdictClass,
+    pub participating_oracles: Vec<String>,
+    pub winning_interpretation: Option<String>,
+    pub disagreement_axes: Vec<String>,
+}
+
+pub struct BlindSpotLedgerEntry {
+    pub feature_id: String,
+    pub proof_class: String,
+    pub exercised_fixture_count: u32,
+    pub producer_diversity_count: u32,
+    pub support_classes_seen: Vec<String>,
+    pub gap_reason: String,
+}
+
+pub struct BlindSpotLedger {
+    pub entries: Vec<BlindSpotLedgerEntry>,
+}
+
+pub enum NumericKernelClass {
+    FastFloat,
+    GuardedFloat,
+    AdaptiveExactPredicate,
+    ExactFallback,
+}
+
+pub struct NumericRobustnessProfile {
+    pub path_geometry: NumericKernelClass,
+    pub clipping: NumericKernelClass,
+    pub mesh_subdivision: NumericKernelClass,
+    pub hit_testing: NumericKernelClass,
+    pub color_interpolation: NumericKernelClass,
+    pub blend_boundary_logic: NumericKernelClass,
+}
+
 pub struct BenchmarkWitness {
     pub witness_id: String,
     pub reproducibility_manifest_id: String,
@@ -1559,6 +1718,12 @@ pub struct BenchmarkWitness {
     pub render_determinism_class: RenderDeterminismClass,
     pub fixture_set_digest: [u8; 32],
     pub warm_cache: bool,
+    pub cpu_topology: String,
+    pub allocator: String,
+    pub simd_class: String,
+    pub numa_policy: String,
+    pub storage_class: String,
+    pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
     pub metrics: Vec<MetricObservation>,
     pub threshold_verdicts: Vec<ThresholdVerdict>,
 }
@@ -1581,11 +1746,12 @@ pub struct ThresholdVerdict {
 
 Implementation notes:
 - every canonical proof run emits one `ReproducibilityManifest` and links it from ledgers, capsules, and disagreement records
+- oracle consensus and blind-spot artifacts are first-class proof outputs, not report garnish
 - oracle disagreements are typed artifacts, not free-form comments in CI logs
 - strategy promotion stays blocked while any manifest-qualified disagreement remains unresolved
 - canonical benchmark classes emit schema-versioned `BenchmarkWitness` artifacts tied to the same
-  reproducibility manifest, including support class, render determinism class, and threshold
-  verdicts
+  reproducibility manifest, including support class, render determinism class, numeric profile,
+  topology/runtime fields, and threshold verdicts
 - benchmark witnesses follow the same manifest-last durable publication rules as ledgers,
   receipts, and failure capsules
 
@@ -1770,6 +1936,23 @@ pub struct ChangeEntry {
     pub preservation_effects: Vec<PreservationClaim>,
 }
 
+pub enum RebaseConflictKind {
+    AnchorMoved,
+    OwnershipEscalation,
+    PreserveConstraintViolation,
+    DeletedTarget,
+    AliasCollision,
+    AppearanceStale,
+}
+
+pub struct RebaseReceipt {
+    pub base_snapshot: SnapshotId,
+    pub input_delta: [u8; 32],
+    pub rebased_delta: [u8; 32],
+    pub conflicts: Vec<RebaseConflictKind>,
+    pub applied_rewrites: Vec<String>,
+}
+
 pub struct WritePlan {
     pub classifications: Vec<ObjectClassification>,
     pub preservation_claims: Vec<PreservationClaim>,
@@ -1795,6 +1978,13 @@ pub enum OwnershipClass {
 }
 ```
 
+Implementation notes:
+- rebasing and ordinary transaction commit share one conflict algebra; agent or
+  automation surfaces are not allowed to invent a second conflict taxonomy on
+  top of document edits
+- deterministic mode pins replay order, rewrite choice, and tie-break behavior
+  so `RebaseReceipt` artifacts remain comparable across machines and runs
+
 ### Cross-document import and semantic normal forms (`monkeybee-document::import` / `monkeybee-document::normal_form`)
 
 ```rust
@@ -1813,6 +2003,31 @@ pub struct ImportedObjectProvenance {
     pub source_object: ObjRef,
     pub target_object: ObjRef,
     pub source_digest: NodeDigest,
+}
+
+pub enum AliasSafetyClass {
+    CollisionFree,
+    RemappedSafely,
+    PreservedOpaque,
+    Blocked,
+}
+
+pub struct AliasResolutionRecord {
+    pub source_object: ObjRef,
+    pub target_object: ObjRef,
+    pub safety_class: AliasSafetyClass,
+    pub reason: String,
+}
+
+pub struct ImportClosureCertificate {
+    pub certificate_id: String,
+    pub source_snapshot: SnapshotId,
+    pub target_snapshot: SnapshotId,
+    pub imported_roots: Vec<ObjRef>,
+    pub closure_size: u64,
+    pub alias_resolutions: Vec<AliasResolutionRecord>,
+    pub semantic_normal_form_digest: [u8; 32],
+    pub blocked_imports: Vec<BlockedMerge>,
 }
 
 pub enum SemanticNormalFormKind {
@@ -1834,6 +2049,7 @@ pub struct SemanticNormalForm {
 Implementation notes:
 - cross-document import allocates fresh target-side `ObjRef`s and records a durable provenance map from source state to target state
 - copy/merge/split operations reuse the same transaction/change-journal machinery as intra-document edits rather than bypassing it
+- `ImportClosureCertificate` is the auditable proof that the imported closure was complete, alias handling stayed explicit, and blocked merges were surfaced rather than silently dropped
 - semantic-equivalence claims are backed by explicit normal-form digests so proof can distinguish byte drift from real semantic drift
 
 ### PagePlan IR (`monkeybee-content::pageplan`)
@@ -1853,6 +2069,34 @@ pub struct PagePlan {
     pub materialization_digest: [u8; 32],
 }
 
+pub enum RenderChunkKind {
+    GlyphRun,
+    ImageXObject,
+    FormXObject,
+    TransparencyGroup,
+    ShadingSpan,
+    AnnotationAppearance,
+}
+
+pub struct RenderChunk {
+    pub chunk_id: [u8; 32],
+    pub kind: RenderChunkKind,
+    pub bbox: Rectangle,
+    pub dependency_digests: Vec<NodeDigest>,
+}
+
+pub struct RenderChunkEdge {
+    pub parent: [u8; 32],
+    pub child: [u8; 32],
+    pub blend_mode: Option<BlendMode>,
+    pub ocg_state: Option<ObjRef>,
+}
+
+pub struct RenderChunkGraph {
+    pub chunks: Vec<RenderChunk>,
+    pub edges: Vec<RenderChunkEdge>,
+}
+
 pub enum DrawOp {
     FillPath { path: Path, rule: FillRule, color: ResolvedColor, state: DrawState },
     StrokePath { path: Path, color: ResolvedColor, stroke: StrokeParams, state: DrawState },
@@ -1865,6 +2109,13 @@ pub enum DrawOp {
     EndMarkedContent,
 }
 ```
+
+Implementation notes:
+- `RenderChunkGraph` is a derived middle layer above `PagePlan`; it improves
+  progressive refinement, disagreement localization, and invalidation precision
+  without creating a second independent interpreter
+- chunk identities must remain deterministic under fixed inputs so cache reuse,
+  witness emission, and oracle-localization artifacts stay stable
 
 ### Error taxonomy (`monkeybee-core::error`)
 
@@ -2093,7 +2344,32 @@ pub trait FetchScheduler: Send + Sync {
     fn cancel_all(&self);
     fn statistics(&self) -> FetchStatistics;
 }
+
+pub struct RangeDigestRecord {
+    pub range: (u64, u64),
+    pub digest: [u8; 32],
+    pub fetch_epoch: FetchEpoch,
+}
+
+pub struct SparseDigestMap {
+    pub verified: Vec<RangeDigestRecord>,
+}
+
+pub struct TransportContinuityReceipt {
+    pub transport_identity: TransportIdentity,
+    pub epochs_seen: Vec<FetchEpoch>,
+    pub digest_map: SparseDigestMap,
+    pub continuity_failures: Vec<RangeConsistencyError>,
+}
 ```
+
+Implementation notes:
+- range-backed sessions should bind cryptographic range digests into
+  `TransportContinuityReceipt` whenever upstream transport can supply them;
+  weak validator identity alone is not enough for the strongest correctness
+  claims
+- continuity failures must flow into caller-visible diagnostics and receipts,
+  not remain buried in fetcher telemetry
 
 ### Semantic graph and anchors (`monkeybee-extract::semantic_graph` / `anchors`)
 
@@ -2119,6 +2395,20 @@ pub enum SemanticNodeKind {
     Region,
 }
 
+pub enum TextTruthClass {
+    UnicodeExact,
+    UnicodeRecovered,
+    GlyphOnly,
+    ReadingOrderInferred,
+    TableStructureInferred,
+    Unmappable,
+}
+
+pub struct PageTruthSummary {
+    pub page_index: u32,
+    pub class_counts: Vec<(TextTruthClass, u64)>,
+}
+
 pub struct SemanticNode {
     pub anchor_id: SemanticAnchorId,
     pub kind: SemanticNodeKind,
@@ -2127,12 +2417,30 @@ pub struct SemanticNode {
     pub text_excerpt: Option<String>,
     pub depends_on: Vec<ObjRef>,
     pub source_span_ids: Vec<SpanId>,
+    pub provenance: Option<ProvenanceAtom>,
+    pub truth_class: Option<TextTruthClass>,
 }
 
 pub struct AnchorAlias {
     pub old_anchor: SemanticAnchorId,
     pub new_anchor: SemanticAnchorId,
     pub reason: String,
+}
+
+pub enum AnchorContinuityClass {
+    Exact,
+    AliasMapped,
+    HeuristicReidentified,
+    Lost,
+}
+
+pub struct AnchorStabilityWitness {
+    pub anchor_id: SemanticAnchorId,
+    pub before_snapshot: SnapshotId,
+    pub after_snapshot: SnapshotId,
+    pub continuity: AnchorContinuityClass,
+    pub alias_target: Option<SemanticAnchorId>,
+    pub failure_reason: Option<String>,
 }
 
 pub struct EditProposal {
@@ -2144,6 +2452,14 @@ pub struct EditProposal {
     pub intent: EditIntent,
 }
 ```
+
+Implementation notes:
+- semantic nodes that surface text or layout meaning should carry provenance and
+  truth-class detail whenever those surfaces are exposed externally; absence of
+  that detail is itself an extraction-quality limit, not permission to guess
+- anchor-stability witnesses must distinguish exact continuity, alias-map
+  continuity, heuristic re-identification, and loss so agent-safe edit flows
+  can tell stability from best-effort recovery
 
 ### WritePlan classification (`monkeybee-write::plan`)
 
@@ -2374,7 +2690,7 @@ PdfSnapshot + extract profile
 - Unit tests: ByteSource implementations (mmap, in-memory, range-backed), revision chain construction, span tracking.
 - Property tests: span ownership invariants preserved across revision appends.
 - Access-plan tests: first-paint byte planning on linearized vs non-linearized fixtures.
-- Remote tests: fetch statistics and cancellation are stable under concurrent range requests.
+- Remote tests: fetch statistics, transport continuity receipts, digest-ladder verification, and cancellation are stable under concurrent range requests.
 
 ### monkeybee-codec
 - Unit tests: each filter implementation on known input/output pairs.
@@ -2404,11 +2720,11 @@ PdfSnapshot + extract profile
 - Unit tests: node digest stability, content-addressed deduplication, root construction, lineage insertion.
 - Property tests: identical normalized payload + identical child digests -> identical NodeDigest; changed child digest -> changed parent digest.
 - Query tests: materialization records capture all observed digests and dependent query keys.
-- Invalidation tests: changed digests dirty exactly the expected query set and no more.
+- Invalidation tests: changed digests dirty exactly the expected query set and no more, and emitted invalidation witnesses explain the reuse/recompute verdict.
 - Lifecycle tests: root pinning, spill eligibility, and reachability-based sweep preserve live evidence and reclaim only unreachable nodes.
 - Durability tests: manifest-last publication never exposes partially written persisted roots or
   artifact-store blobs across simulated crashes.
-- Acceleration-index tests: freshness, partial-remote state, and explicit scan fallback remain deterministic and auditable.
+- Acceleration-index tests: freshness, partial-remote state, explicit scan fallback, and witness linkage remain deterministic and auditable.
 - Receipt tests: invariant certificates are deterministic under deterministic mode and recomputable by proof harness.
 - Hypothesis tests: chosen candidate and alternative summaries remain stable across identical opens.
 - Temporal tests: historical frame materialization preserves frame-local roots and does not mutate later frames.
@@ -2424,9 +2740,9 @@ PdfSnapshot + extract profile
 
 ### monkeybee-document
 - Unit tests: document model construction from syntax snapshots, page tree inheritance, resource resolution, reference integrity.
-- Property tests: ownership classification consistency, EditTransaction commit/rollback semantics.
+- Property tests: ownership classification consistency, EditTransaction commit/rollback semantics, and deterministic rebase behavior.
 - Invariant tests: change journal consistency, reverse reference index accuracy.
-- Cross-document import tests: page/resource import allocates fresh target ids, remaps closure dependencies, records provenance, and rejects silent collisions.
+- Cross-document import tests: page/resource import allocates fresh target ids, remaps closure dependencies, records provenance, emits import-closure certificates, and rejects silent collisions.
 - Normal-form tests: semantic-normal-form digests remain stable across byte-only rewrites and diverge when true semantic meaning changes.
 - Dependency graph tests: edit an object, verify only dependents invalidated.
 - Snapshot tests: PdfSnapshot immutability, snapshot_id uniqueness, root-digest lineage correctness, structural sharing (new snapshot does not clone full object store).
@@ -2437,7 +2753,7 @@ PdfSnapshot + extract profile
 - Unit tests: content stream interpretation, graphics state machine, event dispatch.
 - Sink adapter tests: RenderSink, ExtractSink, InspectSink, EditSink receive correct events for known content streams.
 - Property tests: PagePlan IR equivalence with streaming events.
-- Cache/query tests: PagePlan cache invalidation on content/resource changes.
+- Cache/query tests: PagePlan cache invalidation on content/resource changes and derived render-chunk graphs stay causally aligned.
 - Error recovery tests: operator-level isolation, state rollback on partial failure, resource
   resolution failure handling, inline image recovery including resource-leakage color-space cases,
   marked-content nesting repair, Q stack underflow recovery, and recursion limit enforcement.
@@ -2470,8 +2786,8 @@ PdfSnapshot + extract profile
 - Function-evaluation tests: transfer functions, BG/UCR hooks, spot-function and threshold-screen inspection, and N-dimensional sampled-function interpolation fixtures.
 - Quality tests: Lanczos/Mitchell resampling behavior, shading-edge anti-aliasing, and matte un-premultiplication stability.
 - Cooperative cancellation tests: cancel mid-render at each checkpoint type.
-- Progressive rendering tests: missing resources produce correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles.
-- Query reuse tests: repeated renders on unchanged snapshot reuse page-plan/tile materializations.
+- Progressive rendering tests: missing resources produce correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles or chunks.
+- Query reuse tests: repeated renders on unchanged snapshot reuse page-plan/tile materializations and preserve invalidation-witness precision.
 
 ### monkeybee-3d
 - Unit tests: PRC parser on known PRC files, U3D parser on known U3D files, scene graph construction from both formats.
@@ -2503,7 +2819,9 @@ PdfSnapshot + extract profile
 - WritePlan tests: classification correctness (PreserveBytes/AppendOnly/RewriteOwned/etc.) on known document states.
 - Preservation algebra tests: composed transform claims yield expected preserved / invalidated properties.
 - WriteReceipt tests: receipt digests remain stable under deterministic mode and include correct
-  signature-coverage entries plus redaction-verification summaries when redactions are applied.
+  signature-coverage entries, provenance summaries, transport continuity references, and
+  redaction-verification summaries when redactions are applied.
+- Emission-journal tests: deterministic saves emit replayable object order, decision logs, and byte-address maps.
 - Round-trip tests: parse -> write -> re-parse -> compare object graphs.
 - Self-consistency tests: write output -> parse with monkeybee-parser -> verify structural validity.
 - Reference validation: write output -> open in PDFium/MuPDF -> verify renders correctly.
@@ -2556,7 +2874,7 @@ PdfSnapshot + extract profile
 
 ### monkeybee-extract
 - Unit tests: text extraction on known documents with ground-truth positions.
-- Multi-surface tests: PhysicalText matches exact glyph geometry, LogicalText produces correct reading order with confidence, TaggedText uses structure tree when present.
+- Multi-surface tests: PhysicalText matches exact glyph geometry, LogicalText produces correct reading order with confidence, TaggedText uses structure tree when present, and each surfaced span reports the correct truth/provenance class.
 - Search/hit-test tests: SearchIndex finds known text, SelectionQuads returns correct regions, HitTest resolves correct characters.
 - Metadata tests: extraction accuracy on documents with known metadata, including page/image/font/
   form-XObject metadata streams and web-capture `SourceInfo`.
@@ -2573,7 +2891,7 @@ PdfSnapshot + extract profile
   extraction, alternate-image inventory, spot-function catalogs, DeviceN attributes, TAC
   summaries, and placed-image resolution metadata match fixtures.
 - Semantic graph tests: graph node/edge construction is deterministic for fixed extract profile.
-- Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps.
+- Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps and anchor-stability witnesses with the correct continuity class.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
 
 ### monkeybee-forensics
@@ -2606,13 +2924,15 @@ PdfSnapshot + extract profile
 - Ledger JSON schema tests: ledger output validates against schema, version tracking fields populate correctly, schema versioning remains backward-compatible within majors.
 - Reproducibility tests: canonical runs emit a manifest and every ledger/capsule/disagreement/plan-selection artifact links back to it.
 - Benchmark-witness tests: canonical benchmarks emit schema-valid witness records with support
-  class, render determinism class, threshold verdicts, and reproducibility linkage.
+  class, render determinism class, numeric profile, topology/runtime fields, threshold verdicts, and reproducibility linkage.
 - Oracle-resolution tests: above-threshold renderer splits emit typed disagreement records with correct blocking state and resolution class.
+- Oracle-consensus tests: canonical arbitration emits typed consensus records when expectations are resolved without a blocking disagreement.
+- Blind-spot tests: release-facing capability summaries are suppressed or qualified when coverage thresholds are not met.
 - Corpus manifest tests: every fixture has an `ExpectationManifest`.
 - Repair expectation tests: ambiguous recovery asserts chosen candidate id, semantic digest, and write-impact class unless explicitly waived.
 - Temporal tests: multi-revision fixtures produce stable historical frame outputs.
 - Anchor tests: semantic-anchor stability harness computes expected alias precision.
-- Cross-document import harness tests: copy/merge/split fixtures validate provenance-map completeness and imported render stability.
+- Cross-document import harness tests: copy/merge/split fixtures validate provenance-map completeness, import-closure certificates, and imported render stability.
 - Expansion-lane corpus tests: prepress, PAdES/LTV, tagged-accessibility, form-interchange, action inventory, portfolio/thread, and multimedia fixtures remain represented and triaged.
 - Certificate tests: proof harness can recompute invariant-certificate digests independently.
 - Regression tests: unknown degradations, hypothesis drift, or scope-class violations fail unless triaged.
