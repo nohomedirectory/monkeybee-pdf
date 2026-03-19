@@ -1768,6 +1768,48 @@ Rules:
 - spill and persist decisions for segmented artifacts SHOULD emit
   `SpillReceipt`s rather than disappearing into aggregate cache statistics
 
+### Object-neighborhood closure doctrine
+
+`SegmentKind::ObjectNeighborhood` is not only a storage hint. Monkeybee SHOULD
+also expose reusable semantic neighborhoods as a planning primitive for
+huge-document open, edit closure, import planning, spill policy, and remote
+fetch locality.
+
+```rust
+pub struct NeighborhoodId(pub [u8; 32]);
+
+pub enum NeighborhoodKind {
+    PageAdjacent,
+    ResourceClosure,
+    AnnotationCluster,
+    FormDependencyIsland,
+    IncrementalRevisionCone,
+}
+
+pub struct ObjectNeighborhood {
+    pub neighborhood_id: NeighborhoodId,
+    pub kind: NeighborhoodKind,
+    pub root_objects: Vec<ObjRef>,
+    pub member_objects: Vec<ObjRef>,
+    pub source_digests: Vec<NodeDigest>,
+    pub estimated_working_set_bytes: u64,
+}
+
+pub struct NeighborhoodReuseReceipt {
+    pub neighborhood_id: NeighborhoodId,
+    pub reused: bool,
+    pub invalidating_digests: Vec<NodeDigest>,
+}
+```
+
+Rules:
+- huge-document open, edit closure, import planning, and spill policy SHOULD be
+  able to target `ObjectNeighborhood`s directly rather than only page-wide
+  closures
+- neighborhood reuse MUST remain auditable through `NeighborhoodReuseReceipt`
+- segmented artifact policy SHOULD be able to map segments onto reusable
+  neighborhoods so locality planning is shared across subsystems
+
 ### Engine / session / snapshot model
 
 - `MonkeybeeEngine` owns global policy: providers, caches, worker pools, oracle manifests, and security defaults.
@@ -2168,6 +2210,7 @@ pub struct PlanCandidate {
     pub policy_digest: [u8; 32],
     pub required_capabilities: Vec<FeatureCode>,
     pub predicted_preservation: Vec<PreservedProperty>,
+    pub cost_model: Option<CostModelReference>,
     pub cost: CostEnvelope,
 }
 
@@ -2193,6 +2236,59 @@ Rules:
   digest in receipts, ledgers, and failure capsules
 - if no candidate survives policy filtering, the operation fails explicitly
   before mutation or byte emission
+
+### Cost-model calibration doctrine
+
+Planner estimates are not self-justifying. Monkeybee therefore treats cost
+models as explicit artifacts that must be calibrated against actual executions
+rather than only shipped as forward-looking heuristics.
+
+```rust
+pub struct CostModelId(pub [u8; 32]);
+
+pub enum CostConfidenceClass {
+    High,
+    Medium,
+    Low,
+    Uncalibrated,
+}
+
+pub struct CostModelReference {
+    pub model_id: CostModelId,
+    pub version: String,
+    pub confidence: CostConfidenceClass,
+}
+
+pub struct PredictionErrorWitness {
+    pub plan_kind: PlanKind,
+    pub chosen_label: String,
+    pub estimated_latency_ms: u64,
+    pub actual_latency_ms: u64,
+    pub estimated_peak_memory: u64,
+    pub actual_peak_memory: u64,
+    pub estimated_bytes_read: u64,
+    pub actual_bytes_read: u64,
+    pub fixture_digest: [u8; 32],
+}
+
+pub struct CalibrationReceipt {
+    pub model_id: CostModelId,
+    pub training_fixture_set_digest: [u8; 32],
+    pub error_witnesses: Vec<PredictionErrorWitness>,
+    pub promoted: bool,
+}
+```
+
+Rules:
+- every non-trivial `PlanCandidate` SHOULD cite a `CostModelReference` when its
+  cost envelope was produced by anything more structured than static policy
+  constants
+- canonical benchmark and proof runs SHOULD emit `PredictionErrorWitness`
+  artifacts for the selected plan so planner drift becomes measurable
+- planner upgrades SHOULD require a `CalibrationReceipt`, not only green tests
+  or anecdotal wins
+- low-confidence or uncalibrated models MUST surface that state in planning
+  artifacts rather than pretending all estimates are equally trustworthy
 
 ### Render determinism class contract
 
@@ -2939,6 +3035,61 @@ Additional rules:
 - write receipts for range-backed sessions MAY reference the continuity receipt
   when transport trust materially influenced correctness, preserve, or signature
   claims
+
+### Viewport-aware byte-need graph doctrine
+
+Progressive remote open SHOULD plan first paint and refinement against a
+viewport-aware byte-need graph that links visible semantic/render structure to
+concrete byte ranges.
+
+```rust
+pub struct NeedNodeId(pub [u8; 32]);
+
+pub enum NeedNodeKind {
+    FirstPaintChunk,
+    FontSubset,
+    ImageStream,
+    FormXObject,
+    TransparencyGroup,
+    ThreeDSceneRegion,
+}
+
+pub struct ByteNeedNode {
+    pub need_id: NeedNodeId,
+    pub kind: NeedNodeKind,
+    pub page_index: u32,
+    pub render_chunk_id: Option<RenderChunkId>,
+    pub required_ranges: Vec<(u64, u64)>,
+    pub visual_priority: u32,
+    pub completeness_gain_score: u32,
+}
+
+pub struct ByteNeedGraph {
+    pub nodes: Vec<ByteNeedNode>,
+    pub fetch_epoch: FetchEpoch,
+    pub viewport_digest: [u8; 32],
+}
+
+pub struct FetchPlanReceipt {
+    pub byte_need_graph_digest: [u8; 32],
+    pub scheduled_ranges: Vec<(u64, u64)>,
+    pub deferred_ranges: Vec<(u64, u64)>,
+    pub reason: String,
+    pub policy_digest: [u8; 32],
+}
+```
+
+Rules:
+- progressive first-paint planning SHOULD operate on `ByteNeedGraph`, not only
+  ad hoc resource-level placeholder demand
+- `AccessPlan`, `RenderChunkGraph`, and `ByteNeedGraph` SHOULD be linkable by
+  digest so transport planning can explain exactly which visible chunks drove a
+  fetch
+- remote benchmark classes SHOULD emit `FetchPlanReceipt`s for first-paint and
+  refinement runs
+- when transport continuity breaks, only the dependent `ByteNeedGraph` nodes
+  for the affected fetch epoch may be poisoned; unrelated viewport demand stays
+  reusable
 
 ### Sparse-convergence and whole-source verification doctrine
 
@@ -4622,26 +4773,56 @@ pub struct PaintedGlyphWitness {
     pub provenance: ProvenanceAtom,
 }
 
+pub enum TextOcclusionState {
+    Visible,
+    PartiallyOccluded,
+    FullyOccluded,
+    ClippedOnly,
+}
+
 pub struct TextPaintLink {
     pub span_id: SpanId,
     pub glyph_instances: Vec<GlyphInstanceId>,
+    pub render_chunk_ids: Vec<RenderChunkId>,
+    pub coverage_cell_ids: Vec<u64>,
+    pub glyph_range: Option<(u32, u32)>,
+    pub occlusion_state: TextOcclusionState,
     pub continuity_class: TextTruthClass,
+    pub provenance: Option<ProvenanceAtom>,
 }
 
 pub struct TextPaintReceipt {
     pub page_index: u32,
     pub links: Vec<TextPaintLink>,
+    pub link_digest: [u8; 32],
+    pub atlas_digest: Option<[u8; 32]>,
+    pub trace_digest: [u8; 32],
     pub orphan_paint_glyphs: Vec<GlyphInstanceId>,
     pub orphan_extract_spans: Vec<SpanId>,
+}
+
+pub struct SelectionStabilityWitness {
+    pub anchor_id: SemanticAnchorId,
+    pub pre_snapshot: SnapshotId,
+    pub post_snapshot: SnapshotId,
+    pub retained_links: u64,
+    pub lost_links: u64,
+    pub reason: String,
 }
 ```
 
 Rules:
 - selection, search hit-testing, highlight, redaction, and diff explainability
   SHOULD be able to request a `TextPaintReceipt`
+- `TextPaintLink` SHOULD be rich enough to answer span → glyph → chunk → cell
+  questions without reconstructing private bridges in higher layers
 - proof fixtures for extraction, highlight, and redaction SHOULD compare
   text-to-paint linkage when the underlying fixture contains both painted and
   extractable text
+- redaction audit MUST be able to query text-paint linkage before claiming text
+  erasure on mixed painted/extractable fixtures
+- semantic-anchor and selection-stability reporting SHOULD incorporate
+  retained/lost text-paint linkage rather than only anchor-id continuity
 - text/paint disagreements MUST be surfaced explicitly rather than silently
   normalized away
 
@@ -4761,12 +4942,65 @@ DiffReport {
   structural_delta,
   text_delta,
   render_delta,
+  semantic_delta,
+  anchor_fragility,
   signature_delta,
   capability_delta,
   write_impact_delta,
   diagnostics,
 }
 ```
+
+### Semantic-delta axis doctrine
+
+Diff and replay surfaces SHOULD classify change along typed semantic axes rather
+than only object, byte, or pixel surfaces.
+
+```rust
+pub enum SemanticDeltaAxis {
+    StructureTree,
+    ExtractedText,
+    PaintedAppearance,
+    AnnotationGeometry,
+    SignatureCoverage,
+    FormValueModel,
+    ActiveContentInventory,
+    AnchorStability,
+    ImportAliasMap,
+    PreservationClaims,
+}
+
+pub enum MeaningChangeClass {
+    None,
+    SurfaceOnly,
+    SemanticEquivalent,
+    MaterialSemanticChange,
+}
+
+pub struct SemanticDeltaWitness {
+    pub axis: SemanticDeltaAxis,
+    pub change_class: MeaningChangeClass,
+    pub before_digest: [u8; 32],
+    pub after_digest: [u8; 32],
+    pub supporting_artifacts: Vec<[u8; 32]>,
+}
+
+pub struct AnchorFragilityReceipt {
+    pub snapshot_before: SnapshotId,
+    pub snapshot_after: SnapshotId,
+    pub retained_aliases: u64,
+    pub broken_aliases: u64,
+    pub delta_axes: Vec<SemanticDeltaAxis>,
+}
+```
+
+Rules:
+- `DiffReport` SHOULD be able to emit `SemanticDeltaWitness` entries for every
+  materially inspected axis
+- save-impact and replay explanations SHOULD distinguish preservation loss by
+  semantic axis rather than collapsing all drift into one prose summary
+- anchor-fragility reporting SHOULD be a typed receipt that can be joined to
+  diff, replay, and edit-safety explanations
 
 #### `monkeybee-validate`
 
@@ -6807,6 +7041,57 @@ Rules:
 - reclamation of persisted artifacts is reachability-based from durable
   manifests/receipts plus retention policy, not from best-effort age heuristics
 
+### Publication-transaction and artifact-closure doctrine
+
+Manifest-last durability applies to the whole publication closure, not only to a
+single primary blob. Save/proof publication SHOULD therefore build an explicit
+artifact transaction before final publish.
+
+```rust
+pub struct PublicationTxnId(pub [u8; 32]);
+
+pub enum PublicationArtifactKind {
+    SavedPdf,
+    WriteReceipt,
+    InvariantCertificate,
+    FrontierWitness,
+    BenchmarkWitness,
+    FailureCapsule,
+    ReproducerBundle,
+    Manifest,
+}
+
+pub struct PublicationArtifactRef {
+    pub kind: PublicationArtifactKind,
+    pub digest: [u8; 32],
+    pub durable: bool,
+}
+
+pub struct ArtifactClosureManifest {
+    pub txn_id: PublicationTxnId,
+    pub root_artifacts: Vec<PublicationArtifactRef>,
+    pub child_artifacts: Vec<PublicationArtifactRef>,
+    pub policy_digest: [u8; 32],
+}
+
+pub struct PublicationReceipt {
+    pub txn_id: PublicationTxnId,
+    pub committed: bool,
+    pub quarantined_children: Vec<PublicationArtifactRef>,
+    pub manifest_digest: [u8; 32],
+}
+```
+
+Rules:
+- save/proof publication SHOULD build an `ArtifactClosureManifest` before final
+  publish
+- manifest-last durability applies to the closure, not only the primary PDF or
+  top-level report blob
+- crash recovery SHOULD quarantine closure fragments that never reached a
+  committed `PublicationReceipt`
+- evidence bundles are a specialized case of artifact-closure publication, not
+  a separate durability doctrine
+
 ### Engine environment lock and evidence-bundle doctrine
 
 Pinned manifests are necessary but not sufficient. Benchmark claims, proof
@@ -7077,18 +7362,43 @@ pub enum ReservationOverflowPolicy {
     EscalateToCounterfactualPlan,
 }
 
+pub struct ReservationWindowId(pub [u8; 32]);
+
+pub struct ReservationWindow {
+    pub window_id: ReservationWindowId,
+    pub reserved_for: String,
+    pub byte_count: u64,
+    pub may_shift: bool,
+}
+
+pub struct AppendBudgetModel {
+    pub current_incremental_depth: u32,
+    pub free_append_headroom_bytes: u64,
+    pub reserved_windows: Vec<ReservationWindow>,
+    pub expected_dss_growth_bytes: u64,
+    pub expected_timestamp_growth_bytes: u64,
+}
+
 pub struct SignatureReservationPlan {
     pub field_ref: ObjRef,
+    pub requested_future_steps: Vec<String>,
+    pub append_budget_model: AppendBudgetModel,
     pub reserved_contents_bytes: u64,
     pub reserved_dss_bytes: u64,
     pub reserved_vri_bytes: u64,
     pub overflow_policy: ReservationOverflowPolicy,
+    pub feasible: bool,
+    pub blocking_reasons: Vec<String>,
 }
 
 pub struct AppendBudgetReceipt {
+    pub model_digest: [u8; 32],
     pub prior_revision_count: u32,
     pub predicted_append_bytes: u64,
     pub reserved_bytes: u64,
+    pub consumed_bytes: u64,
+    pub remaining_headroom_bytes: u64,
+    pub violated_reservations: Vec<ReservationWindowId>,
     pub overflow_risk: String,
 }
 ```
@@ -7103,6 +7413,8 @@ Rules:
 - reservation planning MUST account for DSS/VRI growth, timestamp growth, and
   incremental-history overhead rather than treating `/Contents` length as the
   whole signing problem
+- multi-signature and LTV-heavy fixtures SHOULD test reservation-window
+  exhaustion, controlled escalation, and remaining append headroom explicitly
 
 ### Tagged PDF and accessibility-audit expansion contract
 
@@ -7284,10 +7596,22 @@ pub struct CoverageLattice {
     pub cells: Vec<CoverageObservation>,
 }
 
+pub struct FixtureValueScore {
+    pub fixture_digest: [u8; 32],
+    pub novelty_score: f64,
+    pub breadth_gain_score: f64,
+    pub reducer_cost_score: f64,
+    pub blocking_bug_relevance: f64,
+}
+
 pub struct AcquisitionRecommendation {
     pub target_cells: Vec<CoverageCell>,
+    pub target_feature_codes: Vec<FeatureCode>,
+    pub desired_producer_phenotypes: Vec<ProducerPhenotypeId>,
+    pub desired_complexity_hazards: Vec<ComplexityHazardKind>,
     pub reason: String,
     pub expected_signal_gain: f32,
+    pub expected_value_gain: f32,
 }
 
 pub struct SynthesisWitness {
@@ -7296,6 +7620,13 @@ pub struct SynthesisWitness {
     pub inserted_features: Vec<FeatureCode>,
     pub preserved_features: Vec<FeatureCode>,
     pub verdict: String,
+}
+
+pub struct ReducerTerminationReceipt {
+    pub original_fixture_digest: [u8; 32],
+    pub reduced_fixture_digest: [u8; 32],
+    pub value_retained_score: f64,
+    pub reason: String,
 }
 ```
 
@@ -7307,6 +7638,10 @@ Rules:
 - proof planning SHOULD be able to emit `AcquisitionRecommendation`s for
   under-covered cells rather than discovering blind spots only after a release
   claim fails review
+- corpus triage SHOULD rank fixtures by `FixtureValueScore`, not only by raw
+  count or recency
+- reducers SHOULD emit `ReducerTerminationReceipt` so minimization does not
+  silently erase the proof value that justified keeping the fixture
 - synthesized fixtures MUST carry witness lineage into reducers, disagreement
   artifacts, and failure capsules
 
@@ -7784,8 +8119,10 @@ pub struct BenchmarkWitness {
     pub simd_class: String,
     pub numa_policy: String,
     pub storage_class: String,
+    pub hardware_manifest_digest: Option<[u8; 32]>,
     pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
     pub topology_receipts: Vec<WorkReceipt>,
+    pub kernel_dispatch_receipts: Vec<KernelDispatchReceipt>,
     pub peak_memory_witnesses: Vec<PeakMemoryWitness>,
     pub metrics: Vec<MetricObservation>,
     pub threshold_verdicts: Vec<ThresholdVerdict>,
@@ -7812,8 +8149,8 @@ Rules:
   the enclosing `ReproducibilityManifest`
 - benchmark witnesses record support class, render determinism class, cache
   temperature, fixture set, hardware/runtime topology, work-class receipts,
-  peak-memory witnesses, and threshold verdicts; ad hoc timing logs are not
-  release evidence
+  dispatch evidence, peak-memory witnesses, and threshold verdicts; ad hoc
+  timing logs are not release evidence
 - README, release notes, dashboards, and CLI capability/performance summaries
   may cite only witness-backed metrics from canonical runs or explicitly labeled
   non-canonical runs
@@ -7871,38 +8208,109 @@ spec's auditable baseline-first doctrine.
 
 ### Algorithm-variant manifest doctrine
 
-Hot-path tournaments need first-class variant manifests so "fast path" never
-quietly becomes "different semantics under a new default."
+Hot-path tournaments need first-class family/variant governance so "fast path"
+never quietly becomes "different semantics under a new default."
 
 ```rust
+pub struct AlgorithmFamilyId(pub [u8; 32]);
 pub struct AlgorithmVariantId(pub [u8; 32]);
 
+pub enum AlgorithmFamilyKind {
+    StreamDecode,
+    FontRasterization,
+    TransparencyCompositing,
+    Type4FunctionEval,
+    ICCTransform,
+    OverprintSimulation,
+    PathRasterization,
+    ThreeDSectioning,
+}
+
+pub enum VariantEligibilityClass {
+    BaselineAuditable,
+    ExperimentalNonGating,
+    ProofCanonicalCandidate,
+    HostAdaptiveOnly,
+}
+
 pub struct AlgorithmVariantManifest {
+    pub family: AlgorithmFamilyId,
+    pub family_kind: AlgorithmFamilyKind,
     pub variant_id: AlgorithmVariantId,
-    pub subsystem: String,
-    pub baseline_variant: String,
-    pub active_variant: String,
+    pub algorithm_id: String,
+    pub baseline_variant: Option<AlgorithmVariantId>,
+    pub eligibility: VariantEligibilityClass,
+    pub required_support_class: SupportClass,
+    pub required_feature_modules: Vec<String>,
+    pub determinism_class: RenderDeterminismClass,
     pub proof_metric: String,
     pub cost_metric: String,
 }
 
 pub struct VariantSelectionReceipt {
-    pub subsystem: String,
+    pub family: AlgorithmFamilyId,
     pub chosen_variant: AlgorithmVariantId,
     pub rejected_variants: Vec<AlgorithmVariantId>,
+    pub policy_digest: [u8; 32],
+    pub hardware_manifest_digest: Option<[u8; 32]>,
     pub reason: String,
 }
 ```
 
 Rules:
-- SIMD, GPU, spectral color, robust-predicate, rasterizer, and compression
-  tournaments SHOULD emit `AlgorithmVariantManifest`s in canonical benchmarks
-  and proof runs
-- no experimental winner may become default without receiptable evidence
-  against its declared baseline competitor
+- every hot-swappable kernel family SHOULD emit an
+  `AlgorithmVariantManifest` in canonical benchmarks and proof runs
+- no variant may become default without benchmark witnesses plus typed
+  equivalence evidence against a baseline-auditable variant in the same family
+- proof-canonical runs SHOULD cite the chosen algorithm variants explicitly
+  rather than treating them as invisible implementation detail
+- promotion and demotion are durable ledger events, not release-note prose
 - `VariantSelectionReceipt` is complementary to `PlanSelectionRecord`: the
   former explains which hot-path implementation variant won inside a legal plan,
   while the latter explains which plan was chosen overall
+
+### Hardware capability and kernel-dispatch doctrine
+
+Runtime kernel choice is itself a proof and diagnostic surface. Host capability
+discovery and algorithm dispatch MUST therefore be typed and receiptable.
+
+```rust
+pub struct HardwareCapabilityManifest {
+    pub cpu_topology: String,
+    pub simd_class: String,
+    pub numa_policy: String,
+    pub gpu_adapter_fingerprint: Option<[u8; 32]>,
+    pub webgpu_limits_digest: Option<[u8; 32]>,
+    pub native_module_manifest_id: String,
+}
+
+pub enum DispatchConstraint {
+    DeterminismPinned,
+    MemoryBudget,
+    IsolationPolicy,
+    AdapterUnsupported,
+    WasmRestricted,
+    ProofCanonicalDowngrade,
+}
+
+pub struct KernelDispatchReceipt {
+    pub family: AlgorithmFamilyId,
+    pub chosen_variant: AlgorithmVariantId,
+    pub hardware_manifest_digest: [u8; 32],
+    pub constraints: Vec<DispatchConstraint>,
+    pub downgraded_from: Option<AlgorithmVariantId>,
+}
+```
+
+Rules:
+- canonical benchmarks, diagnostics, and proof artifacts SHOULD be able to cite
+  a `HardwareCapabilityManifest`
+- hot-path dispatch decisions SHOULD emit `KernelDispatchReceipt`s whenever host
+  capability, determinism, isolation, or memory policy materially shaped the
+  choice
+- proof-canonical mode MAY ignore faster host-specific variants, but the
+  downgrade MUST remain explicit and receiptable
+- GPU/CPU/WASM fallbacks are dispatch artifacts, not silent internal branches
 
 ### Decoder equivalence laboratory
 
@@ -7919,13 +8327,18 @@ pub enum EquivalenceSurface {
 }
 
 pub struct DecoderEquivalenceRecord {
+    pub family: Option<AlgorithmFamilyId>,
     pub module_id: String,
     pub baseline_algorithm_id: String,
     pub candidate_algorithm_id: String,
+    pub baseline_variant: Option<AlgorithmVariantId>,
+    pub candidate_variant: Option<AlgorithmVariantId>,
     pub surface: EquivalenceSurface,
     pub verdict: String,
     pub metric_summary: Vec<(String, f64)>,
     pub fixture_digest: [u8; 32],
+    pub fixture_set_digest: Option<[u8; 32]>,
+    pub disagreement_artifacts: Vec<ArtifactRef>,
 }
 ```
 

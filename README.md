@@ -44,10 +44,10 @@ At minimum, the substrate must unify:
 - parsed COS syntax with provenance, parser token tapes, and salvage indexes
 - semantic object graphs and ownership classes
 - content interpretation and graphics-state transitions
-- derived surfaces such as page plans, render-chunk graphs, coverage-cell indexes and coverage atlases, extraction outputs, text-paint correspondence receipts, semantic anchors, geometry witnesses, scene receipts and scene normal forms, font authority/subset-closure receipts, truth/provenance surfaces, and diffs
+- derived surfaces such as page plans, render-chunk graphs, viewport-aware byte-need graphs, coverage-cell indexes and coverage atlases, extraction outputs, text-paint correspondence receipts, semantic anchors, geometry witnesses, scene receipts and scene normal forms, font authority/subset-closure receipts, truth/provenance surfaces, semantic-delta witnesses, and diffs
 - cross-document import provenance, alias maps, import-closure certificates, and semantic-normal-form evidence
 - edit deltas, invalidation witnesses, write plans, feasibility witnesses, solver-backed frontier witnesses, emission journals, materialization receipts, and temporal lineage
-- proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, and invariant certificates
+- proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, publication-closure manifests, and invariant certificates
 
 This matters because several promises that are easy to state and hard to make real — cheap
 snapshots, structural sharing, exact invalidation, explainable diffs, temporal replay, and
@@ -64,7 +64,8 @@ Monkeybee now has three explicit lanes:
 - **Baseline v1 (release-gating):** the smallest coherent engine that proves the closed loop on ugly
   PDFs with simple, auditable implementations and a locked substrate.
 - **Experimental backends (non-gating):** advanced render, color, encode, or decode paths that
-  remain optional until they beat the baseline under proof and typed equivalence evidence.
+  remain optional until typed algorithm-family governance, equivalence evidence, and benchmark
+  witnesses promote them over the baseline.
 - **Post-v1 intelligence/collaboration surfaces:** richer semantic graph queries,
   anchor-driven automation, and stronger provenance layers that are architected now without being
   allowed to destabilize the baseline.
@@ -85,15 +86,23 @@ Baseline v1 must prove all of the following:
 - **Annotation and form round trips** on ugly files, including appearance regeneration and preserve-mode save planning.
 - **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated, compute save feasibility from an explicit constraint graph, cite minimal blocking sets when preserve-mode goals are unsatisfiable, and surface the nearest legal alternative plans when that frontier is cheap to compute.
 - **Policy-complete operation planning**: open/import/save decisions compose security, active-content, provider, and determinism policy up front and reject invalid combinations before execution.
+- **Governed optimization and dispatch**: hot-path algorithm families, host-capability manifests,
+  and proof-canonical downgrades are explicit receipts rather than silent runtime branches.
 - **Receiptable derived artifacts, write receipts, and invariant certificates** for save, diff, redaction, render, extraction, and cache-reuse workflows.
 - **Durable persisted artifacts**: file-backed saves and persisted proof artifacts publish atomically and never leave ledgers, receipts, or manifests pointing at partial blobs.
+- **Remote/progressive locality planning**: first-paint fetches are explainable through
+  viewport-aware byte-need planning tied to transport-continuity evidence instead of opaque
+  range demand.
 - **Ambiguity truthfulness**: materially different repair candidates stay visible as a bounded hypothesis set rather than being silently collapsed.
 - **Extraction usefulness**: text with positions, metadata, structure inspection, asset inspection, diagnostics, explicit truth surfaces, and the early semantic layers needed for anchor stability.
+- **Signature-safe incremental workflows**: signing and timestamping reserve append headroom
+  explicitly, account for DSS/VRI growth, and fail before commit when future increments would be
+  cornered.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, surfaced in a generated capability surface matrix, and never silently swallowed.
 - **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, environment locks, typed oracle-consensus and oracle-disagreement records with region-level explainability, blind-spot ledgers, coverage lattices, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers, evidence bundles, and failure capsules.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
-- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, work-class receipts, segmented working-set forecasts, and peak-memory witnesses, not ad hoc timing logs.
+- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, hardware-capability manifests, kernel-dispatch receipts, calibrated prediction-error witnesses, segmented working-set forecasts, and peak-memory witnesses, not ad hoc timing logs.
 - **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, anchor fragility, invalidation causes, and transport continuity in a way users can act on.
 
 Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
@@ -417,7 +426,8 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
   disputed expectations were chosen, where fixture coverage is still thin, and which feature ×
   producer × operation intersections remain under-covered.
 - **Coverage-lattice acquisition recommendations** so corpus growth is driven by typed
-  under-covered cells rather than only by ad hoc fixture hunting.
+  under-covered cells, fixture value scores, and reducer-retained proof value rather than only by
+  ad hoc fixture hunting.
 - A **metamorphic proof lane with deterministic reducers and fixture genealogy** so
   representation-changing transforms, crash minimization, and repair drift stay auditable.
 - **Write receipts and invariant certificates** for save-impact, preserve-mode, and redaction workflows.
@@ -425,13 +435,14 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
   are forced to grow from stable primitives instead of hand-waving.
 - **Performance baselines** on representative hard workloads.
 - **Schema-versioned benchmark witnesses** that bind support class, render determinism class,
-  runtime-topology evidence, work-class receipts, peak-memory witnesses, and threshold verdicts to reproducibility manifests.
+  runtime-topology evidence, hardware/dispatch receipts, work-class receipts, calibration error,
+  peak-memory witnesses, and threshold verdicts to reproducibility manifests.
 - **Environment locks and evidence bundles** so benchmark claims, regressions, and bug reports can
   be published as content-addressed reproducer bundles without relying on ambient host state.
 - A **generated capability surface matrix** derived from the scope registry plus proof outputs so
   README, website, CLI, and CI capability claims cannot drift apart.
 - **Durable artifact publication rules** so saved outputs, ledgers, capsules, and witnesses are
-  published atomically and never reference partial child artifacts.
+  published atomically as explicit artifact closures and never reference partial child artifacts.
 
 No feature ships without evidence. No release gate passes on rhetoric. No architectural promise is
 accepted until a proof surface exists for it.

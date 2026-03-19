@@ -34,6 +34,14 @@ scene receipts; proof grows a metamorphic lane with fixture genealogy; and
 public capability claims flow through a generated capability surface matrix
 instead of prose-only tables.
 
+This APR round also makes the remaining internal decision machinery more
+receiptable: algorithm families and runtime dispatch become governed proof
+surfaces, planner cost models gain calibration artifacts, progressive remote
+open gains viewport-aware byte-need planning, text-paint linkage becomes an
+explicit bridge object, signature reservation grows into append-budget
+forecasting, and durable publication is modeled as artifact-closure
+transactions rather than blob-at-a-time convention.
+
 The most important architectural refinement since the prior revision is simple to state and
 consequential in practice: Monkeybee is no longer described merely as a layered
 parser/document/render/write stack. It now has a baseline computational kernel —
@@ -1356,9 +1364,34 @@ pub struct CostEnvelope {
     pub expected_degradations: Vec<FeatureCode>,
 }
 
+pub struct CostModelId(pub [u8; 32]);
+
+pub enum CostConfidenceClass {
+    High,
+    Medium,
+    Low,
+    Uncalibrated,
+}
+
+pub struct CostModelReference {
+    pub model_id: CostModelId,
+    pub version: String,
+    pub confidence: CostConfidenceClass,
+}
+
 pub struct RejectedPlan {
     pub label: String,
     pub reason: String,
+}
+
+pub struct PlanCandidate {
+    pub kind: PlanKind,
+    pub label: String,
+    pub policy_digest: [u8; 32],
+    pub required_capabilities: Vec<FeatureCode>,
+    pub predicted_preservation: Vec<PreservedProperty>,
+    pub cost_model: Option<CostModelReference>,
+    pub cost: CostEnvelope,
 }
 
 pub struct PlanSelectionRecord {
@@ -1388,12 +1421,36 @@ pub struct FeasibilityFrontierReceipt {
     pub requested_policy_digest: [u8; 32],
     pub frontier: PropertyLossFrontier,
 }
+
+pub struct PredictionErrorWitness {
+    pub plan_kind: PlanKind,
+    pub chosen_label: String,
+    pub estimated_latency_ms: u64,
+    pub actual_latency_ms: u64,
+    pub estimated_peak_memory: u64,
+    pub actual_peak_memory: u64,
+    pub estimated_bytes_read: u64,
+    pub actual_bytes_read: u64,
+    pub fixture_digest: [u8; 32],
+}
+
+pub struct CalibrationReceipt {
+    pub model_id: CostModelId,
+    pub training_fixture_set_digest: [u8; 32],
+    pub error_witnesses: Vec<PredictionErrorWitness>,
+    pub promoted: bool,
+}
 ```
 
 Implementation notes:
 - resolve policy once per top-level operation, then pass the digest through open/save/import/query evidence
 - child tasks may tighten policy but never silently relax it
 - save/import/backend strategy selection emits `PlanSelectionRecord` so proof and CLI surfaces can explain why a legal candidate won
+- planner-facing cost estimates should cite `CostModelReference` whenever they
+  come from learned or profiled models rather than fixed policy constants
+- planner upgrades should land with `CalibrationReceipt` evidence so prediction
+  quality drift is observable on real corpora rather than inferred from green
+  tests alone
 
 ```rust
 pub enum RenderDeterminismClass {
@@ -1525,6 +1582,8 @@ Implementation notes:
 - spill/persist decisions are policy-qualified so remote, encrypted, or restricted content cannot silently outlive its allowed boundary
 - persisted roots and artifact-store blobs publish via a manifest-last sequence:
   write blob -> verify digest/size -> fsync blob -> atomically publish root/artifact manifest
+- grouped save/proof outputs should publish as one typed artifact closure; a
+  manifest that references non-durable child artifacts is a correctness bug
 - simulated-crash tests must prove that unpublished blobs never appear as durable reusable state
 
 ### Incremental query engine (`monkeybee-substrate::query`)
@@ -1741,16 +1800,41 @@ pub enum ReservationOverflowPolicy {
 
 pub struct SignatureReservationPlan {
     pub field_ref: ObjRef,
+    pub requested_future_steps: Vec<String>,
+    pub append_budget_model: AppendBudgetModel,
     pub reserved_contents_bytes: u64,
     pub reserved_dss_bytes: u64,
     pub reserved_vri_bytes: u64,
     pub overflow_policy: ReservationOverflowPolicy,
+    pub feasible: bool,
+    pub blocking_reasons: Vec<String>,
+}
+
+pub struct ReservationWindowId(pub [u8; 32]);
+
+pub struct ReservationWindow {
+    pub window_id: ReservationWindowId,
+    pub reserved_for: String,
+    pub byte_count: u64,
+    pub may_shift: bool,
+}
+
+pub struct AppendBudgetModel {
+    pub current_incremental_depth: u32,
+    pub free_append_headroom_bytes: u64,
+    pub reserved_windows: Vec<ReservationWindow>,
+    pub expected_dss_growth_bytes: u64,
+    pub expected_timestamp_growth_bytes: u64,
 }
 
 pub struct AppendBudgetReceipt {
+    pub model_digest: [u8; 32],
     pub prior_revision_count: u32,
     pub predicted_append_bytes: u64,
     pub reserved_bytes: u64,
+    pub consumed_bytes: u64,
+    pub remaining_headroom_bytes: u64,
+    pub violated_reservations: Vec<ReservationWindowId>,
     pub overflow_risk: String,
 }
 
@@ -1810,6 +1894,39 @@ pub struct EmissionJournal {
     pub decisions: Vec<SerializationDecision>,
     pub byte_map: SerializedByteAddressMap,
 }
+
+pub struct PublicationTxnId(pub [u8; 32]);
+
+pub enum PublicationArtifactKind {
+    SavedPdf,
+    WriteReceipt,
+    InvariantCertificate,
+    FrontierWitness,
+    BenchmarkWitness,
+    FailureCapsule,
+    ReproducerBundle,
+    Manifest,
+}
+
+pub struct PublicationArtifactRef {
+    pub kind: PublicationArtifactKind,
+    pub digest: [u8; 32],
+    pub durable: bool,
+}
+
+pub struct ArtifactClosureManifest {
+    pub txn_id: PublicationTxnId,
+    pub root_artifacts: Vec<PublicationArtifactRef>,
+    pub child_artifacts: Vec<PublicationArtifactRef>,
+    pub policy_digest: [u8; 32],
+}
+
+pub struct PublicationReceipt {
+    pub txn_id: PublicationTxnId,
+    pub committed: bool,
+    pub quarantined_children: Vec<PublicationArtifactRef>,
+    pub manifest_digest: [u8; 32],
+}
 ```
 
 Implementation notes:
@@ -1819,6 +1936,9 @@ Implementation notes:
 - signing flows should compute `SignatureReservationPlan` and
   `AppendBudgetReceipt` before any signing bytes are emitted; placeholder
   overflow is a planning artifact, not a late serialization surprise
+- signature reservation planning should account for future DSS/VRI/timestamp
+  growth and remaining append headroom, not only the immediate `/Contents`
+  placeholder
 - write receipts should carry transport continuity evidence whenever remote
   range trust materially influenced preserve, signature, or correctness claims
 - when remote trust is still sparse, `transport_convergence` makes that
@@ -1827,6 +1947,9 @@ Implementation notes:
 - provenance summaries on receipts are aggregated facts, not narrative prose;
   every caller-visible save-impact claim needs a typed provenance path back to
   source, repair, or synthesized evidence
+- save/proof publication should stage an `ArtifactClosureManifest` and publish
+  the closure manifest last so crash recovery can quarantine incomplete child
+  artifact sets deterministically
 
 ### Temporal replay (`monkeybee-substrate::temporal`)
 
@@ -1978,22 +2101,74 @@ pub struct ReproducerBundle {
     pub disagreement_artifact: Option<ArtifactRef>,
 }
 
+pub struct AlgorithmFamilyId(pub [u8; 32]);
 pub struct AlgorithmVariantId(pub [u8; 32]);
 
+pub enum AlgorithmFamilyKind {
+    StreamDecode,
+    FontRasterization,
+    TransparencyCompositing,
+    Type4FunctionEval,
+    ICCTransform,
+    OverprintSimulation,
+    PathRasterization,
+    ThreeDSectioning,
+}
+
+pub enum VariantEligibilityClass {
+    BaselineAuditable,
+    ExperimentalNonGating,
+    ProofCanonicalCandidate,
+    HostAdaptiveOnly,
+}
+
 pub struct AlgorithmVariantManifest {
+    pub family: AlgorithmFamilyId,
+    pub family_kind: AlgorithmFamilyKind,
     pub variant_id: AlgorithmVariantId,
-    pub subsystem: String,
-    pub baseline_variant: String,
-    pub active_variant: String,
+    pub algorithm_id: String,
+    pub baseline_variant: Option<AlgorithmVariantId>,
+    pub eligibility: VariantEligibilityClass,
+    pub required_support_class: SupportClass,
+    pub required_feature_modules: Vec<String>,
+    pub determinism_class: RenderDeterminismClass,
     pub proof_metric: String,
     pub cost_metric: String,
 }
 
 pub struct VariantSelectionReceipt {
-    pub subsystem: String,
+    pub family: AlgorithmFamilyId,
     pub chosen_variant: AlgorithmVariantId,
     pub rejected_variants: Vec<AlgorithmVariantId>,
+    pub policy_digest: [u8; 32],
+    pub hardware_manifest_digest: Option<[u8; 32]>,
     pub reason: String,
+}
+
+pub struct HardwareCapabilityManifest {
+    pub cpu_topology: String,
+    pub simd_class: String,
+    pub numa_policy: String,
+    pub gpu_adapter_fingerprint: Option<[u8; 32]>,
+    pub webgpu_limits_digest: Option<[u8; 32]>,
+    pub native_module_manifest_id: String,
+}
+
+pub enum DispatchConstraint {
+    DeterminismPinned,
+    MemoryBudget,
+    IsolationPolicy,
+    AdapterUnsupported,
+    WasmRestricted,
+    ProofCanonicalDowngrade,
+}
+
+pub struct KernelDispatchReceipt {
+    pub family: AlgorithmFamilyId,
+    pub chosen_variant: AlgorithmVariantId,
+    pub hardware_manifest_digest: [u8; 32],
+    pub constraints: Vec<DispatchConstraint>,
+    pub downgraded_from: Option<AlgorithmVariantId>,
 }
 
 pub enum OracleResolutionKind {
@@ -2123,10 +2298,22 @@ pub struct CoverageLattice {
     pub cells: Vec<CoverageObservation>,
 }
 
+pub struct FixtureValueScore {
+    pub fixture_digest: [u8; 32],
+    pub novelty_score: f64,
+    pub breadth_gain_score: f64,
+    pub reducer_cost_score: f64,
+    pub blocking_bug_relevance: f64,
+}
+
 pub struct AcquisitionRecommendation {
     pub target_cells: Vec<CoverageCell>,
+    pub target_feature_codes: Vec<FeatureCode>,
+    pub desired_producer_phenotypes: Vec<ProducerPhenotypeId>,
+    pub desired_complexity_hazards: Vec<ComplexityHazardKind>,
     pub reason: String,
     pub expected_signal_gain: f32,
+    pub expected_value_gain: f32,
 }
 
 pub struct SynthesisWitness {
@@ -2135,6 +2322,13 @@ pub struct SynthesisWitness {
     pub inserted_features: Vec<FeatureCode>,
     pub preserved_features: Vec<FeatureCode>,
     pub verdict: String,
+}
+
+pub struct ReducerTerminationReceipt {
+    pub original_fixture_digest: [u8; 32],
+    pub reduced_fixture_digest: [u8; 32],
+    pub value_retained_score: f64,
+    pub reason: String,
 }
 
 pub enum NumericKernelClass {
@@ -2168,12 +2362,14 @@ pub struct BenchmarkWitness {
     pub render_determinism_class: RenderDeterminismClass,
     pub fixture_set_digest: [u8; 32],
     pub warm_cache: bool,
+    pub hardware_manifest_digest: Option<[u8; 32]>,
     pub cpu_topology: String,
     pub allocator: String,
     pub simd_class: String,
     pub numa_policy: String,
     pub storage_class: String,
     pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub kernel_dispatch_receipts: Vec<KernelDispatchReceipt>,
     pub topology_receipts: Vec<WorkReceipt>,
     pub peak_memory_witnesses: Vec<PeakMemoryWitness>,
     pub metrics: Vec<MetricObservation>,
@@ -2236,15 +2432,24 @@ Implementation notes:
 - environment locks and evidence bundles are content-addressed proof artifacts rather than ad hoc CI attachments
 - oracle consensus and blind-spot artifacts are first-class proof outputs, not report garnish
 - region-level disagreement explainability receipts are first-class proof outputs, not screenshots plus prose
-- blind-spot suppression should be derivable from `CoverageLattice`, synthesized fixtures must retain lineage through `SynthesisWitness`, and proof planning should be able to emit `AcquisitionRecommendation`s for under-covered typed cells
+- blind-spot suppression should be derivable from `CoverageLattice`, synthesized fixtures must retain lineage through `SynthesisWitness`, proof planning should be able to emit `AcquisitionRecommendation`s for under-covered typed cells, and corpus triage should retain `FixtureValueScore` plus `ReducerTerminationReceipt` evidence when reducers shrink a failing case
 - tolerant-open and repair paths should emit `QuirkActivationReceipt` whenever producer-specific
   shims materially influence interpretation, so proof aggregation can cluster outcomes by
   phenotype instead of only by free-form producer string
 - oracle disagreements are typed artifacts, not free-form comments in CI logs
 - strategy promotion stays blocked while any manifest-qualified disagreement remains unresolved
+- algorithm-family promotion and demotion should be durable proof artifacts
+  backed by `AlgorithmVariantManifest`, `VariantSelectionReceipt`, dispatch
+  receipts, and equivalence evidence rather than release-note convention
 - canonical benchmark classes emit schema-versioned `BenchmarkWitness` artifacts tied to the same
   reproducibility manifest, including support class, render determinism class, numeric profile,
   topology/runtime fields, work receipts, peak-memory witnesses, and threshold verdicts
+- selected canonical plans should emit `PredictionErrorWitness` artifacts when
+  cost models were involved so planner calibration quality is visible in the
+  same proof run as the performance claim
+- benchmark and proof runs should be able to bind a `HardwareCapabilityManifest`
+  so host-adaptive dispatch remains explainable when it affects results or
+  performance claims
 - benchmark witnesses follow the same manifest-last durable publication rules as ledgers,
   receipts, and failure capsules
 - metamorphic proof runs emit deterministic `MetamorphicWitness` artifacts and
@@ -2946,6 +3151,31 @@ pub struct SpillReceipt {
     pub persisted: bool,
     pub policy_digest: [u8; 32],
 }
+
+pub struct NeighborhoodId(pub [u8; 32]);
+
+pub enum NeighborhoodKind {
+    PageAdjacent,
+    ResourceClosure,
+    AnnotationCluster,
+    FormDependencyIsland,
+    IncrementalRevisionCone,
+}
+
+pub struct ObjectNeighborhood {
+    pub neighborhood_id: NeighborhoodId,
+    pub kind: NeighborhoodKind,
+    pub root_objects: Vec<ObjRef>,
+    pub member_objects: Vec<ObjRef>,
+    pub source_digests: Vec<NodeDigest>,
+    pub estimated_working_set_bytes: u64,
+}
+
+pub struct NeighborhoodReuseReceipt {
+    pub neighborhood_id: NeighborhoodId,
+    pub reused: bool,
+    pub invalidating_digests: Vec<NodeDigest>,
+}
 ```
 
 Implementation notes:
@@ -2956,6 +3186,9 @@ Implementation notes:
   huge fixtures and should flow into benchmark witnesses
 - spill/persist decisions for segmented artifacts should emit `SpillReceipt`s
   so memory-hierarchy behavior remains auditable
+- reusable `ObjectNeighborhood`s should be available as a planning primitive
+  for edit closure, import closure, remote locality, and spill policy rather
+  than being implicit inside one segmentation implementation
 
 ### Content stream rewriter (`monkeybee-edit::rewriter`)
 
@@ -3233,6 +3466,41 @@ pub struct ResumptionReceipt {
     pub continuity_result: TransportContinuityReceipt,
     pub convergence_result: Option<SourceConvergenceReceipt>,
 }
+
+pub struct NeedNodeId(pub [u8; 32]);
+
+pub enum NeedNodeKind {
+    FirstPaintChunk,
+    FontSubset,
+    ImageStream,
+    FormXObject,
+    TransparencyGroup,
+    ThreeDSceneRegion,
+}
+
+pub struct ByteNeedNode {
+    pub need_id: NeedNodeId,
+    pub kind: NeedNodeKind,
+    pub page_index: u32,
+    pub render_chunk_id: Option<RenderChunkId>,
+    pub required_ranges: Vec<(u64, u64)>,
+    pub visual_priority: u32,
+    pub completeness_gain_score: u32,
+}
+
+pub struct ByteNeedGraph {
+    pub nodes: Vec<ByteNeedNode>,
+    pub fetch_epoch: FetchEpoch,
+    pub viewport_digest: [u8; 32],
+}
+
+pub struct FetchPlanReceipt {
+    pub byte_need_graph_digest: [u8; 32],
+    pub scheduled_ranges: Vec<(u64, u64)>,
+    pub deferred_ranges: Vec<(u64, u64)>,
+    pub reason: String,
+    pub policy_digest: [u8; 32],
+}
 ```
 
 Implementation notes:
@@ -3240,6 +3508,11 @@ Implementation notes:
   material with matching transport identity
 - weak validators, range digests, and Merkle manifests remain distinct trust
   surfaces and must not be collapsed in preserve/signature-sensitive reporting
+- viewport-critical first paint should be scheduled from `ByteNeedGraph`
+  evidence so remote fetch planning can explain which visible chunks, fonts, or
+  transparency groups justified each range request
+- transport continuity breaks should poison only the dependent byte-need nodes
+  from the affected fetch epoch, not every remote planning artifact wholesale
 
 ### Coverage-cell evidence index
 
@@ -3410,17 +3683,41 @@ pub struct PaintedGlyphWitness {
     pub provenance: ProvenanceAtom,
 }
 
+pub enum TextOcclusionState {
+    Visible,
+    PartiallyOccluded,
+    FullyOccluded,
+    ClippedOnly,
+}
+
 pub struct TextPaintLink {
     pub span_id: SpanId,
     pub glyph_instances: Vec<GlyphInstanceId>,
+    pub render_chunk_ids: Vec<RenderChunkId>,
+    pub coverage_cell_ids: Vec<u64>,
+    pub glyph_range: Option<(u32, u32)>,
+    pub occlusion_state: TextOcclusionState,
     pub continuity_class: TextTruthClass,
+    pub provenance: Option<ProvenanceAtom>,
 }
 
 pub struct TextPaintReceipt {
     pub page_index: u32,
     pub links: Vec<TextPaintLink>,
+    pub link_digest: [u8; 32],
+    pub atlas_digest: Option<[u8; 32]>,
+    pub trace_digest: [u8; 32],
     pub orphan_paint_glyphs: Vec<GlyphInstanceId>,
     pub orphan_extract_spans: Vec<SpanId>,
+}
+
+pub struct SelectionStabilityWitness {
+    pub anchor_id: SemanticAnchorId,
+    pub pre_snapshot: SnapshotId,
+    pub post_snapshot: SnapshotId,
+    pub retained_links: u64,
+    pub lost_links: u64,
+    pub reason: String,
 }
 
 pub enum AnchorFragilityCause {
@@ -3463,6 +3760,8 @@ Implementation notes:
 - text-paint correspondence is the bridge between extract truth and render
   truth; highlight, selection, redaction, and disagreement-localization flows
   should be able to request a `TextPaintReceipt`
+- the bridge should be rich enough to answer span -> glyph -> chunk -> coverage
+  cell questions without higher layers rebuilding private joins
 - anchor-stability witnesses must distinguish exact continuity, alias-map
   continuity, heuristic re-identification, and loss so agent-safe edit flows
   can tell stability from best-effort recovery
@@ -3471,6 +3770,9 @@ Implementation notes:
 - agent-facing edit proposals should be able to cap accepted anchor volatility,
   and safe-rewrite/incremental-append proof fixtures should compare
   `AnchorRepairReceipt`s rather than only continuity classes
+- selection/highlight stability should also be able to emit
+  `SelectionStabilityWitness` when retained text-paint linkage matters more
+  than anchor-id continuity alone
 
 ### WritePlan classification (`monkeybee-write::plan`)
 
@@ -3974,7 +4276,7 @@ PdfSnapshot + extract profile
 ### monkeybee-diff
 - Unit tests: structural, text, render, and save-impact diffs on known fixture pairs.
 - Temporal diff tests: diffing historical frames yields the same object/page deltas as manual replay.
-- Receipt tests: diff surfaces can attach source snapshot digests and optional invariant certificates.
+- Receipt tests: diff surfaces can attach source snapshot digests, semantic-delta witnesses, anchor-fragility receipts, and optional invariant certificates.
 
 ### monkeybee-signature
 - Unit tests: signature dictionary parsing, byte-range maps, DocMDP / FieldMDP policy evaluation.
@@ -3996,14 +4298,22 @@ PdfSnapshot + extract profile
   render lanes under canonical topology policies.
 - Coverage-lattice tests: typed coverage observations and
   `AcquisitionRecommendation`s are derived deterministically from the fixture set.
+- Corpus-value tests: `FixtureValueScore` ranking and `ReducerTerminationReceipt`
+  retention remain deterministic across proof runs on the same fixture set.
 - Decoder-equivalence tests: risky native and experimental candidates emit
   `DecoderEquivalenceRecord`s before any promotion path is allowed to pass.
 - Variant-manifest tests: canonical tournaments emit
   `AlgorithmVariantManifest`s and `VariantSelectionReceipt`s before defaults
   can change.
+- Dispatch-receipt tests: host-adaptive runs emit
+  `HardwareCapabilityManifest`s and `KernelDispatchReceipt`s whenever runtime
+  kernel choice depends on host capability or proof-canonical downgrade.
 - Benchmark-witness tests: canonical benchmarks emit schema-valid witness records with support
   class, render determinism class, numeric profile, topology/runtime fields,
   work receipts, peak-memory witnesses, threshold verdicts, and reproducibility linkage.
+- Planner-calibration tests: calibrated planning paths emit stable
+  `PredictionErrorWitness` and `CalibrationReceipt` records when planner models
+  are retrained or promoted.
 - Oracle-resolution tests: above-threshold renderer splits emit typed disagreement records with correct blocking state and resolution class.
 - Region-disagreement tests: above-threshold render splits emit bounded
   disagreement regions with typed semantic axes and chunk/geometry/numeric linkage.
