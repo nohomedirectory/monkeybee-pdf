@@ -1,0 +1,1 @@
+I’m past generic patch territory now and narrowing the additions to execution-level contracts: durability of persisted artifacts, fault containment, native isolation, deterministic rendering classes, and stronger witness/performance evidence.

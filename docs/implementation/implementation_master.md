@@ -9,6 +9,12 @@ test obligations. It links to subordinate implementation docs for deeper subsyst
 This is not a philosophical essay and not the full codebase. It is the grounding surface that keeps
 the SPEC honest about implementation realities.
 
+The current APR round also hardens execution contracts that were previously
+implicit or scattered: durable publication of persisted artifacts, explicit
+fault-domain containment, render determinism classes, native isolation classes,
+and schema-versioned benchmark witnesses. Those are implementation obligations,
+not proof-theater garnish.
+
 The most important architectural refinement since the prior revision is simple to state and
 consequential in practice: Monkeybee is no longer described merely as a layered
 parser/document/render/write stack. It now has a baseline computational kernel —
@@ -430,7 +436,7 @@ monkeybee-pdf/
 │   │   │   ├── pades.rs          # PAdES profile and offline-LTV readiness checks
 │   │   │   └── signature.rs
 │   │   └── Cargo.toml
-│   ├── monkeybee-proof/          # validation and evidence harness
+│   ├── monkeybee-proof/          # validation, evidence harness, and benchmark-witness emission
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── corpus.rs         # corpus management and indexing
@@ -459,7 +465,7 @@ monkeybee-pdf/
 │   │   │   ├── create.rs         # CMS/PAdES creation
 │   │   │   └── ltv.rs            # offline long-term validation readiness
 │   │   └── Cargo.toml
-│   ├── monkeybee-native/         # all optional FFI/native bridges and broker adapters
+│   ├── monkeybee-native/         # all optional FFI/native bridges, broker adapters, and isolation attestations
 │   └── monkeybee-cli/            # command-line interface
 │       ├── src/
 │       │   └── main.rs
@@ -537,7 +543,8 @@ Additional notes:
 - `monkeybee-write` depends on `monkeybee-validate` because write execution includes mandatory
   self-parse/structural validation and preflight hooks.
 - `monkeybee-native` stays behind narrow adapter boundaries and must not create dependency cycles
-  back into domain crates.
+  back into domain crates; it also owns native-module attestation and isolation-mode reporting so
+  the rest of the engine never has to guess how risky code was run.
 - `monkeybee-extract` and `monkeybee-diff` depend on the substrate because semantic-anchor,
   temporal, and certificate-aware surfaces need direct access to root digests and query receipts.
 
@@ -632,6 +639,9 @@ preview surfaces that are intentionally non-gating.
 Baseline v1 builds with `tiny-skia`, `lcms2`, `openjpeg` (Compatible profile), `forensics`, and
 `wgpu-3d` on native targets, and without `write-encryption`, `unstable-semantic-query`,
 `unstable-temporal-replay`, `external-attestation`, or the experimental `wgpu-gpu2d` backend.
+Canonical proof additionally pins the baseline CPU render path as the
+`ProofCanonical` render determinism class; GPU/subpixel/view-adaptive paths emit
+their own witness class and never masquerade as canonical evidence.
 
 ## Runtime and concurrency model
 
@@ -758,6 +768,10 @@ Outcome distinguishes:
 The severity lattice is `Ok < Err < Cancelled < Panicked`. Aggregation is monotone.
 `CancelReason` carries structured kinds: `User`, `Timeout`, `FailFast`, `ParentCancelled`,
 `Shutdown`, `BudgetExhausted`.
+
+Fault containment is explicit: operator/page/query/native/transport/save/fixture failures stay
+local to their fault domain, failed materializations never publish clean reusable cache entries,
+and durable manifests are emitted only after the underlying artifact has actually committed.
 
 ## Core data structures
 
@@ -1105,6 +1119,15 @@ Implementation notes:
 - child tasks may tighten policy but never silently relax it
 - save/import/backend strategy selection emits `PlanSelectionRecord` so proof and CLI surfaces can explain why a legal candidate won
 
+```rust
+pub enum RenderDeterminismClass {
+    ProofCanonical,
+    BackendDeterministic,
+    ViewAdaptive,
+    Experimental,
+}
+```
+
 ### Security profiles (`monkeybee-security::profile`)
 
 ```rust
@@ -1136,6 +1159,16 @@ pub enum DecoderType {
     JPEG2000,
     Type4Calculator,
     XfaXmlPacket,
+}
+```
+
+```rust
+pub enum NativeIsolationClass {
+    PureRust,
+    InProcessAudited,
+    WorkerIsolated,
+    BrokeredSubprocess,
+    Denied,
 }
 ```
 
@@ -1214,6 +1247,9 @@ Implementation notes:
 - sweep is reachability-based from pinned roots, not opportunistic eviction of still-referenced digests
 - preserve-mode raw spans and write/signature evidence stay pinned until their enclosing operation or artifact is released
 - spill/persist decisions are policy-qualified so remote, encrypted, or restricted content cannot silently outlive its allowed boundary
+- persisted roots and artifact-store blobs publish via a manifest-last sequence:
+  write blob -> verify digest/size -> fsync blob -> atomically publish root/artifact manifest
+- simulated-crash tests must prove that unpublished blobs never appear as durable reusable state
 
 ### Incremental query engine (`monkeybee-substrate::query`)
 
@@ -1490,6 +1526,7 @@ pub struct ReproducibilityManifest {
     pub canonical: bool,
     pub engine_commit: String,
     pub oracle_manifest_id: String,
+    pub provider_manifest_id: String,
     pub feature_module_manifest_id: String,
     pub policy_digest: [u8; 32],
     pub fixture_set_digest: [u8; 32],
@@ -1513,12 +1550,44 @@ pub struct OracleDisagreementRecord {
     pub resolution: OracleResolutionKind,
     pub blocking: bool,
 }
+
+pub struct BenchmarkWitness {
+    pub witness_id: String,
+    pub reproducibility_manifest_id: String,
+    pub benchmark_profile_id: String,
+    pub support_class: String,
+    pub render_determinism_class: RenderDeterminismClass,
+    pub fixture_set_digest: [u8; 32],
+    pub warm_cache: bool,
+    pub metrics: Vec<MetricObservation>,
+    pub threshold_verdicts: Vec<ThresholdVerdict>,
+}
+
+pub struct MetricObservation {
+    pub name: String,
+    pub p50: Option<f64>,
+    pub p95: Option<f64>,
+    pub worst: Option<f64>,
+    pub unit: String,
+}
+
+pub struct ThresholdVerdict {
+    pub metric: String,
+    pub target: String,
+    pub actual: String,
+    pub verdict: String,
+}
 ```
 
 Implementation notes:
 - every canonical proof run emits one `ReproducibilityManifest` and links it from ledgers, capsules, and disagreement records
 - oracle disagreements are typed artifacts, not free-form comments in CI logs
 - strategy promotion stays blocked while any manifest-qualified disagreement remains unresolved
+- canonical benchmark classes emit schema-versioned `BenchmarkWitness` artifacts tied to the same
+  reproducibility manifest, including support class, render determinism class, and threshold
+  verdicts
+- benchmark witnesses follow the same manifest-last durable publication rules as ledgers,
+  receipts, and failure capsules
 
 ### PDF object model (`monkeybee-core::object`)
 
@@ -2319,6 +2388,8 @@ PdfSnapshot + extract profile
 - Integration tests: risky decoder invocation through security gate — verify budgets enforced and isolation works.
 - Property tests: no decoder invocation bypasses the security boundary.
 - Active-content policy tests: XFA / active-content detection never silently upgrades to native execution.
+- Native-isolation tests: `PureRust`, `WorkerIsolated`, `BrokeredSubprocess`, and `Denied`
+  paths emit the correct isolation-class evidence and never leak partial native results into clean caches.
 
 ### monkeybee-parser
 - Unit tests: lexer on known token sequences, object parsing on all types, xref parsing on well-formed and malformed tables.
@@ -2335,6 +2406,8 @@ PdfSnapshot + extract profile
 - Query tests: materialization records capture all observed digests and dependent query keys.
 - Invalidation tests: changed digests dirty exactly the expected query set and no more.
 - Lifecycle tests: root pinning, spill eligibility, and reachability-based sweep preserve live evidence and reclaim only unreachable nodes.
+- Durability tests: manifest-last publication never exposes partially written persisted roots or
+  artifact-store blobs across simulated crashes.
 - Acceleration-index tests: freshness, partial-remote state, and explicit scan fallback remain deterministic and auditable.
 - Receipt tests: invariant certificates are deterministic under deterministic mode and recomputable by proof harness.
 - Hypothesis tests: chosen candidate and alternative summaries remain stable across identical opens.
@@ -2532,6 +2605,8 @@ PdfSnapshot + extract profile
 - Evidence tests: artifact generation produces valid, parseable output.
 - Ledger JSON schema tests: ledger output validates against schema, version tracking fields populate correctly, schema versioning remains backward-compatible within majors.
 - Reproducibility tests: canonical runs emit a manifest and every ledger/capsule/disagreement/plan-selection artifact links back to it.
+- Benchmark-witness tests: canonical benchmarks emit schema-valid witness records with support
+  class, render determinism class, threshold verdicts, and reproducibility linkage.
 - Oracle-resolution tests: above-threshold renderer splits emit typed disagreement records with correct blocking state and resolution class.
 - Corpus manifest tests: every fixture has an `ExpectationManifest`.
 - Repair expectation tests: ambiguous recovery asserts chosen candidate id, semantic digest, and write-impact class unless explicitly waived.

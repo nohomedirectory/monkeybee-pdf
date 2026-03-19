@@ -1449,6 +1449,12 @@ Rules:
   may only persist beyond the session boundary if the resolved policy allows it
 - store maintenance emits diagnostics and trace events, and deterministic mode
   fixes sweep/spill ordering so proof artifacts remain reproducible
+- persisted substrate blobs are published via a manifest-last sequence:
+  write blob -> verify digest/size -> fsync blob -> atomically publish the
+  root-set or artifact manifest that references it
+- crash recovery ignores or quarantines blobs that were not linked by a durable
+  manifest/root-set publication; partially written persistence state may not be
+  reused opportunistically
 
 ### Engine / session / snapshot model
 
@@ -1829,6 +1835,69 @@ Rules:
 - if no candidate survives policy filtering, the operation fails explicitly
   before mutation or byte emission
 
+### Render determinism class contract
+
+Render planning is not only about backend choice; it is also about what kind of
+determinism the caller is buying.
+
+```
+pub enum RenderDeterminismClass {
+    ProofCanonical,
+    BackendDeterministic,
+    ViewAdaptive,
+    Experimental,
+}
+```
+
+Rules:
+- every render backend selection emits a `RenderDeterminismClass` into
+  `RenderReport`, plan-selection evidence, benchmark witnesses, and oracle
+  disagreement artifacts
+- `ProofCanonical` is the only class allowed for canonical proof/render-hash
+  evidence; it uses pinned providers, the baseline auditable render path,
+  stable tile ordering, and disables display-adaptive behavior such as ambient
+  font lookup or subpixel LCD variation
+- `BackendDeterministic` means output is stable for a pinned backend/provider/
+  module manifest tuple, but cross-host byte-identical output is not claimed
+- `ViewAdaptive` is allowed to use GPU selection, display-aware subpixel
+  policies, or other host-adaptive behavior; it is judged by perceptual witness
+  metrics rather than raw hash equality
+- `Experimental` is never release-gating and must always retain an auditable
+  downgrade path to a non-experimental class
+- cache namespaces and benchmark evidence must distinguish render determinism
+  classes so proof-canonical artifacts are never silently mixed with
+  viewer-adaptive ones
+
+### Fault containment doctrine
+
+Execution failures are contained to explicit fault domains rather than being
+allowed to poison the whole engine:
+- operator / content-span failures
+- tile / page failures
+- query materialization and acceleration-index failures
+- native bridge invocations
+- transport sessions and fetch epochs
+- save/commit publication
+- proof-fixture execution
+
+Rules:
+- a contained fault may degrade the local result, but it may not silently taint
+  a committed snapshot, a clean cache entry, or a durable artifact manifest
+- failed query/index materializations may be retried or remain dirty, but they
+  must never be surfaced as clean reusable artifacts with incomplete provenance
+- native crashes, timeouts, or quarantine kills are contained to their own
+  invocation/region and surface as typed outcomes plus attested diagnostics;
+  they do not invalidate sibling pages, sessions, or already-durable evidence
+- transport-consistency failures degrade or freeze only the affected remote
+  session/fetch epoch; they do not contaminate local snapshots or unrelated
+  sessions
+- save failures may not mutate the source snapshot or destination path, and may
+  not publish receipts/manifests that reference uncommitted bytes
+- proof runs may classify a fixture as failed, panicked, or quarantined, but
+  that fixture's failure must not suppress artifact generation or accounting for
+  the other fixtures in the run unless an explicit global fail-fast policy says
+  otherwise
+
 **API surface:**
 
 ```
@@ -1916,6 +1985,7 @@ pub struct RenderResult {
 }
 
 pub struct RenderReport {
+    pub render_determinism_class: RenderDeterminismClass,
     pub degraded_regions: Vec<RegionRef>,
     pub placeholder_regions: Vec<PlaceholderRef>,
     pub missing_resources: Vec<ResourceKey>,
@@ -2565,6 +2635,31 @@ The security gate is not bypassable. The internal decoder functions in `monkeybe
 `pub(crate)` — external crates cannot invoke JBIG2, JPEG 2000, Type 4 calculator, or XFA
 packet handlers directly. They must go through the security-gated public API.
 
+#### `monkeybee-native`
+
+All optional FFI/native bridges live behind a narrow quarantine/broker crate.
+
+Key responsibilities:
+- JPX/JBIG2/ICC/FreeType and similar adapter boundaries
+- brokered subprocess or isolated-worker execution for risky native paths
+- native-module manifesting, version/hash attestation, and capability reporting
+- translation between owned byte buffers / typed descriptors and native APIs
+- crash, timeout, and resource-verdict reporting for diagnostics, witnesses, and
+  failure capsules
+
+Rules:
+- no domain crate links risky native libraries directly or passes borrowed
+  engine memory, live object references, or callbacks across the FFI boundary
+- native jobs accept immutable typed inputs and produce size-bounded outputs plus
+  typed attestations; partial writes into engine-owned state are forbidden
+- risky modules default to isolated worker or brokered subprocess execution
+  under `native-hardened` and `proof-canonical`; in-process use is explicit,
+  audited, support-class-qualified, and never silent
+- cache keys, benchmark witnesses, and failure capsules include native-module
+  manifest identity whenever native code influenced the result
+- a native bridge is an implementation choice, not an architectural authority:
+  Monkeybee owns the public semantics, diagnostics, and proof surfaces
+
 #### `monkeybee-parser`
 
 Reads PDF bytes into the document model via syntax-preserving parsing with repair provenance. The parser is a structural machine: it delegates to `monkeybee-codec` for filter-chain decode/encode work and to `monkeybee-security` for risky-decoder policy and budget enforcement.
@@ -2685,6 +2780,8 @@ Key responsibilities:
 - Page rendering: media box, crop box, bleed/trim/art boxes, rotation, user unit
 - Optional content (layers): OCG visibility, OCMD membership, default/print/export states
 - Output targets: raster (PNG/JPEG), vector (SVG), region render, thumbnail render, and extensible backend interface
+- Render backend selections always advertise a `RenderDeterminismClass`; proof-canonical output,
+  backend-deterministic output, and viewer-adaptive output are distinct evidence classes
 
 **Output backend architecture:**
 
@@ -5020,6 +5117,30 @@ Library APIs expose:
 
 `monkeybee-write` remains a serializer; staged commit is owned by the public facade / CLI adapter.
 
+### Persisted artifact durability contract
+
+Durability is a separate contract from semantic write correctness. `save_to_bytes()`
+proves the bytes are valid; file-backed save and artifact publication prove those
+bytes or evidence objects were durably published.
+
+Rules:
+- any persisted artifact written beyond the current call boundary — output PDFs,
+  write receipts, invariant certificates, ledgers, disagreement records,
+  failure capsules, benchmark witnesses, and persistent derived artifacts — is
+  staged privately first
+- the staged artifact's digest, size, and schema/version metadata are computed
+  and verified before publication
+- data blobs are fsynced before any manifest, pointer file, or directory rename
+  that makes them authoritative; grouped artifact sets publish their manifest
+  last
+- manifests, ledgers, and receipts may reference only already-durable child
+  artifacts; a reference to a not-yet-durable blob is a correctness bug
+- crash recovery treats private temp objects and unreferenced blobs as
+  unpublished; they may be quarantined or garbage-collected, but never surfaced
+  as valid durable state
+- reclamation of persisted artifacts is reachability-based from durable
+  manifests/receipts plus retention policy, not from best-effort age heuristics
+
 **Self-consistency invariant:** Monkeybee must be able to parse its own output without errors in strict mode. This is a hard test requirement, not a soft aspiration. Every generated PDF is round-tripped through Monkeybee's strict-mode parser as part of the write-path test suite.
 
 **Serialization ordering:** Objects may be serialized in any order, but the cross-reference must correctly point to each object's starting offset. For human-readability and debugging, prefer: header → body objects (in object-number order) → cross-reference → trailer → `%%EOF`.
@@ -5682,6 +5803,7 @@ The following outputs are schema-versioned external interfaces:
 - `CapabilityReport`
 - `WritePlanReport`
 - `DiffReport`
+- `BenchmarkWitness`
 - `TraceEventStream`
 - CLI JSON envelope
 - `ExpectationManifest`
@@ -5709,6 +5831,7 @@ pub struct ReproducibilityManifest {
     pub target_triple: String,
     pub rustc_version: String,
     pub oracle_manifest_id: String,
+    pub provider_manifest_id: String,
     pub feature_module_manifest_id: String,
     pub expectation_manifest_id: Option<String>,
     pub policy_digest: [u8; 32],
@@ -5721,12 +5844,59 @@ Rules:
 - canonical proof/CI runs emit exactly one schema-versioned
   `ReproducibilityManifest` and every ledger, plan-selection record,
   oracle-disagreement record, and failure capsule links back to it
-- canonical runs require pinned oracle/module manifests, deterministic settings,
-  stable locale/timezone/seed policy, and a resolved `policy_digest`
+- canonical runs require pinned oracle/provider/module manifests, deterministic
+  settings, stable locale/timezone/seed policy, and a resolved `policy_digest`
 - ad hoc developer runs may emit non-canonical manifests, but they must set
   `canonical=false` rather than pretending to be release evidence
 - reproducibility manifests are content-addressed artifacts and participate in
   the same backward-compatibility rules as other external schemas
+
+### Witness and benchmark evidence contract
+
+Monkeybee's receipts, ledgers, disagreement records, and traces are witness
+artifacts. Performance claims additionally require a schema-versioned
+`BenchmarkWitness`.
+
+```
+pub struct BenchmarkWitness {
+    pub witness_id: String,
+    pub reproducibility_manifest_id: String,
+    pub benchmark_profile_id: String,
+    pub support_class: String,
+    pub render_determinism_class: RenderDeterminismClass,
+    pub fixture_set_digest: [u8; 32],
+    pub warm_cache: bool,
+    pub metrics: Vec<MetricObservation>,
+    pub threshold_verdicts: Vec<ThresholdVerdict>,
+}
+
+pub struct MetricObservation {
+    pub name: String,
+    pub p50: Option<f64>,
+    pub p95: Option<f64>,
+    pub worst: Option<f64>,
+    pub unit: String,
+}
+
+pub struct ThresholdVerdict {
+    pub metric: String,
+    pub target: String,
+    pub actual: String,
+    pub verdict: String,
+}
+```
+
+Rules:
+- every canonical benchmark class emits at least one `BenchmarkWitness` linked to
+  the enclosing `ReproducibilityManifest`
+- benchmark witnesses record support class, render determinism class, cache
+  temperature, fixture set, and threshold verdicts; ad hoc timing logs are not
+  release evidence
+- README, release notes, dashboards, and CLI capability/performance summaries
+  may cite only witness-backed metrics from canonical runs or explicitly labeled
+  non-canonical runs
+- benchmark witnesses follow the same persisted artifact durability contract as
+  ledgers, capsules, and receipts
 
 **Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
 
@@ -5751,6 +5921,7 @@ renderer binaries).
 10. `reproducibility.json` — canonical or ad hoc run manifest for the entire CI/proof invocation
 11. `plan-selections/` — typed plan-selection records for save/import/backend/open decisions
 12. `oracle-disagreements/` — typed disagreement records with resolution status and gating class
+13. `benchmark-witnesses/` — schema-versioned benchmark evidence with threshold verdicts and render determinism classes
 
 
 
@@ -5783,7 +5954,7 @@ repair drift, or native-decoder crash MUST emit a `FailureCapsule`.
 pub struct DecoderAttestation {
     pub decoder: DecoderType,
     pub backend: String,
-    pub isolated: bool,
+    pub isolation_class: NativeIsolationClass,
     pub version: String,
     pub verdict: String,
     pub crash_fingerprint: Option<String>,
@@ -5829,9 +6000,12 @@ Canonical benchmark runs record:
 - hardware / OS image
 - compiler version
 - security profile
+- render determinism class
 - provider manifest
+- native module / isolation manifest information when applicable
 - warm/cold cache state
 - percentile outputs (`p50`, `p95`, worst-case`)
+- threshold verdicts and witness ids
 
 **Reference renderer setup:**
 - CI uses container images with pinned versions of PDFium, MuPDF, Ghostscript, and pdf.js.
@@ -5857,6 +6031,7 @@ v1 may not be released until:
 - Round-trip chains pass on representative documents from every corpus category.
 - The compatibility ledger accounts for all known feature categories with correct tier assignments.
 - Performance benchmarks on representative hard workloads are within defined bounds.
+- Public correctness and performance claims are backed by canonical witness artifacts linked to reproducibility manifests.
 - No silent failures exist: every degradation is detected and reported.
 - The proof harness runs in CI and produces machine-readable evidence.
 
@@ -5894,6 +6069,35 @@ High-risk domains include JBIG2Decode, JPXDecode, native font/image bridges, XFA
 All high-risk decode jobs and all optional native bridges execute through `monkeybee-security`
 and `monkeybee-native`, with explicit memory/time budgets and optional worker isolation; no crate outside `monkeybee-codec` may invoke them directly.
 In hardened mode these run in isolated workers or are disabled; no external-entity XML resolution is ever permitted.
+
+### Native isolation class doctrine
+
+Native integration is support-class-qualified, not a hidden implementation detail.
+
+```
+pub enum NativeIsolationClass {
+    PureRust,
+    InProcessAudited,
+    WorkerIsolated,
+    BrokeredSubprocess,
+    Denied,
+}
+```
+
+Rules:
+- every optional native path declares a `NativeIsolationClass` per support class
+  and surfaces it in traces, benchmark witnesses, and failure capsules
+- risky decoders and native render/color/font bridges in `native-hardened` and
+  `proof-canonical` may run only as `PureRust`, `WorkerIsolated`,
+  `BrokeredSubprocess`, or `Denied`
+- `InProcessAudited` is an explicit compatible-mode choice that requires narrow
+  adapter boundaries, published safety review, and measurable benefit on a
+  proven hot path; it is never silently assumed for risky decoders
+- isolation downgrades or broker unavailability are plan-selection and
+  diagnostic events, not silent fallback
+- native invocation outputs are immutable handoff artifacts with explicit size,
+  time, and crash/timeout verdicts; partial mutation of engine-owned state is
+  forbidden
 
 ### Targeted formal verification
 
@@ -5952,6 +6156,9 @@ The open strategy is set per `OpenSession` and propagates to all downstream cach
 - Caching: resource cache, font cache, decoded stream cache, with explicit eviction policy.
 - Parallelism: page-level parallelism for rendering and extraction where the document model supports it.
 - Benchmark classes: small simple PDFs (latency), large complex PDFs (throughput), pathological PDFs (robustness under stress).
+- Release-facing performance claims must be backed by schema-versioned
+  `BenchmarkWitness` artifacts from canonical or explicitly labeled
+  non-canonical runs.
 
 **Benchmark class specifics:**
 
@@ -6325,6 +6532,7 @@ Recommended initial classification: `v1_advisory`.
   and pinned oracle evidence.
 - [ ] Experimental backends are optional and benchmarked head-to-head against the baseline.
 - [ ] Performance benchmarks exist for all benchmark classes.
+- [ ] Canonical benchmark witnesses exist for each benchmark class and record support class, render determinism class, and threshold verdicts.
 
 - [ ] Invariant certificates are emitted, schema-validated, and independently recomputable in proof mode.
 - [ ] Ambiguous-repair fixtures produce hypothesis-set evidence rather than silent collapse.
@@ -6435,6 +6643,7 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 - [ ] README and website capability tables are generated from proof artifacts + scope registry
       (no manual capability claims).
 - [ ] Resource limits are enforced for all adversarial-input-facing code paths.
+- [ ] Artifact publication paths for saves, ledgers, capsules, and benchmark witnesses are crash-safe and manifest-last.
 
 ### Baseline v1 vs experimental feature classification
 

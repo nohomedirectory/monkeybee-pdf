@@ -85,11 +85,14 @@ Baseline v1 must prove all of the following:
 - **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated.
 - **Policy-complete operation planning**: open/import/save decisions compose security, active-content, provider, and determinism policy up front and reject invalid combinations before execution.
 - **Write receipts and invariant certificates** for save, diff, and redaction workflows.
+- **Durable persisted artifacts**: file-backed saves and persisted proof artifacts publish atomically and never leave ledgers, receipts, or manifests pointing at partial blobs.
 - **Ambiguity truthfulness**: materially different repair candidates stay visible as a bounded hypothesis set rather than being silently collapsed.
 - **Extraction usefulness**: text with positions, metadata, structure inspection, asset inspection, diagnostics, and the early semantic surfaces needed for anchor stability.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, and surfaced — never silently swallowed.
 - **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, typed oracle-disagreement records, and plan-selection evidence linked back to ledgers and failure capsules.
+- **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
+- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests, not ad hoc timing logs.
 - **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, and invalidation causes in a way users can act on.
 
 Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
@@ -289,13 +292,15 @@ Workspace crates:
 | `monkeybee-validate` | Arlington/profile validation, print preflight, PDF/UA-style audit, PAdES/LTV checks, write preflight, signature byte-range checks |
 | `monkeybee-diff` | Structural, text, render, save-impact, and revision-frame comparison engine reused by the facade, proof harness, and CLI |
 | `monkeybee-signature` | Signature parsing, byte-range preservation, PAdES/DSS/VRI modeling, OCSP/CRL/TSA handling, signature creation, DocMDP/FieldMDP policy, verification plumbing, and save-impact analysis |
-| `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, reproducibility manifests, oracle-disagreement records, plan-selection evidence, certificate recomputation, regression gates |
-| `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, subprocess-friendly broker hooks |
+| `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, reproducibility manifests, oracle-disagreement records, plan-selection evidence, benchmark witnesses, certificate recomputation, regression gates |
+| `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, native-isolation attestations, subprocess-friendly broker hooks |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, prepress/signature/accessibility reporting, diffing, plan-save previews, diagnostics, proof execution |
 
 Core library crates remain runtime-agnostic: they accept `&ExecutionContext` and do not import
 `asupersync` directly. The facade, bytes, proof, and CLI crates are `asupersync`-native. CPU-bound
 work remains Rayon-based and bridges back into structured async regions via oneshot channels.
+Canonical proof also distinguishes render determinism classes and native isolation classes so
+viewer-adaptive paths or quarantined native paths never masquerade as proof-canonical evidence.
 
 ## Foundation freeze before fan-out
 
@@ -406,6 +411,10 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 - **Anchor-stability and temporal-replay harnesses** on representative fixtures so post-v1 surfaces
   are forced to grow from stable primitives instead of hand-waving.
 - **Performance baselines** on representative hard workloads.
+- **Schema-versioned benchmark witnesses** that bind support class, render determinism class, and
+  threshold verdicts to reproducibility manifests.
+- **Durable artifact publication rules** so saved outputs, ledgers, capsules, and witnesses are
+  published atomically and never reference partial child artifacts.
 
 No feature ships without evidence. No release gate passes on rhetoric. No architectural promise is
 accepted until a proof surface exists for it.
