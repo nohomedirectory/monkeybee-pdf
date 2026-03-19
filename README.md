@@ -79,11 +79,11 @@ Baseline v1 must prove all of the following:
 - **Interactive 3D PDF rendering on PRC and U3D content** — the first open-source implementation and a native baseline capability rather than a post-v1 escape hatch.
 - **Persistent immutable snapshots** backed by a content-addressed substrate rather than whole-document cloning.
 - **Exact dependency-tracked invalidation** so small edits only recompute affected pages, resources, and derived artifacts, with witnessable reuse/recompute causality.
-- **A first-class numeric/geometry kernel** so rendering, annotation placement, redaction, hit-testing, prepress region analysis, and 3D cross-sections all consume one auditable tolerance and degeneracy doctrine.
+- **A first-class numeric/geometry kernel** so rendering, annotation placement, redaction, hit-testing, function/color/prepress math, and 3D cross-sections all consume one auditable tolerance, degeneracy, and escalation doctrine.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent semantic drift.
 - **Cross-document import integrity**: copy/merge/split workflows remap resources and identities explicitly, preserve provenance, emit import-closure evidence, and never silently collide.
 - **Annotation and form round trips** on ugly files, including appearance regeneration and preserve-mode save planning.
-- **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated, compute save feasibility from an explicit constraint graph, and cite minimal blocking sets when preserve-mode goals are unsatisfiable.
+- **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated, compute save feasibility from an explicit constraint graph, cite minimal blocking sets when preserve-mode goals are unsatisfiable, and surface the nearest legal alternative plans when that frontier is cheap to compute.
 - **Policy-complete operation planning**: open/import/save decisions compose security, active-content, provider, and determinism policy up front and reject invalid combinations before execution.
 - **Receiptable derived artifacts, write receipts, and invariant certificates** for save, diff, redaction, render, extraction, and cache-reuse workflows.
 - **Durable persisted artifacts**: file-backed saves and persisted proof artifacts publish atomically and never leave ledgers, receipts, or manifests pointing at partial blobs.
@@ -91,10 +91,10 @@ Baseline v1 must prove all of the following:
 - **Extraction usefulness**: text with positions, metadata, structure inspection, asset inspection, diagnostics, explicit truth surfaces, and the early semantic layers needed for anchor stability.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, surfaced in a generated capability surface matrix, and never silently swallowed.
-- **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, typed oracle-consensus and oracle-disagreement records, blind-spot ledgers, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers and failure capsules.
+- **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, environment locks, typed oracle-consensus and oracle-disagreement records with region-level explainability, blind-spot ledgers, coverage lattices, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers, evidence bundles, and failure capsules.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
-- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, not ad hoc timing logs.
-- **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, invalidation causes, and transport continuity in a way users can act on.
+- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, work-class receipts, and peak-memory witnesses, not ad hoc timing logs.
+- **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, anchor fragility, invalidation causes, and transport continuity in a way users can act on.
 
 Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
 accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1.
@@ -411,7 +411,8 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
   failure category.
 - A **hypothesis ledger** for ambiguous repairs so materially different candidates remain visible.
 - **Oracle-consensus records and blind-spot ledgers** so release-facing claims reflect both how
-  disputed expectations were chosen and where fixture coverage is still thin.
+  disputed expectations were chosen, where fixture coverage is still thin, and which feature ×
+  producer × operation intersections remain under-covered.
 - A **metamorphic proof lane with deterministic reducers and fixture genealogy** so
   representation-changing transforms, crash minimization, and repair drift stay auditable.
 - **Write receipts and invariant certificates** for save-impact, preserve-mode, and redaction workflows.
@@ -419,7 +420,9 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
   are forced to grow from stable primitives instead of hand-waving.
 - **Performance baselines** on representative hard workloads.
 - **Schema-versioned benchmark witnesses** that bind support class, render determinism class,
-  runtime-topology evidence, and threshold verdicts to reproducibility manifests.
+  runtime-topology evidence, work-class receipts, peak-memory witnesses, and threshold verdicts to reproducibility manifests.
+- **Environment locks and evidence bundles** so benchmark claims, regressions, and bug reports can
+  be published as content-addressed reproducer bundles without relying on ambient host state.
 - A **generated capability surface matrix** derived from the scope registry plus proof outputs so
   README, website, CLI, and CI capability claims cannot drift apart.
 - **Durable artifact publication rules** so saved outputs, ledgers, capsules, and witnesses are

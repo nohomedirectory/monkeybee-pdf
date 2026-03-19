@@ -272,6 +272,73 @@ uses simple implementations (AtomicBool cancellation, manual budget tracking).
 The bridge is intentionally zero-cost: a single function pointer indirection for
 checkpoint calls, which are already on the order of microseconds between operators.
 
+### Execution topology and work-class doctrine
+
+Monkeybee treats execution topology as a correctness and proof surface rather
+than a hidden runtime detail. The runtime contract must therefore model which
+kinds of work exist, what interference class they carry, which support classes
+they are allowed to run under, and how viewport-critical work is isolated from
+background proof, prefetch, and publication activity.
+
+```
+pub enum WorkClass {
+    Probe,
+    Parse,
+    Decode,
+    Render,
+    Extract,
+    QueryMaterialize,
+    SavePlan,
+    Serialize,
+    PersistArtifact,
+    NativeIsolated,
+    ProofOracle,
+}
+
+pub enum InterferenceClass {
+    LatencyCritical,
+    ThroughputPreferred,
+    MemoryBurst,
+    IOBound,
+    DeterminismSensitive,
+    IsolationRequired,
+}
+
+pub struct ExecutionLane {
+    pub lane_id: String,
+    pub work_class: WorkClass,
+    pub interference: InterferenceClass,
+    pub support_class: SupportClass,
+    pub concurrency_cap: Option<u32>,
+}
+
+pub struct TopologyPolicy {
+    pub lanes: Vec<ExecutionLane>,
+    pub allow_render_decode_co_residency: bool,
+    pub allow_oracle_parallelism: bool,
+    pub reserve_latency_lane_for_viewport_work: bool,
+}
+
+pub struct WorkReceipt {
+    pub work_class: WorkClass,
+    pub lane_id: String,
+    pub wall_time_ms: u64,
+    pub cpu_units: u64,
+    pub peak_memory_bytes: u64,
+    pub blocked_on: Vec<WorkClass>,
+}
+```
+
+Rules:
+- proof-canonical runs MUST emit topology-qualified `WorkReceipt`s for major
+  work classes
+- viewport-visible work MUST be isolatable from proof, prefetch, and
+  persistent-artifact publication work under the resolved `TopologyPolicy`
+- topology drift that changes correctness, latency, or benchmark outcomes is a
+  typed artifact, not an anecdotal performance note
+- benchmark witnesses SHOULD attach work receipts for parse, decode, render,
+  query-materialize, and save-plan phases on canonical runs
+
 ### Diagnostic streaming model
 
 All diagnostics flow through a `DiagnosticSink` carried by `ExecutionContext`. The sink is a trait
@@ -309,6 +376,20 @@ ownership escalation, and save-plan escalation MUST emit a causal trace event.
 
 ```
 pub struct OperationSpanId(pub u128);
+
+pub enum OperationKind {
+    Open,
+    Probe,
+    Render,
+    Extract,
+    Query,
+    Save,
+    Import,
+    Diff,
+    HistoryReplay,
+    ProofRun,
+    PersistArtifact,
+}
 
 pub struct OperationSpan {
     pub span_id: OperationSpanId,
@@ -1001,6 +1082,50 @@ Font handling in real-world PDFs is where the gap between spec and reality is wi
   recalculate the bias based on the surviving counts rather than the original counts.
 - **TrueType with broken `loca` table:** The `loca` table maps glyph IDs to offsets in the `glyf` table. If `loca` entries point outside `glyf` bounds, clamp to the `glyf` table length and record the error. Individual broken glyphs use `.notdef`; the rest of the font remains usable.
 - **CJK identity CIDFonts with no embedded data:** Very common in files from Asian producers. The font dictionary specifies a CIDFont with no embedded font program, relying on the viewer having the font installed. The engine must: (a) recognize common CIDFont names and map them to available CJK fonts, (b) provide a CJK fallback font or clearly report the missing font so the user can supply one.
+
+### Font truth and repair witness doctrine
+
+Fonts have multiple truth surfaces that must not be collapsed into one vague
+"confidence" score. A span may have strong Unicode truth, weak metric truth,
+shape-only render truth, or some mixture of those. Monkeybee therefore emits
+typed font witnesses whenever repair, fallback, or substitution materially
+affects rendering, extraction, or diff/explainability surfaces.
+
+```
+pub enum FontTruthClass {
+    EmbeddedAuthoritative,
+    PdfEncodingAuthoritative,
+    ToUnicodeAuthoritative,
+    EmbeddedCmapRecovered,
+    GlyphNameInferred,
+    SubstituteRenderOnly,
+    Unmappable,
+}
+
+pub struct FontMappingWitness {
+    pub font_fingerprint: ResourceFingerprint,
+    pub truth_class: FontTruthClass,
+    pub unicode_authority: Option<String>,
+    pub metric_authority: Option<String>,
+    pub outline_authority: Option<String>,
+    pub affected_charcodes: Vec<u32>,
+}
+
+pub struct FontRepairReceipt {
+    pub font_fingerprint: ResourceFingerprint,
+    pub repairs_applied: Vec<String>,
+    pub truth_surface: Vec<FontMappingWitness>,
+    pub residual_unknowns: Vec<u32>,
+}
+```
+
+Rules:
+- extraction surfaces MUST be able to cite `FontTruthClass` per span on demand
+- render and extraction reports MUST summarize substitute-render-only zones
+- subsetting, CFF repair, cmap salvage, and damaged Type 1 recovery SHOULD emit
+  `FontRepairReceipt` artifacts whenever they materially affect output
+- provider-supplied outlines or metrics are useful, but they may never silently
+  masquerade as stronger Unicode or source-authoritative truth
 
 #### Transparency edge case handling
 
@@ -2323,6 +2448,59 @@ When memory pressure exceeds all cache budgets, the engine degrades gracefully: 
 on demand rather than caching, re-interpreting content streams instead of reusing PagePlans. This
 degradation is instrumented (diagnostics report cache pressure events).
 
+### Artifact residency and memory-hierarchy doctrine
+
+`StoreResidency` governs pinned substrate roots. Reusable decoded and derived
+artifacts additionally carry explicit residency state so memory pressure, spill,
+persistence, and remote revalidation never become hidden sources of
+nondeterminism.
+
+```
+pub enum ArtifactResidencyClass {
+    HotMemory,
+    WarmMemory,
+    PinnedMemory,
+    ScratchSpilled,
+    PersistedReusable,
+    RevalidatedRemote,
+    Evicted,
+}
+
+pub enum ArtifactResidencyReason {
+    ViewportCritical,
+    SignatureSensitive,
+    ProofArtifact,
+    SharedAcrossPages,
+    CachePressure,
+    PolicyRestricted,
+}
+
+pub struct ResidencyTransition {
+    pub artifact_digest: [u8; 32],
+    pub from: ArtifactResidencyClass,
+    pub to: ArtifactResidencyClass,
+    pub reason: ArtifactResidencyReason,
+}
+
+pub struct PeakMemoryWitness {
+    pub operation_kind: OperationKind,
+    pub artifact_digests: Vec<[u8; 32]>,
+    pub peak_bytes: u64,
+    pub spill_bytes: u64,
+    pub eviction_count: u64,
+}
+```
+
+Rules:
+- page plans, render chunk graphs, decoded streams, font artifacts, query
+  materializations, and proof artifacts MUST be residency-classified
+- memory-pressure degradation MUST emit `ResidencyTransition`s rather than only
+  aggregate counters
+- canonical benchmark classes SHOULD attach `PeakMemoryWitness` records for the
+  dominant workload classes they measure
+- artifact residency policy may tighten store-lifecycle policy, but it may
+  never contradict root pinning or persistence prohibitions already in force
+
 ### Resource canonicalization and deduplication contract
 
 ```
@@ -3062,6 +3240,8 @@ reuse, disagreement localization, and backend parity all benefit from a middle
 layer that is richer than tiles and more reusable than a page-wide flat op list.
 
 ```
+pub struct RenderChunkId(pub [u8; 32]);
+
 pub enum RenderChunkKind {
     GlyphRun,
     ImageXObject,
@@ -3069,25 +3249,43 @@ pub enum RenderChunkKind {
     TransparencyGroup,
     ShadingSpan,
     AnnotationAppearance,
+    ThreeDComposite,
+    ProgressivePlaceholder,
 }
 
 pub struct RenderChunk {
-    pub chunk_id: [u8; 32],
+    pub chunk_id: RenderChunkId,
     pub kind: RenderChunkKind,
     pub bbox: Rectangle,
     pub dependency_digests: Vec<NodeDigest>,
 }
 
 pub struct RenderChunkEdge {
-    pub parent: [u8; 32],
-    pub child: [u8; 32],
+    pub parent: RenderChunkId,
+    pub child: RenderChunkId,
     pub blend_mode: Option<BlendMode>,
     pub ocg_state: Option<ObjRef>,
+}
+
+pub struct RenderChunkWitness {
+    pub chunk_id: RenderChunkId,
+    pub kind: RenderChunkKind,
+    pub dependency_digests: Vec<NodeDigest>,
+    pub coverage_cell_ids: Vec<u64>,
+    pub completeness_class: String,
 }
 
 pub struct RenderChunkGraph {
     pub chunks: Vec<RenderChunk>,
     pub edges: Vec<RenderChunkEdge>,
+}
+
+pub struct CompositeMaterializationReceipt {
+    pub page_index: u32,
+    pub chunk_witnesses: Vec<RenderChunkWitness>,
+    pub backend_class: RenderDeterminismClass,
+    pub reused_chunks: Vec<RenderChunkId>,
+    pub recomputed_chunks: Vec<RenderChunkId>,
 }
 ```
 
@@ -3098,8 +3296,14 @@ Rules:
   graphs rather than only raw page-wide draw-op streams
 - partial reuse and invalidation SHOULD be expressible at chunk granularity when
   that yields a sharper witness than page- or tile-level reasoning
+- CPU, GPU, progressive, and 2D/3D composite paths SHOULD converge on the same
+  `RenderChunkId` identity model even when their final rasterization strategy
+  differs
 - oracle-disagreement tooling SHOULD localize disagreements to chunk ids when
   possible so proof output can point to the exact visual substructure in dispute
+- composite-materialization receipts SHOULD report chunk reuse versus
+  recomputation explicitly so chunk-level invalidation stays explainable across
+  backend boundaries
 
 **Output backend architecture:**
 
@@ -3897,6 +4101,7 @@ pub struct TextTruthSpan {
     pub page_index: u32,
     pub bbox: Rectangle,
     pub truth_class: TextTruthClass,
+    pub font_truth: Option<FontTruthClass>,
     pub provenance: ProvenanceAtom,
 }
 
@@ -3928,6 +4133,8 @@ Rules:
 - invisible OCR text, recovered Unicode, heuristic reading order, and inferred
   table structure MUST stay explicitly labeled rather than being silently
   promoted to stronger truth classes
+- font-backed truth claims SHOULD expose the active `FontTruthClass` when the
+  caller requests span-level truth detail
 - anchor-stability proof lanes MUST distinguish exact preservation,
   alias-map continuity, heuristic re-identification, and outright anchor loss
 - semantic anchors derived from ambiguous recovery or heuristic layout remain
@@ -4167,6 +4374,7 @@ pub struct OracleDisagreementRecord {
     pub oracle_digests: Vec<(String, [u8; 32])>,
     pub metric_summary: Vec<(String, f64)>,
     pub resolution: OracleResolutionKind,
+    pub explainability_digest: Option<[u8; 32]>,
     pub blocking: bool,
 }
 ```
@@ -4178,6 +4386,46 @@ Rules:
   exact resolution class used for gating
 - unresolved disagreements remain blocking for promotion until they are resolved
   or triaged with a manifest-qualified waiver
+
+```
+pub enum DisagreementAxis {
+    TextMetrics,
+    GlyphSubstitution,
+    BlendMode,
+    SoftMask,
+    Overprint,
+    Halftone,
+    ICCConversion,
+    ImageDecode,
+    Geometry,
+    AnnotationAppearance,
+    ThreeDComposite,
+}
+
+pub struct RenderDisagreementRegion {
+    pub page_index: u32,
+    pub region: RegionRef,
+    pub axes: Vec<DisagreementAxis>,
+    pub related_chunks: Vec<RenderChunkId>,
+    pub monkeybee_region_digest: [u8; 32],
+    pub oracle_region_digests: Vec<(String, [u8; 32])>,
+}
+
+pub struct RenderExplainabilityReceipt {
+    pub disagreement_id: String,
+    pub regions: Vec<RenderDisagreementRegion>,
+    pub related_geometry_witnesses: Vec<[u8; 32]>,
+    pub related_numeric_receipts: Vec<[u8; 32]>,
+}
+```
+
+Additional rules:
+- above-threshold render splits SHOULD emit a `RenderExplainabilityReceipt`
+  that localizes disagreement to bounded regions and typed semantic axes
+- page-level disagreement without region-level explainability is acceptable only
+  when Monkeybee cannot localize it more sharply and records that limit
+- chunk, geometry, and numeric witness linkages are preferred over free-form
+  narrative when explaining why a rendered region diverged
 
 ```
 pub enum OracleVerdictClass {
@@ -4344,6 +4592,48 @@ Required properties:
 This absorbs the best part of the "AI-native PDF" plans without sacrificing discipline: the engine
 becomes queryable and automatable because it exposes typed semantic anchors, not because it hands an
 LLM a bag of text and hopes for the best.
+
+### Anchor fragility and stability-envelope doctrine
+
+Anchor stability is not binary. Different anchors survive different classes of
+transforms, and agent-facing automation needs that fragility envelope to make
+safe decisions.
+
+```
+pub enum AnchorFragilityClass {
+    SnapshotLocal,
+    RewriteStable,
+    IncrementalStable,
+    LayoutSensitive,
+    ProviderSensitive,
+    AmbiguitySensitive,
+}
+
+pub struct AnchorStabilityEnvelope {
+    pub anchor_id: SemanticAnchorId,
+    pub fragility: AnchorFragilityClass,
+    pub survives_transforms: Vec<MetamorphicTransformKind>,
+    pub requires_alias_map_on: Vec<MetamorphicTransformKind>,
+    pub invalidated_by: Vec<String>,
+}
+
+pub struct AnchorDriftWitness {
+    pub anchor_id: SemanticAnchorId,
+    pub before_snapshot: SnapshotId,
+    pub after_snapshot: SnapshotId,
+    pub geometry_drift: Option<f64>,
+    pub logical_drift: Option<f64>,
+    pub resolved_via_alias_map: bool,
+}
+```
+
+Rules:
+- query APIs SHOULD be able to return an `AnchorStabilityEnvelope` alongside a
+  semantic anchor when requested
+- agent-facing edit APIs MUST reject anchors whose fragility class is
+  incompatible with the proposed transform unless the caller explicitly opts in
+- anchor-drift witnesses complement `AnchorStabilityWitness` by explaining how
+  far a surviving anchor moved even when continuity was preserved
 
 ### CLI output discipline
 
@@ -4568,6 +4858,50 @@ Rules:
   implementations
 - geometry-sensitive materializations SHOULD link to a `GeometryWitness` digest
   in receipts, reports, or trace artifacts
+
+### Generalized numeric doctrine
+
+Geometry is the most visible numeric surface, not the only one. Function
+evaluation, ICC interpolation, transfer/BG/UCR math, halftone logic,
+overprint simulation, matte handling, and 3D section-plane computation share
+the same escalation and witness discipline.
+
+```
+pub enum NumericSurfaceKind {
+    Geometry,
+    Type4Function,
+    SampledFunctionInterpolation,
+    BlendBoundaryLogic,
+    ICCInterpolation,
+    TransferFunction,
+    HalftoneEvaluation,
+    OverprintSimulation,
+    MatteUnpremultiplication,
+    SectionPlaneComputation,
+}
+
+pub struct NumericEscalationPolicy {
+    pub preferred: NumericKernelClass,
+    pub fallback: NumericKernelClass,
+    pub exactness_budget: u64,
+}
+
+pub struct NumericEscalationReceipt {
+    pub surface: NumericSurfaceKind,
+    pub initial_kernel: NumericKernelClass,
+    pub final_kernel: NumericKernelClass,
+    pub escalation_reason: String,
+    pub witness_digest: [u8; 32],
+}
+```
+
+Rules:
+- proof-canonical runs MUST pin numeric policy across geometry, function,
+  color, prepress, and 3D section-plane surfaces
+- non-canonical fast paths MAY downgrade or escalate kernels, but MUST emit an
+  explicit `NumericEscalationReceipt` whenever the active kernel changes
+- prepress and 3D features are not exempt from numeric truth surfaces merely
+  because they live outside the page-geometry hot path
 
 ### Mutation safety
 
@@ -5006,6 +5340,43 @@ Rules:
 - `BytePatchPlan`, `WriteReceipt`, and proof capsules MAY reference the
   feasibility witness by digest, but the unsat core remains the canonical
   user-visible explanation
+
+### Counterfactual plan frontier doctrine
+
+Minimal blocking sets explain why a requested plan failed. Monkeybee SHOULD
+also explain the nearest legal alternatives when that frontier can be computed
+cheaply and deterministically.
+
+```
+pub struct CounterfactualPlan {
+    pub label: String,
+    pub policy_digest: [u8; 32],
+    pub properties_gained: Vec<PreservedProperty>,
+    pub properties_lost: Vec<PreservedProperty>,
+    pub additional_cost: CostEnvelope,
+}
+
+pub struct PropertyLossFrontier {
+    pub requested_plan: String,
+    pub nearest_feasible: Vec<CounterfactualPlan>,
+    pub minimal_blocking_sets: Vec<Vec<String>>,
+}
+
+pub struct FeasibilityFrontierReceipt {
+    pub plan_kind: PlanKind,
+    pub requested_policy_digest: [u8; 32],
+    pub frontier: PropertyLossFrontier,
+}
+```
+
+Rules:
+- failed open, import, and save planning SHOULD emit a
+  `FeasibilityFrontierReceipt` when the frontier can be computed cheaply
+- unsat-core output and counterfactual-frontier output are complementary: one
+  explains why the requested plan failed, the other explains the nearest legal
+  alternatives
+- deterministic mode MUST stabilize frontier ordering and tie-break behavior so
+  the same infeasible request yields the same nearest-feasible alternatives
 
 ### Save planning invariant
 
@@ -5836,6 +6207,49 @@ Rules:
 - reclamation of persisted artifacts is reachability-based from durable
   manifests/receipts plus retention policy, not from best-effort age heuristics
 
+### Engine environment lock and evidence-bundle doctrine
+
+Pinned manifests are necessary but not sufficient. Benchmark claims, proof
+failures, and regression reports also need a content-addressed lock for the
+engine environment and a transitive artifact bundle that can be replayed
+without ambient host-state dependence.
+
+```
+pub struct EngineEnvironmentLock {
+    pub engine_version: String,
+    pub git_commit: Option<String>,
+    pub policy_digest: [u8; 32],
+    pub provider_manifest_ids: Vec<String>,
+    pub feature_module_manifest_ids: Vec<String>,
+    pub allocator: String,
+    pub simd_class: String,
+    pub numa_policy: String,
+    pub support_class: SupportClass,
+}
+
+pub struct EvidenceBundleManifest {
+    pub bundle_digest: [u8; 32],
+    pub environment: EngineEnvironmentLock,
+    pub fixture_digests: Vec<[u8; 32]>,
+    pub child_artifacts: Vec<ArtifactRef>,
+}
+
+pub struct ReproducerBundle {
+    pub manifest: EvidenceBundleManifest,
+    pub minimized_fixture: Option<ArtifactRef>,
+    pub trace_artifact: Option<ArtifactRef>,
+    pub disagreement_artifact: Option<ArtifactRef>,
+}
+```
+
+Rules:
+- proof-canonical failures SHOULD be publishable as `ReproducerBundle`s
+- benchmark claims SHOULD be attachable to an `EngineEnvironmentLock`
+- bug-report and regression artifacts MUST never rely on ambient host state
+  that is absent from the lockfile
+- reproducibility manifests SHOULD treat the environment lock as a first-class
+  child artifact rather than a prose-only description
+
 **Self-consistency invariant:** Monkeybee must be able to parse its own output without errors in strict mode. This is a hard test requirement, not a soft aspiration. Every generated PDF is round-tripped through Monkeybee's strict-mode parser as part of the write-path test suite.
 
 **Serialization ordering:** Objects may be serialized in any order, but the cross-reference must correctly point to each object's starting offset. For human-readability and debugging, prefer: header → body objects (in object-number order) → cross-reference → trailer → `%%EOF`.
@@ -6161,6 +6575,52 @@ Crashers and regressions must be minimized into the `minimized/` tier whenever f
 - repair-decision semantic digest
 - signature-impact classification
 The corpus must be indexed, categorized, and continuously exercised by CI.
+
+### Coverage lattice and synthesis doctrine
+
+Fixture counts alone are too coarse for a spec this broad. Monkeybee therefore
+tracks a coverage lattice across feature, producer, operation, support class,
+and synthesis lineage so release-facing claims are tied to exercised
+intersections rather than anecdotal wins.
+
+```
+pub enum CoverageAxis {
+    FeatureCode,
+    ProducerFamily,
+    OperationChain,
+    SupportClass,
+    SecurityProfile,
+    WriteMode,
+}
+
+pub struct CoverageLatticeCell {
+    pub axis_values: Vec<String>,
+    pub exercised_fixture_count: u32,
+    pub passing_fixture_count: u32,
+    pub disagreement_fixture_count: u32,
+    pub synthesis_backfill_count: u32,
+}
+
+pub struct CoverageLattice {
+    pub cells: Vec<CoverageLatticeCell>,
+}
+
+pub struct SynthesisWitness {
+    pub source_fixture_digest: Option<[u8; 32]>,
+    pub generator_family: String,
+    pub inserted_features: Vec<FeatureCode>,
+    pub preserved_features: Vec<FeatureCode>,
+    pub verdict: String,
+}
+```
+
+Rules:
+- blind-spot reporting SHOULD be derivable from a coverage lattice rather than
+  only free-form gap descriptions
+- release-facing claims for complex feature intersections SHOULD require lattice
+  coverage thresholds, not only isolated fixture passes
+- synthesized fixtures MUST carry witness lineage into reducers, disagreement
+  artifacts, and failure capsules
 
 ### Metamorphic proof doctrine
 
@@ -6596,6 +7056,7 @@ pub struct ReproducibilityManifest {
     pub oracle_manifest_id: String,
     pub provider_manifest_id: String,
     pub feature_module_manifest_id: String,
+    pub environment_lock_id: String,
     pub expectation_manifest_id: Option<String>,
     pub policy_digest: [u8; 32],
     pub fixture_set_digest: [u8; 32],
@@ -6608,7 +7069,8 @@ Rules:
   `ReproducibilityManifest` and every ledger, plan-selection record,
   oracle-disagreement record, and failure capsule links back to it
 - canonical runs require pinned oracle/provider/module manifests, deterministic
-  settings, stable locale/timezone/seed policy, and a resolved `policy_digest`
+  settings, stable locale/timezone/seed policy, a resolved `policy_digest`,
+  and an `environment_lock_id` whose digest matches `environment_digest`
 - ad hoc developer runs may emit non-canonical manifests, but they must set
   `canonical=false` rather than pretending to be release evidence
 - reproducibility manifests are content-addressed artifacts and participate in
@@ -6635,6 +7097,8 @@ pub struct BenchmarkWitness {
     pub numa_policy: String,
     pub storage_class: String,
     pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub topology_receipts: Vec<WorkReceipt>,
+    pub peak_memory_witnesses: Vec<PeakMemoryWitness>,
     pub metrics: Vec<MetricObservation>,
     pub threshold_verdicts: Vec<ThresholdVerdict>,
 }
@@ -6659,8 +7123,9 @@ Rules:
 - every canonical benchmark class emits at least one `BenchmarkWitness` linked to
   the enclosing `ReproducibilityManifest`
 - benchmark witnesses record support class, render determinism class, cache
-  temperature, fixture set, hardware/runtime topology, and threshold verdicts;
-  ad hoc timing logs are not release evidence
+  temperature, fixture set, hardware/runtime topology, work-class receipts,
+  peak-memory witnesses, and threshold verdicts; ad hoc timing logs are not
+  release evidence
 - README, release notes, dashboards, and CLI capability/performance summaries
   may cite only witness-backed metrics from canonical runs or explicitly labeled
   non-canonical runs
@@ -6741,6 +7206,7 @@ pub struct FailureCapsule {
     pub write_receipt_ref: Option<String>,
     pub plan_selection_ref: Option<String>,
     pub oracle_disagreement_ref: Option<String>,
+    pub reproducer_bundle_ref: Option<String>,
     pub decoder_attestations: Vec<DecoderAttestation>,
     pub repro_command: String,
     pub failure_kind: String,
@@ -6967,6 +7433,13 @@ pub struct NumericRobustnessProfile {
     pub hit_testing: NumericKernelClass,
     pub color_interpolation: NumericKernelClass,
     pub blend_boundary_logic: NumericKernelClass,
+    pub type4_functions: NumericKernelClass,
+    pub transfer_functions: NumericKernelClass,
+    pub halftone_evaluation: NumericKernelClass,
+    pub overprint_simulation: NumericKernelClass,
+    pub icc_interpolation: NumericKernelClass,
+    pub matte_unpremultiplication: NumericKernelClass,
+    pub section_plane_computation: NumericKernelClass,
 }
 ```
 
@@ -7397,6 +7870,7 @@ Rules:
 - [ ] Temporal replay and semantic-anchor stability harnesses run on representative fixtures.
 - [ ] Canonical proof runs emit reproducibility manifests, plan-selection records, and typed oracle-disagreement artifacts linked from ledgers and capsules.
 - [ ] Canonical proof runs emit oracle-consensus records and blind-spot ledgers wherever arbitration or coverage thresholds materially affect release-facing claims.
+- [ ] Canonical proof runs emit coverage-lattice artifacts and synthesis witnesses wherever generated fixtures materially backfill release-facing claims.
 - [ ] Canonical proof and scope outputs generate a capability surface matrix consumed by README/site/CLI surfaces without manual drift.
 
 ### Test obligation matrix

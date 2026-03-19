@@ -744,6 +744,51 @@ In runtime-agnostic callers (WASM, third-party integrations), `ExecutionContext`
 implementations (AtomicBool cancellation, manual budget tracking). The bridge is zero-cost: a
 single function pointer indirection for checkpoint calls.
 
+### Execution topology and work-class doctrine
+
+```rust
+pub enum WorkClass {
+    Probe,
+    Parse,
+    Decode,
+    Render,
+    Extract,
+    QueryMaterialize,
+    SavePlan,
+    Serialize,
+    PersistArtifact,
+    NativeIsolated,
+    ProofOracle,
+}
+
+pub enum InterferenceClass {
+    LatencyCritical,
+    ThroughputPreferred,
+    MemoryBurst,
+    IOBound,
+    DeterminismSensitive,
+    IsolationRequired,
+}
+
+pub struct WorkReceipt {
+    pub work_class: WorkClass,
+    pub lane_id: String,
+    pub wall_time_ms: u64,
+    pub cpu_units: u64,
+    pub peak_memory_bytes: u64,
+    pub blocked_on: Vec<WorkClass>,
+}
+```
+
+Implementation notes:
+- `monkeybee-core::topology` owns the shared work-class and lane vocabulary so
+  scheduler behavior remains comparable across facade, proof, bytes, and CLI
+- proof-canonical runs attach work receipts to benchmark witnesses and
+  topology-sensitive failure artifacts rather than treating runtime drift as
+  anecdotal
+- viewport-critical render work must remain isolatable from proof/oracle and
+  persistent-artifact publication lanes under the configured topology policy
+
 ### Async orchestration layer
 
 Monkeybee PDF uses `asupersync` as its async runtime and orchestration substrate. Per the upstream
@@ -964,6 +1009,32 @@ pub struct FontHealthSummary {
     pub cid_vertical_metric_font_count: u32,
 }
 
+pub enum FontTruthClass {
+    EmbeddedAuthoritative,
+    PdfEncodingAuthoritative,
+    ToUnicodeAuthoritative,
+    EmbeddedCmapRecovered,
+    GlyphNameInferred,
+    SubstituteRenderOnly,
+    Unmappable,
+}
+
+pub struct FontMappingWitness {
+    pub font_fingerprint: ResourceFingerprint,
+    pub truth_class: FontTruthClass,
+    pub unicode_authority: Option<String>,
+    pub metric_authority: Option<String>,
+    pub outline_authority: Option<String>,
+    pub affected_charcodes: Vec<u32>,
+}
+
+pub struct FontRepairReceipt {
+    pub font_fingerprint: ResourceFingerprint,
+    pub repairs_applied: Vec<String>,
+    pub truth_surface: Vec<FontMappingWitness>,
+    pub residual_unknowns: Vec<u32>,
+}
+
 pub enum ProvenanceTrustClass {
     SourceExact,
     SourceRepaired,
@@ -1156,6 +1227,20 @@ pub struct QueryPolicy {
     pub allow_partial_reuse: bool,
     pub emit_materialization_receipts: bool,
 }
+
+pub enum OperationKind {
+    Open,
+    Probe,
+    Render,
+    Extract,
+    Query,
+    Save,
+    Import,
+    Diff,
+    HistoryReplay,
+    ProofRun,
+    PersistArtifact,
+}
 ```
 
 ### Policy composition and plan selection (`monkeybee-core::policy` / facade)
@@ -1195,6 +1280,14 @@ pub enum PlanKind {
     RecoveryCollapse,
 }
 
+pub struct CostEnvelope {
+    pub estimated_bytes_read: u64,
+    pub estimated_peak_memory: u64,
+    pub estimated_cpu_units: u64,
+    pub estimated_latency_ms: u64,
+    pub expected_degradations: Vec<FeatureCode>,
+}
+
 pub struct RejectedPlan {
     pub label: String,
     pub reason: String,
@@ -1206,6 +1299,26 @@ pub struct PlanSelectionRecord {
     pub rejected: Vec<RejectedPlan>,
     pub policy_digest: [u8; 32],
     pub trace_digest: [u8; 32],
+}
+
+pub struct CounterfactualPlan {
+    pub label: String,
+    pub policy_digest: [u8; 32],
+    pub properties_gained: Vec<PreservedProperty>,
+    pub properties_lost: Vec<PreservedProperty>,
+    pub additional_cost: CostEnvelope,
+}
+
+pub struct PropertyLossFrontier {
+    pub requested_plan: String,
+    pub nearest_feasible: Vec<CounterfactualPlan>,
+    pub minimal_blocking_sets: Vec<Vec<String>>,
+}
+
+pub struct FeasibilityFrontierReceipt {
+    pub plan_kind: PlanKind,
+    pub requested_policy_digest: [u8; 32],
+    pub frontier: PropertyLossFrontier,
 }
 ```
 
@@ -1662,6 +1775,12 @@ pub struct ArtifactDigestRef {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct ArtifactRef {
+    pub kind: String,
+    pub digest: String,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct LedgerSummary {
     pub total_features: u32,
     pub tier1_count: u32,
@@ -1713,9 +1832,36 @@ pub struct ReproducibilityManifest {
     pub oracle_manifest_id: String,
     pub provider_manifest_id: String,
     pub feature_module_manifest_id: String,
+    pub environment_lock_id: String,
     pub policy_digest: [u8; 32],
     pub fixture_set_digest: [u8; 32],
     pub environment_digest: [u8; 32],
+}
+
+pub struct EngineEnvironmentLock {
+    pub engine_version: String,
+    pub git_commit: Option<String>,
+    pub policy_digest: [u8; 32],
+    pub provider_manifest_ids: Vec<String>,
+    pub feature_module_manifest_ids: Vec<String>,
+    pub allocator: String,
+    pub simd_class: String,
+    pub numa_policy: String,
+    pub support_class: SupportClass,
+}
+
+pub struct EvidenceBundleManifest {
+    pub bundle_digest: [u8; 32],
+    pub environment: EngineEnvironmentLock,
+    pub fixture_digests: Vec<[u8; 32]>,
+    pub child_artifacts: Vec<ArtifactRef>,
+}
+
+pub struct ReproducerBundle {
+    pub manifest: EvidenceBundleManifest,
+    pub minimized_fixture: Option<ArtifactRef>,
+    pub trace_artifact: Option<ArtifactRef>,
+    pub disagreement_artifact: Option<ArtifactRef>,
 }
 
 pub enum OracleResolutionKind {
@@ -1733,7 +1879,43 @@ pub struct OracleDisagreementRecord {
     pub page_index: u32,
     pub oracle_manifest_id: String,
     pub resolution: OracleResolutionKind,
+    pub explainability_digest: Option<[u8; 32]>,
     pub blocking: bool,
+}
+
+pub enum DisagreementAxis {
+    TextMetrics,
+    GlyphSubstitution,
+    BlendMode,
+    SoftMask,
+    Overprint,
+    Halftone,
+    ICCConversion,
+    ImageDecode,
+    Geometry,
+    AnnotationAppearance,
+    ThreeDComposite,
+}
+
+pub struct RegionRef {
+    pub bbox: [f32; 4],
+    pub reason: String,
+}
+
+pub struct RenderDisagreementRegion {
+    pub page_index: u32,
+    pub region: RegionRef,
+    pub axes: Vec<DisagreementAxis>,
+    pub related_chunks: Vec<RenderChunkId>,
+    pub monkeybee_region_digest: [u8; 32],
+    pub oracle_region_digests: Vec<(String, [u8; 32])>,
+}
+
+pub struct RenderExplainabilityReceipt {
+    pub disagreement_id: String,
+    pub regions: Vec<RenderDisagreementRegion>,
+    pub related_geometry_witnesses: Vec<[u8; 32]>,
+    pub related_numeric_receipts: Vec<[u8; 32]>,
 }
 
 pub enum OracleVerdictClass {
@@ -1765,6 +1947,35 @@ pub struct BlindSpotLedger {
     pub entries: Vec<BlindSpotLedgerEntry>,
 }
 
+pub enum CoverageAxis {
+    FeatureCode,
+    ProducerFamily,
+    OperationChain,
+    SupportClass,
+    SecurityProfile,
+    WriteMode,
+}
+
+pub struct CoverageLatticeCell {
+    pub axis_values: Vec<String>,
+    pub exercised_fixture_count: u32,
+    pub passing_fixture_count: u32,
+    pub disagreement_fixture_count: u32,
+    pub synthesis_backfill_count: u32,
+}
+
+pub struct CoverageLattice {
+    pub cells: Vec<CoverageLatticeCell>,
+}
+
+pub struct SynthesisWitness {
+    pub source_fixture_digest: Option<[u8; 32]>,
+    pub generator_family: String,
+    pub inserted_features: Vec<FeatureCode>,
+    pub preserved_features: Vec<FeatureCode>,
+    pub verdict: String,
+}
+
 pub enum NumericKernelClass {
     FastFloat,
     GuardedFloat,
@@ -1779,6 +1990,13 @@ pub struct NumericRobustnessProfile {
     pub hit_testing: NumericKernelClass,
     pub color_interpolation: NumericKernelClass,
     pub blend_boundary_logic: NumericKernelClass,
+    pub type4_functions: NumericKernelClass,
+    pub transfer_functions: NumericKernelClass,
+    pub halftone_evaluation: NumericKernelClass,
+    pub overprint_simulation: NumericKernelClass,
+    pub icc_interpolation: NumericKernelClass,
+    pub matte_unpremultiplication: NumericKernelClass,
+    pub section_plane_computation: NumericKernelClass,
 }
 
 pub struct BenchmarkWitness {
@@ -1795,6 +2013,8 @@ pub struct BenchmarkWitness {
     pub numa_policy: String,
     pub storage_class: String,
     pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub topology_receipts: Vec<WorkReceipt>,
+    pub peak_memory_witnesses: Vec<PeakMemoryWitness>,
     pub metrics: Vec<MetricObservation>,
     pub threshold_verdicts: Vec<ThresholdVerdict>,
 }
@@ -1852,12 +2072,15 @@ pub struct FixtureGenealogy {
 
 Implementation notes:
 - every canonical proof run emits one `ReproducibilityManifest` and links it from ledgers, capsules, and disagreement records
+- environment locks and evidence bundles are content-addressed proof artifacts rather than ad hoc CI attachments
 - oracle consensus and blind-spot artifacts are first-class proof outputs, not report garnish
+- region-level disagreement explainability receipts are first-class proof outputs, not screenshots plus prose
+- blind-spot suppression should be derivable from `CoverageLattice`, and synthesized fixtures must retain lineage through `SynthesisWitness`
 - oracle disagreements are typed artifacts, not free-form comments in CI logs
 - strategy promotion stays blocked while any manifest-qualified disagreement remains unresolved
 - canonical benchmark classes emit schema-versioned `BenchmarkWitness` artifacts tied to the same
   reproducibility manifest, including support class, render determinism class, numeric profile,
-  topology/runtime fields, and threshold verdicts
+  topology/runtime fields, work receipts, peak-memory witnesses, and threshold verdicts
 - benchmark witnesses follow the same manifest-last durable publication rules as ledgers,
   receipts, and failure capsules
 - metamorphic proof runs emit deterministic `MetamorphicWitness` artifacts and
@@ -2263,6 +2486,8 @@ pub struct PagePlan {
     pub materialization_digest: [u8; 32],
 }
 
+pub struct RenderChunkId(pub [u8; 32]);
+
 pub enum RenderChunkKind {
     GlyphRun,
     ImageXObject,
@@ -2270,25 +2495,43 @@ pub enum RenderChunkKind {
     TransparencyGroup,
     ShadingSpan,
     AnnotationAppearance,
+    ThreeDComposite,
+    ProgressivePlaceholder,
 }
 
 pub struct RenderChunk {
-    pub chunk_id: [u8; 32],
+    pub chunk_id: RenderChunkId,
     pub kind: RenderChunkKind,
     pub bbox: Rectangle,
     pub dependency_digests: Vec<NodeDigest>,
 }
 
 pub struct RenderChunkEdge {
-    pub parent: [u8; 32],
-    pub child: [u8; 32],
+    pub parent: RenderChunkId,
+    pub child: RenderChunkId,
     pub blend_mode: Option<BlendMode>,
     pub ocg_state: Option<ObjRef>,
+}
+
+pub struct RenderChunkWitness {
+    pub chunk_id: RenderChunkId,
+    pub kind: RenderChunkKind,
+    pub dependency_digests: Vec<NodeDigest>,
+    pub coverage_cell_ids: Vec<u64>,
+    pub completeness_class: String,
 }
 
 pub struct RenderChunkGraph {
     pub chunks: Vec<RenderChunk>,
     pub edges: Vec<RenderChunkEdge>,
+}
+
+pub struct CompositeMaterializationReceipt {
+    pub page_index: u32,
+    pub chunk_witnesses: Vec<RenderChunkWitness>,
+    pub backend_class: RenderDeterminismClass,
+    pub reused_chunks: Vec<RenderChunkId>,
+    pub recomputed_chunks: Vec<RenderChunkId>,
 }
 
 pub enum DrawOp {
@@ -2310,6 +2553,8 @@ Implementation notes:
   without creating a second independent interpreter
 - chunk identities must remain deterministic under fixed inputs so cache reuse,
   witness emission, and oracle-localization artifacts stay stable
+- CPU, GPU, progressive, and 2D/3D composite paths should share one stable
+  `RenderChunkId` model so backend differences do not obscure invalidation or proof receipts
 
 ### Error taxonomy (`monkeybee-core::error`)
 
@@ -2413,6 +2658,51 @@ pub struct CacheManager {
     pub invariant_certificates: DashMap<(SnapshotId, SnapshotId, WriteMode, ProofProfileHash), Arc<InvariantCertificate>>,
 }
 ```
+
+### Artifact residency and memory hierarchy
+
+```rust
+pub enum ArtifactResidencyClass {
+    HotMemory,
+    WarmMemory,
+    PinnedMemory,
+    ScratchSpilled,
+    PersistedReusable,
+    RevalidatedRemote,
+    Evicted,
+}
+
+pub enum ArtifactResidencyReason {
+    ViewportCritical,
+    SignatureSensitive,
+    ProofArtifact,
+    SharedAcrossPages,
+    CachePressure,
+    PolicyRestricted,
+}
+
+pub struct ResidencyTransition {
+    pub artifact_digest: [u8; 32],
+    pub from: ArtifactResidencyClass,
+    pub to: ArtifactResidencyClass,
+    pub reason: ArtifactResidencyReason,
+}
+
+pub struct PeakMemoryWitness {
+    pub operation_kind: OperationKind,
+    pub artifact_digests: Vec<[u8; 32]>,
+    pub peak_bytes: u64,
+    pub spill_bytes: u64,
+    pub eviction_count: u64,
+}
+```
+
+Implementation notes:
+- decoded streams, page plans, render chunk graphs, semantic graphs, and proof
+  artifacts carry explicit residency state in addition to root-level store residency
+- memory-pressure transitions are typed diagnostics/trace artifacts, not only
+  aggregate counters in cache stats
+- canonical benchmarks attach peak-memory witnesses alongside timing/topology evidence
 
 ### Content stream rewriter (`monkeybee-edit::rewriter`)
 
@@ -2738,6 +3028,32 @@ pub struct AnchorStabilityWitness {
     pub failure_reason: Option<String>,
 }
 
+pub enum AnchorFragilityClass {
+    SnapshotLocal,
+    RewriteStable,
+    IncrementalStable,
+    LayoutSensitive,
+    ProviderSensitive,
+    AmbiguitySensitive,
+}
+
+pub struct AnchorStabilityEnvelope {
+    pub anchor_id: SemanticAnchorId,
+    pub fragility: AnchorFragilityClass,
+    pub survives_transforms: Vec<MetamorphicTransformKind>,
+    pub requires_alias_map_on: Vec<MetamorphicTransformKind>,
+    pub invalidated_by: Vec<String>,
+}
+
+pub struct AnchorDriftWitness {
+    pub anchor_id: SemanticAnchorId,
+    pub before_snapshot: SnapshotId,
+    pub after_snapshot: SnapshotId,
+    pub geometry_drift: Option<f64>,
+    pub logical_drift: Option<f64>,
+    pub resolved_via_alias_map: bool,
+}
+
 pub struct EditProposal {
     pub proposal_id: String,
     pub anchors: Vec<SemanticAnchorId>,
@@ -2755,6 +3071,8 @@ Implementation notes:
 - anchor-stability witnesses must distinguish exact continuity, alias-map
   continuity, heuristic re-identification, and loss so agent-safe edit flows
   can tell stability from best-effort recovery
+- query APIs should be able to return an `AnchorStabilityEnvelope` for callers
+  that need transform-survival/fragility information before proposing edits
 
 ### WritePlan classification (`monkeybee-write::plan`)
 
@@ -3061,11 +3379,16 @@ PdfSnapshot + extract profile
 - Decode pipeline tests: char code -> font/CMap -> CID/glyph -> Unicode/metrics for each font type.
 - Authoring pipeline tests: Unicode -> shaping/bidi/line breaking/font fallback -> positioned glyph runs.
 - Unicode fallback chain tests: known fonts with broken/missing ToUnicode produce expected mappings.
+- Truth-surface tests: extraction can cite `FontTruthClass` per span on demand,
+  and render-side substitution remains distinguishable from extraction-side
+  Unicode authority.
 - Shaping/bidi tests: complex scripts (Arabic, Hebrew, Devanagari), ligatures, bidi reordering (authoring pipeline only).
 - Subsetting tests: subset -> re-embed -> verify glyph coverage and metrics round-trip, including
   CFF global/local subroutine closure, renumbering, and bias recalculation.
 - Recovery tests: damaged Type 1 fonts try the allowed alternate key set deterministically and
   record which key succeeded.
+- Repair-receipt tests: cmap salvage, CFF closure, and alternate-key Type 1
+  recovery emit deterministic `FontRepairReceipt` artifacts.
 - Validation tests: `/FontDescriptor` flag bits are cross-checked against embedded font data and
   CID vertical metrics from `/W2` / `/DW2` drive expected vertical layout.
 - Search/hit-test tests: known text at known positions -> verify search finds it, hit-test returns correct quads.
@@ -3082,9 +3405,14 @@ PdfSnapshot + extract profile
   output-condition lookup, and trap-annotation rendering where supported.
 - Function-evaluation tests: transfer functions, BG/UCR hooks, spot-function and threshold-screen inspection, and N-dimensional sampled-function interpolation fixtures.
 - Quality tests: Lanczos/Mitchell resampling behavior, shading-edge anti-aliasing, and matte un-premultiplication stability.
+- Numeric-policy tests: Type 4 functions, ICC interpolation, transfer functions,
+  halftone evaluation, and overprint simulation pin the expected kernels and
+  emit `NumericEscalationReceipt` artifacts when the active path changes.
 - Cooperative cancellation tests: cancel mid-render at each checkpoint type.
 - Progressive rendering tests: missing resources produce correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles or chunks.
 - Query reuse tests: repeated renders on unchanged snapshot reuse page-plan/tile materializations and preserve invalidation-witness precision.
+- Chunk-identity tests: CPU, progressive, GPU, and 2D/3D composite paths
+  preserve stable `RenderChunkId` linkage for unchanged display subgraphs.
 - Geometry-kernel tests: geometry witnesses, degeneracy classifications, and numeric-robustness/doctrine pinning stay stable across proof-canonical render fixtures.
 - Coverage-cell tests: render-side region accounting agrees with shared coverage-cell indexes used by hit-testing, redaction audit, and prepress summaries.
 
@@ -3095,6 +3423,8 @@ PdfSnapshot + extract profile
 - Cross-section tests: cross-section planes produce geometrically correct cut surfaces.
 - Round-trip tests: 3D annotation dictionaries survive load-save-reload without data loss.
 - Scene-receipt tests: scene digests, named-view digests, topology witness linkage, PMI counts, and section-plane view-state provenance remain deterministic for fixed fixtures.
+- Composite-receipt tests: 2D/3D page composites emit chunk witnesses that
+  participate in invalidation, disagreement localization, and proof receipts.
 - WASM tests: 3D renders in WebGPU-capable browsers.
 
 ### monkeybee-gpu
@@ -3123,6 +3453,8 @@ PdfSnapshot + extract profile
   redaction-verification summaries when redactions are applied.
 - Emission-journal tests: deterministic saves emit replayable object order, decision logs, and byte-address maps.
 - Feasibility tests: save-plan constraint graphs emit minimal unsat cores and stable escalation witnesses for preserve/incremental/full-rewrite boundary cases.
+- Counterfactual-frontier tests: infeasible save/import/open planning emits
+  nearest-feasible alternative plans with deterministic property-loss frontiers.
 - Round-trip tests: parse -> write -> re-parse -> compare object graphs.
 - Self-consistency tests: write output -> parse with monkeybee-parser -> verify structural validity.
 - Reference validation: write output -> open in PDFium/MuPDF -> verify renders correctly.
@@ -3193,6 +3525,8 @@ PdfSnapshot + extract profile
   summaries, and placed-image resolution metadata match fixtures.
 - Semantic graph tests: graph node/edge construction is deterministic for fixed extract profile.
 - Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps and anchor-stability witnesses with the correct continuity class.
+- Fragility tests: anchors emit stable fragility classes and transform-survival
+  envelopes on canonical metamorphic fixtures.
 - Coverage-cell tests: shared coverage indexes expose signed overlap, hidden-content flags, resource closure, and TAC estimates consistently across extraction and forensics consumers.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
 
@@ -3225,11 +3559,20 @@ PdfSnapshot + extract profile
 - Evidence tests: artifact generation produces valid, parseable output.
 - Ledger JSON schema tests: ledger output validates against schema, version tracking fields populate correctly, schema versioning remains backward-compatible within majors.
 - Reproducibility tests: canonical runs emit a manifest and every ledger/capsule/disagreement/plan-selection artifact links back to it.
+- Topology-policy tests: proof/oracle work cannot silently starve viewport-critical
+  render lanes under canonical topology policies.
 - Benchmark-witness tests: canonical benchmarks emit schema-valid witness records with support
-  class, render determinism class, numeric profile, topology/runtime fields, threshold verdicts, and reproducibility linkage.
+  class, render determinism class, numeric profile, topology/runtime fields,
+  work receipts, peak-memory witnesses, threshold verdicts, and reproducibility linkage.
 - Oracle-resolution tests: above-threshold renderer splits emit typed disagreement records with correct blocking state and resolution class.
+- Region-disagreement tests: above-threshold render splits emit bounded
+  disagreement regions with typed semantic axes and chunk/geometry/numeric linkage.
 - Oracle-consensus tests: canonical arbitration emits typed consensus records when expectations are resolved without a blocking disagreement.
 - Blind-spot tests: release-facing capability summaries are suppressed or qualified when coverage thresholds are not met.
+- Coverage-lattice tests: feature × producer × operation × support-class
+  intersections remain represented or explicitly ledgered as gaps.
+- Synthesis-witness tests: generated adversarial and interaction fixtures retain
+  provenance through reducers and disagreement artifacts.
 - Metamorphic tests: representation-changing transforms emit schema-valid witnesses, preserve declared surfaces, and retain fixture genealogy through reducers.
 - Corpus manifest tests: every fixture has an `ExpectationManifest`.
 - Repair expectation tests: ambiguous recovery asserts chosen candidate id, semantic digest, and write-impact class unless explicitly waived.
@@ -3239,6 +3582,8 @@ PdfSnapshot + extract profile
 - Expansion-lane corpus tests: prepress, PAdES/LTV, tagged-accessibility, form-interchange, action inventory, portfolio/thread, and multimedia fixtures remain represented and triaged.
 - Capability-matrix tests: generated capability surface matrix stays in sync with scope registry, support-class doctrine, proof status, and README/CLI consumers.
 - Certificate tests: proof harness can recompute invariant-certificate digests independently.
+- Evidence-bundle tests: canonical regressions publish `ReproducerBundle`s whose
+  environment lock and child-artifact closure are complete and durable.
 - Regression tests: unknown degradations, hypothesis drift, or scope-class violations fail unless triaged.
 
 ## Subordinate implementation docs
@@ -3249,6 +3594,7 @@ their respective subsystems:
 - `docs/implementation/substrate.md` — node digests, content-addressed store, root construction, lineage, query runtime
 - `docs/implementation/policy-composition.md` — resolved policy sets, conflict taxonomy, plan-selection evidence, operation-profile precedence
 - `docs/implementation/store-lifecycle.md` — substrate root pinning, spill policy, persistence eligibility, reachability sweep
+- `docs/implementation/residency.md` — artifact residency classes, spill/evict/revalidate transitions, peak-memory witnesses, cache-pressure diagnostics, and persistence boundaries
 - `docs/implementation/query-engine.md` — QuerySpec model, materialization records, invalidation, cache namespaces
 - `docs/implementation/acceleration-indexes.md` — materialized index families, freshness/partiality semantics, scan fallback receipts
 - `docs/implementation/geometry-kernel.md` — numeric robustness doctrine, tolerance policy, degeneracy classes, and geometry witnesses
@@ -3276,6 +3622,7 @@ their respective subsystems:
 - `docs/implementation/temporal-replay.md` — revision frames, historical snapshot materialization, replay semantics
 - `docs/implementation/proof-manifests.md` — expectation manifest schema, triage workflow, CI semantics, certificate audit workflow
 - `docs/implementation/reproducibility.md` — canonical-run manifests, environment pinning, artifact linkage rules
+- `docs/implementation/evidence-bundles.md` — environment lockfiles, bundle manifests, transitive artifact closure, reproducer-bundle publication, and retention rules
 - `docs/implementation/oracle-resolution.md` — disagreement record schema, arbitration workflow, waiver rules
 - `docs/implementation/metamorphic-proof.md` — transform catalog, bounded-drift expectations, reducer workflow, fixture genealogy
 - `docs/implementation/capability-matrix.md` — generated capability surface matrix, scope-registry derivation, README/CLI/site consumers
