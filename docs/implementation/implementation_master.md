@@ -220,6 +220,7 @@ monkeybee-pdf/
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── lexer.rs          # tokenization
+│   │   │   ├── artifact.rs       # TokenTape, ObjectBoundaryIndex, salvage receipts
 │   │   │   ├── object_parser.rs  # object parsing
 │   │   │   ├── xref_parser.rs    # xref table/stream parsing + repair
 │   │   │   ├── stream.rs         # stream dispatch (delegates to monkeybee-codec)
@@ -312,7 +313,7 @@ monkeybee-pdf/
 │   │   │   ├── transform.rs      # color transforms and rendering-intent execution
 │   │   │   ├── devicen.rs        # Separation/DeviceN/NChannel resolution
 │   │   │   ├── intent.rs         # document/page output-intent cascade selection
-│   │   │   ├── proof.rs          # soft proof, TAC accounting, color witnesses
+│   │   │   ├── proof.rs          # soft proof, proof conditions, TAC accounting, color witnesses
 │   │   │   └── receipt.rs        # color/materialization receipts
 │   │   └── Cargo.toml
 │   ├── monkeybee-paint/          # shared paint/appearance primitives (non-raster, page-independent)
@@ -998,6 +999,30 @@ pub struct OpenProbe {
     pub recovery_candidates: Vec<RecoveryCandidateSummary>,
 }
 
+pub enum ComplexityHazardKind {
+    OperatorExplosion,
+    ObjectStreamFanout,
+    IncrementalChainExplosion,
+    FunctionStepExplosion,
+    NameTreeBreadthExplosion,
+    FontTableExplosion,
+    MeshPrimitiveExplosion,
+    DecodeExpansionExplosion,
+}
+
+pub struct ComplexityHazard {
+    pub kind: ComplexityHazardKind,
+    pub subject: String,
+    pub observed_scale: u64,
+    pub mitigation: String,
+}
+
+pub struct BudgetDerivationReceipt {
+    pub fingerprint: ComplexityFingerprint,
+    pub hazards: Vec<ComplexityHazard>,
+    pub chosen_budget: BudgetRecommendation,
+}
+
 pub enum PadesLevel {
     BB,
     BT,
@@ -1049,6 +1074,33 @@ pub struct FontRepairReceipt {
     pub repairs_applied: Vec<String>,
     pub truth_surface: Vec<FontMappingWitness>,
     pub residual_unknowns: Vec<u32>,
+}
+
+pub enum FontAuthoritySurface {
+    UnicodeMap,
+    AdvanceMetrics,
+    OutlineProgram,
+    VerticalMetrics,
+    VariationData,
+    SubsetClosure,
+}
+
+pub struct FontAuthorityEdge {
+    pub surface: FontAuthoritySurface,
+    pub authority: FontTruthClass,
+    pub source: String,
+}
+
+pub struct FontAuthorityGraph {
+    pub font_fingerprint: ResourceFingerprint,
+    pub edges: Vec<FontAuthorityEdge>,
+}
+
+pub struct SubsetClosureReceipt {
+    pub font_fingerprint: ResourceFingerprint,
+    pub glyph_ids: Vec<u32>,
+    pub subroutines_retained: Vec<u32>,
+    pub canonical_subset_digest: [u8; 32],
 }
 
 pub enum ProvenanceTrustClass {
@@ -1504,6 +1556,7 @@ pub enum ArtifactKind {
     PagePlan,
     RenderChunkGraph,
     CoverageCellIndex,
+    CoverageAtlas,
     ResolvedResources,
     RasterTile,
     ExtractSurface,
@@ -1511,6 +1564,7 @@ pub enum ArtifactKind {
     AccessPlan,
     ColorTransform,
     SceneReceipt,
+    SceneNormalForm,
     WritePlan,
     DiffArtifact,
 }
@@ -1679,6 +1733,27 @@ pub struct BytePatchReceipt {
     pub preserved_signed_ranges: Vec<(u64, u64)>,
 }
 
+pub enum ReservationOverflowPolicy {
+    RefuseAndExplain,
+    EscalateToLargerUnsignedPlaceholder,
+    EscalateToCounterfactualPlan,
+}
+
+pub struct SignatureReservationPlan {
+    pub field_ref: ObjRef,
+    pub reserved_contents_bytes: u64,
+    pub reserved_dss_bytes: u64,
+    pub reserved_vri_bytes: u64,
+    pub overflow_policy: ReservationOverflowPolicy,
+}
+
+pub struct AppendBudgetReceipt {
+    pub prior_revision_count: u32,
+    pub predicted_append_bytes: u64,
+    pub reserved_bytes: u64,
+    pub overflow_risk: String,
+}
+
 pub struct WriteReceipt {
     pub schema_version: String,
     pub snapshot_id: SnapshotId,
@@ -1696,7 +1771,9 @@ pub struct WriteReceipt {
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
     pub provenance_summary: Option<SurfaceProvenanceSummary>,
+    pub append_budget: Option<AppendBudgetReceipt>,
     pub transport_continuity: Option<TransportContinuityReceipt>,
+    pub transport_convergence: Option<SourceConvergenceReceipt>,
     pub emission_journal: Option<EmissionJournal>,
     pub feasibility_witness: Option<FeasibilityWitness>,
     pub frontier_witness: Option<FrontierWitness>,
@@ -1739,8 +1816,14 @@ Implementation notes:
 - `EmissionJournal` is the serializer replay surface for deterministic and
   preserve-aware saves; output-byte diffs without the corresponding journal are
   insufficient debugging evidence for canonical save regressions
+- signing flows should compute `SignatureReservationPlan` and
+  `AppendBudgetReceipt` before any signing bytes are emitted; placeholder
+  overflow is a planning artifact, not a late serialization surprise
 - write receipts should carry transport continuity evidence whenever remote
   range trust materially influenced preserve, signature, or correctness claims
+- when remote trust is still sparse, `transport_convergence` makes that
+  explicit so signature-safe and proof-canonical saves can refuse weaker trust
+  classes deterministically
 - provenance summaries on receipts are aggregated facts, not narrative prose;
   every caller-visible save-impact claim needs a typed provenance path back to
   source, repair, or synthesized evidence
@@ -1893,6 +1976,24 @@ pub struct ReproducerBundle {
     pub minimized_fixture: Option<ArtifactRef>,
     pub trace_artifact: Option<ArtifactRef>,
     pub disagreement_artifact: Option<ArtifactRef>,
+}
+
+pub struct AlgorithmVariantId(pub [u8; 32]);
+
+pub struct AlgorithmVariantManifest {
+    pub variant_id: AlgorithmVariantId,
+    pub subsystem: String,
+    pub baseline_variant: String,
+    pub active_variant: String,
+    pub proof_metric: String,
+    pub cost_metric: String,
+}
+
+pub struct VariantSelectionReceipt {
+    pub subsystem: String,
+    pub chosen_variant: AlgorithmVariantId,
+    pub rejected_variants: Vec<AlgorithmVariantId>,
+    pub reason: String,
 }
 
 pub enum OracleResolutionKind {
@@ -2708,12 +2809,27 @@ pub struct VersionInfo {
 ### Cache management (`monkeybee-substrate::cache`)
 
 ```rust
+pub struct CacheNamespaceDigest(pub [u8; 32]);
+
 pub struct CacheNamespace {
+    pub namespace_digest: CacheNamespaceDigest,
     pub snapshot_id: SnapshotId,
     pub security_profile: SecurityProfile,
-    pub provider_manifest_id: ProviderManifestId,
-    pub determinism_class: DeterminismClass,
+    pub support_class: SupportClass,
+    pub policy_digest: [u8; 32],
+    pub provider_manifest_digest: [u8; 32],
+    pub feature_module_manifest_digest: [u8; 32],
+    pub render_determinism_class: Option<RenderDeterminismClass>,
+    pub native_isolation_class: Option<NativeIsolationClass>,
+    pub fetch_epoch: Option<FetchEpoch>,
     pub view_state_hash: ViewStateHash,
+}
+
+pub struct ReuseAdmissibilityReceipt {
+    pub artifact_digest: [u8; 32],
+    pub namespace_digest: CacheNamespaceDigest,
+    pub admissible: bool,
+    pub rejection_reason: Option<String>,
 }
 
 pub struct CacheConfig {
@@ -2742,6 +2858,16 @@ pub struct CacheManager {
     pub invariant_certificates: DashMap<(SnapshotId, SnapshotId, WriteMode, ProofProfileHash), Arc<InvariantCertificate>>,
 }
 ```
+
+Implementation notes:
+- cross-snapshot reuse requires both dependency validity and namespace
+  admissibility; cache hits without a valid `CacheNamespace` match are
+  correctness bugs in proof-canonical mode
+- provider/module/isolation/support-class drift and fetch-epoch drift are
+  namespace boundaries, not soft hints
+- reusable artifact admission should be auditable through
+  `ReuseAdmissibilityReceipt`, especially when viewer-adaptive and
+  proof-canonical surfaces coexist in one process
 
 ### Artifact residency and memory hierarchy
 
@@ -2938,11 +3064,34 @@ pub struct SceneReceipt {
     pub topology_witness_digest: Option<[u8; 32]>,
     pub budget_class: String,
 }
+
+pub enum SceneNormalFormKind {
+    TopologyCanonical,
+    TessellationCanonical,
+    ViewStateCanonical,
+}
+
+pub struct SceneNormalForm {
+    pub kind: SceneNormalFormKind,
+    pub canonical_digest: [u8; 32],
+    pub omitted_surfaces: Vec<String>,
+}
+
+pub struct TessellationReceipt {
+    pub source_scene_digest: [u8; 32],
+    pub tessellation_policy: String,
+    pub vertex_count: u64,
+    pub index_count: u64,
+    pub deterministic: bool,
+}
 ```
 
 Implementation notes:
 - 3D fixtures compare `SceneReceipt`s in addition to screenshots so parser and
   named-view regressions stay explainable even when pixels are similar
+- `SceneNormalForm` and `TessellationReceipt` are the semantic and realization
+  companions to `SceneReceipt`; they let proof runs distinguish "same scene"
+  from "same screenshot"
 - section-plane, named-view, and PMI inventory surfaces should attach
   `ViewStateDigest`/scene-receipt evidence rather than emitting screenshot-only
   proof
@@ -3023,6 +3172,26 @@ pub struct TransportContinuityReceipt {
     pub invalidated_queries: Vec<QueryKey>,
     pub trace_digest: [u8; 32],
 }
+
+pub enum SparseConvergenceClass {
+    SparseUnverified,
+    SparseValidatorBound,
+    WholeFileDigestVerified,
+}
+
+pub struct RangeConflictWitness {
+    pub conflicting_ranges: Vec<(u64, u64)>,
+    pub prior_epoch: FetchEpoch,
+    pub new_epoch: FetchEpoch,
+    pub reason: RangeConsistencyError,
+}
+
+pub struct SourceConvergenceReceipt {
+    pub source_identity: TransportIdentity,
+    pub convergence_class: SparseConvergenceClass,
+    pub sparse_digest_map: SparseDigestMap,
+    pub whole_file_digest: Option<[u8; 32]>,
+}
 ```
 
 Implementation notes:
@@ -3033,6 +3202,9 @@ Implementation notes:
 - continuity failures must flow into caller-visible diagnostics and receipts,
   invalidate all affected materializations tied to the prior fetch epoch, and
   block preserve-sensitive workflows until continuity is re-established
+- `SourceConvergenceReceipt` is the stronger trust-state summary used when save,
+  signature, or proof workflows need to know whether a sparse session has
+  actually converged to a whole-file digest
 
 ```rust
 pub struct RangeMerkleLeaf {
@@ -3059,6 +3231,7 @@ pub struct ResumptionReceipt {
     pub reused_verified_ranges: Vec<(u64, u64)>,
     pub revalidated_ranges: Vec<(u64, u64)>,
     pub continuity_result: TransportContinuityReceipt,
+    pub convergence_result: Option<SourceConvergenceReceipt>,
 }
 ```
 
@@ -3094,12 +3267,35 @@ pub struct CoverageCellIndex {
     pub grid_policy: String,
     pub cells: Vec<CoverageCell>,
 }
+
+pub struct PaintOrderInterval {
+    pub z_min: u32,
+    pub z_max: u32,
+    pub contributing_chunks: Vec<RenderChunkId>,
+}
+
+pub struct CoverageAtlasCell {
+    pub cell_id: u64,
+    pub bbox: Rectangle,
+    pub paint_order: PaintOrderInterval,
+    pub text_spans: Vec<SpanId>,
+    pub annotation_refs: Vec<ObjRef>,
+}
+
+pub struct CoverageAtlas {
+    pub page_index: u32,
+    pub cells: Vec<CoverageAtlasCell>,
+    pub atlas_digest: [u8; 32],
+}
 ```
 
 Implementation notes:
 - `CoverageCellIndex` is a substrate-backed derived index consumed by
   hit-testing, redaction audit, semantic anchoring, exact invalidation, and
   prepress region accounting
+- `CoverageAtlas` layers paint order, render-chunk provenance, and text/annotation
+  correspondence on top of the cell index so redaction, placement, and
+  disagreement localization can answer "what painted here, in what order?"
 - the same coverage cells must be reused across render/extract/forensics rather
   than rebuilt by crate-local walkers
 
@@ -3374,8 +3570,10 @@ CLI / proof / library workflow
 ```
 PDF bytes
   -> Lexer (tokenize)
+  -> TokenTape + ObjectBoundaryIndex materialized
   -> Object parser (construct PdfValue tree)
   -> XRef parser (build cross-reference table, repair if needed)
+  -> Salvage scan / tape-guided recovery receipts emitted if repair needed
   -> Encryption handler (decrypt if needed)
   -> Candidate builder (materially different repairs become bounded hypothesis candidates)
   -> Syntax layer (immutable COS objects, provenance, repair records)
@@ -3411,6 +3609,7 @@ PdfSnapshot + ChangeJournal
   -> Preservation analysis (claims preserved / invalidated properties)
   -> WritePlan computation (PreserveBytes / AppendOnly / RewriteOwned / etc.)
   -> Signature impact analysis
+  -> SignatureReservationPlan + AppendBudgetReceipt (when signing or reserving placeholders)
   -> Mode selection (incremental append vs full rewrite)
   -> Object serializer (PdfValue -> bytes)
   -> Stream encoder (apply compression filters)
@@ -3602,6 +3801,9 @@ PdfSnapshot + extract profile
   record which key succeeded.
 - Repair-receipt tests: cmap salvage, CFF closure, and alternate-key Type 1
   recovery emit deterministic `FontRepairReceipt` artifacts.
+- Authority-graph tests: `FontAuthorityGraph` and `SubsetClosureReceipt`
+  identify Unicode/metric/outline/subset authority deterministically for
+  regenerated or repaired fonts.
 - Validation tests: `/FontDescriptor` flag bits are cross-checked against embedded font data and
   CID vertical metrics from `/W2` / `/DW2` drive expected vertical layout.
 - Search/hit-test tests: known text at known positions -> verify search finds it, hit-test returns correct quads.
@@ -3611,8 +3813,9 @@ PdfSnapshot + extract profile
   output-intent cascade resolution.
 - Transform tests: DeviceGray/RGB/CMYK, Cal*, Lab, ICCBased, Indexed, Separation, and DeviceN
   resolve through the same kernel with deterministic `ColorWitness` emission.
-- Proof/prepress tests: soft-proof transforms, separation preview math, TAC accounting, and
-  hazard reporting remain stable on pinned fixtures.
+- Proof/prepress tests: soft-proof transforms, shared `ProofCondition` handling,
+  separation preview math, TAC accounting, and hazard reporting remain stable
+  on pinned fixtures.
 - Cache/receipt tests: `ColorTransformCache` keys and receipts remain stable across equivalent
   transforms and distinguish kernel class plus chosen output intent.
 
@@ -3795,6 +3998,9 @@ PdfSnapshot + extract profile
   `AcquisitionRecommendation`s are derived deterministically from the fixture set.
 - Decoder-equivalence tests: risky native and experimental candidates emit
   `DecoderEquivalenceRecord`s before any promotion path is allowed to pass.
+- Variant-manifest tests: canonical tournaments emit
+  `AlgorithmVariantManifest`s and `VariantSelectionReceipt`s before defaults
+  can change.
 - Benchmark-witness tests: canonical benchmarks emit schema-valid witness records with support
   class, render determinism class, numeric profile, topology/runtime fields,
   work receipts, peak-memory witnesses, threshold verdicts, and reproducibility linkage.

@@ -1131,6 +1131,53 @@ Rules:
 - provider-supplied outlines or metrics are useful, but they may never silently
   masquerade as stronger Unicode or source-authoritative truth
 
+### Font authority-graph and subset-closure doctrine
+
+Font truth classes explain quality. The engine also needs an explicit graph of
+which surface is authoritative for which font fact so rendering, extraction,
+diffing, generation, and signature-safe reuse can all cite the same answer.
+
+```
+pub enum FontAuthoritySurface {
+    UnicodeMap,
+    AdvanceMetrics,
+    OutlineProgram,
+    VerticalMetrics,
+    VariationData,
+    SubsetClosure,
+}
+
+pub struct FontAuthorityEdge {
+    pub surface: FontAuthoritySurface,
+    pub authority: FontTruthClass,
+    pub source: String,
+}
+
+pub struct FontAuthorityGraph {
+    pub font_fingerprint: ResourceFingerprint,
+    pub edges: Vec<FontAuthorityEdge>,
+}
+
+pub struct SubsetClosureReceipt {
+    pub font_fingerprint: ResourceFingerprint,
+    pub glyph_ids: Vec<u32>,
+    pub subroutines_retained: Vec<u32>,
+    pub canonical_subset_digest: [u8; 32],
+}
+```
+
+Rules:
+- render, extraction, diff, and save-planning surfaces SHOULD be able to cite a
+  `FontAuthorityGraph` when callers ask why a Unicode, metric, outline, or
+  vertical-metric fact was trusted
+- emitted font subsets MUST be reproducible under deterministic mode and SHOULD
+  attach a `SubsetClosureReceipt` whenever generation, form appearance
+  regeneration, or import-side normalization embeds a new subset
+- subset-closure evidence MUST include retained subroutine closure for CFF/CFF2
+  subsets whenever that closure materially influenced the emitted program
+- provider-supplied or synthesized font facts remain useful, but they may never
+  silently upgrade a weaker authority surface into a stronger one
+
 #### Transparency edge case handling
 
 The PDF transparency model (ISO 32000-1 §11.6, ISO 32000-2 §11.7) is a full Porter-Duff compositing system with additional complexity from isolation, knockout, soft masks, and blend modes. The edge cases that matter most:
@@ -2040,6 +2087,52 @@ pub enum AdmissionReason {
 }
 ```
 
+### Complexity-hazard doctrine
+
+Budgeting needs a typed vocabulary for which asymptotic bomb was observed, not
+only a coarse admission verdict.
+
+```
+pub enum ComplexityHazardKind {
+    OperatorExplosion,
+    ObjectStreamFanout,
+    IncrementalChainExplosion,
+    FunctionStepExplosion,
+    NameTreeBreadthExplosion,
+    FontTableExplosion,
+    MeshPrimitiveExplosion,
+    DecodeExpansionExplosion,
+}
+
+pub struct ComplexityHazard {
+    pub kind: ComplexityHazardKind,
+    pub subject: String,
+    pub observed_scale: u64,
+    pub mitigation: String,
+}
+
+pub struct BudgetDerivationReceipt {
+    pub fingerprint: ComplexityFingerprint,
+    pub hazards: Vec<ComplexityHazard>,
+    pub chosen_budget: BudgetRecommendation,
+}
+```
+
+Rules:
+- `OpenProbe` and `AdmissionDecision` SHOULD be able to cite a
+  `BudgetDerivationReceipt` whenever typed hazards materially influenced budget
+  selection, degradation, or rejection
+- `AdmissionDecision` SHOULD cite typed hazards, not only a coarse rejection
+  reason, when hostile complexity rather than pure feature absence drove the
+  outcome
+- proof aggregation and corpus triage SHOULD report failures by
+  `ComplexityHazardKind`
+- security profiles MAY tighten budgets hazard-by-hazard instead of only
+  applying one global multiplier
+- typed complexity hazards are first-class evidence for adversarial,
+  prepress-mesh, font, and incremental-history stress fixtures; they are not
+  parser-only concerns
+
 ### Policy-aware plan selection contract
 
 Admission is not execution. Whenever Monkeybee has multiple legal strategies
@@ -2422,6 +2515,7 @@ pub enum ArtifactKind {
     PagePlan,
     RenderChunkGraph,
     CoverageCellIndex,
+    CoverageAtlas,
     ResolvedResources,
     RasterTile,
     ExtractSurface,
@@ -2429,6 +2523,7 @@ pub enum ArtifactKind {
     AccessPlan,
     ColorTransform,
     SceneReceipt,
+    SceneNormalForm,
     WritePlan,
     DiffArtifact,
 }
@@ -2452,9 +2547,9 @@ Rules:
 - any cache entry eligible for cross-snapshot reuse or persistent storage MUST
   be able to produce a `MaterializationReceipt`
 - receipt production applies to `PagePlan`, render-chunk graphs, coverage-cell
-  indexes, resolved resources, raster tiles, extraction surfaces, semantic
-  graphs, access plans, color transforms, scene receipts, write plans, and diff
-  artifacts
+  indexes, coverage atlases, resolved resources, raster tiles, extraction
+  surfaces, semantic graphs, access plans, color transforms, scene receipts,
+  scene normal forms, write plans, and diff artifacts
 - experimental backends may materialize artifacts, but their receipts MUST
   clearly identify non-canonical algorithm ids and determinism classes
 - proof artifacts SHOULD compare receipts first and bytes/pixels second so
@@ -2479,13 +2574,28 @@ All query materializations and caches are governed by a single `CachePolicy`.
 Every cache key belongs to a `CacheNamespace`:
 
 ```
-CacheNamespace = (
-  snapshot_id,
-  security_profile,
-  provider_manifest_id,
-  determinism_class,
-  view_state_hash
-)
+pub struct CacheNamespaceDigest(pub [u8; 32]);
+
+pub struct CacheNamespace {
+    pub namespace_digest: CacheNamespaceDigest,
+    pub snapshot_id: SnapshotId,
+    pub security_profile: SecurityProfile,
+    pub support_class: SupportClass,
+    pub policy_digest: [u8; 32],
+    pub provider_manifest_digest: [u8; 32],
+    pub feature_module_manifest_digest: [u8; 32],
+    pub render_determinism_class: Option<RenderDeterminismClass>,
+    pub native_isolation_class: Option<NativeIsolationClass>,
+    pub fetch_epoch: Option<FetchEpoch>,
+    pub view_state_hash: ViewStateHash,
+}
+
+pub struct ReuseAdmissibilityReceipt {
+    pub artifact_digest: [u8; 32],
+    pub namespace_digest: CacheNamespaceDigest,
+    pub admissible: bool,
+    pub rejection_reason: Option<String>,
+}
 ```
 
 `view_state_hash` covers any setting that can change visible or extracted output
@@ -2508,6 +2618,15 @@ Canonical caches:
 - No cache is unbounded in any runtime, including native and WASM.
 - WASM uses smaller default budgets, not different cache semantics.
 - Cross-snapshot reuse is allowed only for immutable artifacts identified by fingerprints.
+- cross-snapshot reuse requires both dependency validity and namespace
+  admissibility; a clean dependency graph alone is insufficient
+- proof-canonical artifacts MUST never reuse viewer-adaptive, ambient-provider,
+  native-isolation-weaker, or different-feature-module cache entries
+- provider-manifest drift, feature-module drift, native-isolation drift,
+  support-class drift, or transport-epoch drift MUST invalidate reuse even when
+  source digests match
+- reusable materializations SHOULD be able to emit a
+  `ReuseAdmissibilityReceipt` so cache acceptance and rejection stay auditable
 
 **Scratch spill store:** bounded local store for oversized decoded streams, raster tiles,
   isolated-decoder outputs, and other large intermediate artifacts.
@@ -2821,6 +2940,47 @@ Additional rules:
   when transport trust materially influenced correctness, preserve, or signature
   claims
 
+### Sparse-convergence and whole-source verification doctrine
+
+Transport continuity says the ranges came from one logical artifact. Convergence
+additionally says how far a sparse session has progressed toward trusted
+whole-source knowledge.
+
+```
+pub enum SparseConvergenceClass {
+    SparseUnverified,
+    SparseValidatorBound,
+    WholeFileDigestVerified,
+}
+
+pub struct RangeConflictWitness {
+    pub conflicting_ranges: Vec<(u64, u64)>,
+    pub prior_epoch: FetchEpoch,
+    pub new_epoch: FetchEpoch,
+    pub reason: RangeConsistencyError,
+}
+
+pub struct SourceConvergenceReceipt {
+    pub source_identity: TransportIdentity,
+    pub convergence_class: SparseConvergenceClass,
+    pub sparse_digest_map: SparseDigestMap,
+    pub whole_file_digest: Option<[u8; 32]>,
+}
+```
+
+Rules:
+- persisted remote artifacts SHOULD record whether they were built from sparse
+  validator-bound state or whole-file-digest-verified state
+- save, signature, and proof workflows MAY require
+  `WholeFileDigestVerified` unless an explicit degraded policy allows weaker
+  sparse convergence
+- range conflicts MUST poison only the affected fetch epoch and its dependent
+  artifacts; they may not silently downgrade global trust for unrelated epochs
+- `TransportContinuityReceipt`, `VerifiedSparseBlob`, and
+  `SourceConvergenceReceipt` are complementary: continuity tracks identity
+  consistency, sparse blobs track reusable verified ranges, and convergence
+  tracks whether whole-source trust has been established
+
 ### Verified sparse blob doctrine
 
 Range-backed sessions MAY materialize a `VerifiedSparseBlob` so previously
@@ -2862,6 +3022,9 @@ Rules:
   both exist
 - preserve/signature-sensitive workflows MUST cite whether remote trust depended
   on weak validators, range digests, or Merkle manifests
+- resumed sessions SHOULD emit a `SourceConvergenceReceipt` so callers can tell
+  whether the resumed state is still sparse-validator-bound or has converged to
+  a whole-file digest
 - `ResumptionReceipt` MAY be attached to proof artifacts, receipts, or failure
   capsules whenever cross-session remote trust materially influenced correctness
 
@@ -3105,6 +3268,26 @@ pub struct CoverageCellIndex {
     pub grid_policy: String,
     pub cells: Vec<CoverageCell>,
 }
+
+pub struct PaintOrderInterval {
+    pub z_min: u32,
+    pub z_max: u32,
+    pub contributing_chunks: Vec<RenderChunkId>,
+}
+
+pub struct CoverageAtlasCell {
+    pub cell_id: u64,
+    pub bbox: Rectangle,
+    pub paint_order: PaintOrderInterval,
+    pub text_spans: Vec<SpanId>,
+    pub annotation_refs: Vec<ObjRef>,
+}
+
+pub struct CoverageAtlas {
+    pub page_index: u32,
+    pub cells: Vec<CoverageAtlasCell>,
+    pub atlas_digest: [u8; 32],
+}
 ```
 
 Rules:
@@ -3116,8 +3299,18 @@ Rules:
   higher-level semantic nodes
 - prepress region TAC accounting, hidden-content detectors, and hit-testing
   MUST reuse the same cell index rather than private region walkers
+- `CoverageAtlas` is a higher-order derived artifact layered on
+  `CoverageCellIndex`, `RenderChunkGraph`, and text-paint correspondence so
+  paint order, occlusion, and provenance can be queried together
+- redaction audit, hit-testing, annotation placement, hidden-content analysis,
+  and oracle-disagreement localization SHOULD consume `CoverageAtlas` when
+  paint-order or occlusion questions matter
+- chunk-level invalidation MAY reuse unaffected atlas cells directly when the
+  paint-order witness proves they were untouched
 - `CoverageCellIndex` is a derived artifact subject to the ordinary
   `MaterializationReceipt` and `InvalidationWitness` rules
+- `CoverageAtlas` MUST also be receiptable as a derived artifact rather than
+  living only as an in-memory convenience surface
 
 #### `monkeybee-catalog`
 
@@ -3235,6 +3428,50 @@ Key responsibilities:
 - Lexing and tokenization
 - Object parsing (all PDF object types)
 - Cross-reference parsing (tables and streams, including repair)
+
+### Parser artifact-tape and salvage-index doctrine
+
+The parser SHOULD materialize immutable parser artifacts between raw bytes and
+`monkeybee-syntax` so tolerant recovery, lazy open, provenance, and proof all
+have a stable witness surface that is more precise than raw rescans and lower
+level than semantic objects.
+
+```
+pub enum LexKernelClass {
+    ScalarAuditable,
+    SimdAccelerated,
+}
+
+pub struct TokenTape {
+    pub tape_digest: [u8; 32],
+    pub token_count: u64,
+    pub lex_kernel: LexKernelClass,
+    pub source_spans: Vec<ByteSpanRef>,
+}
+
+pub struct ObjectBoundaryIndex {
+    pub tape_digest: [u8; 32],
+    pub candidate_objects: Vec<(ObjRef, ByteSpanRef)>,
+    pub xref_independent_hits: Vec<ObjRef>,
+}
+
+pub struct SalvageScanReceipt {
+    pub tape_digest: [u8; 32],
+    pub scanned_regions: Vec<ByteSpanRef>,
+    pub recovered_objects: Vec<ObjRef>,
+    pub false_positive_count: u64,
+}
+```
+
+Rules:
+- tolerant recovery SHOULD prefer `ObjectBoundaryIndex` and `TokenTape`
+  evidence before falling back to repeated whole-file rescans
+- preserve-mode provenance MAY point to token-tape spans as an intermediate
+  witness between raw bytes and syntax objects
+- proof-canonical parse runs MUST be able to report whether recovery came from
+  xref, tape-guided salvage, or full-object scan
+- parser artifacts are parser-owned immutable evidence surfaces consumed by the
+  syntax layer; they do not create a second semantic object model
 
 **Lexer specifics:**
 
@@ -3359,6 +3596,7 @@ pub struct ColorWitness {
     pub source_space: String,
     pub target_space: String,
     pub output_intent_digest: Option<[u8; 32]>,
+    pub proof_condition_digest: Option<[u8; 32]>,
     pub bpc_enabled: bool,
     pub device_n_plan: Option<DeviceNResolutionPlan>,
     pub hazard_codes: Vec<String>,
@@ -3888,6 +4126,45 @@ Rules:
 - PMI extraction and product-structure traversal MUST be exposed as inventory
   surfaces even when advanced interactive rendering degrades
 
+### Scene normal-form and tessellation-determinism doctrine
+
+Screenshots are necessary for visual proof. They are not sufficient for
+semantic 3D claims such as topology stability, named-view equivalence, or
+section-plane correctness.
+
+```
+pub enum SceneNormalFormKind {
+    TopologyCanonical,
+    TessellationCanonical,
+    ViewStateCanonical,
+}
+
+pub struct SceneNormalForm {
+    pub kind: SceneNormalFormKind,
+    pub canonical_digest: [u8; 32],
+    pub omitted_surfaces: Vec<String>,
+}
+
+pub struct TessellationReceipt {
+    pub source_scene_digest: [u8; 32],
+    pub tessellation_policy: String,
+    pub vertex_count: u64,
+    pub index_count: u64,
+    pub deterministic: bool,
+}
+```
+
+Rules:
+- 3D proof SHOULD compare `SceneNormalForm`s before screenshots whenever the
+  claim is semantic or topological rather than purely visual
+- named-view interpolation and section-plane tests SHOULD cite both
+  `SceneNormalForm` and `TessellationReceipt`
+- backend-specific triangle ordering MUST not silently perturb proof claims;
+  tessellation determinism is either witnessed or explicitly degraded
+- scene receipts, normal forms, and tessellation receipts are complementary:
+  one states what scene was interpreted, one states what canonical semantic
+  form was preserved, and one states how triangles were actually realized
+
 #### `monkeybee-gpu`
 
 Optional GPU-accelerated 2D rendering backend via wgpu.
@@ -3948,7 +4225,12 @@ When generating new pages with text, the write path must embed the fonts used:
 3. Generate the font dictionary, font descriptor, widths array, and ToUnicode CMap for the subsetted font.
 4. Embed the subsetted font program as a stream object with appropriate compression.
 5. For CIDFonts: generate the CIDFont descriptor with `/DW` and `/W` arrays, the CMap (typically Identity-H for Unicode-mapped fonts), and the CIDToGIDMap (typically Identity for subsetted TrueType CIDFonts).
-6. Tag the font name with a 6-letter random prefix followed by `+` (e.g., `ABCDEF+ArialMT`) to indicate subsetting. This is a convention, not a requirement, but it aids debugging and conformance checking.
+6. Tag the font name with a 6-letter subset prefix followed by `+`
+   (e.g., `ABCDEF+ArialMT`) to indicate subsetting. In deterministic mode this
+   prefix MUST be derived reproducibly from the `SubsetClosureReceipt`
+   `canonical_subset_digest`; outside deterministic mode it MAY be randomly
+   generated. This is a convention, not a requirement, but it aids debugging
+   and conformance checking.
 
 Generated text must not assume a one-codepoint-to-one-glyph mapping. Complex-script shaping and bidi reordering occur before subsetting and ToUnicode generation.
 
@@ -5721,7 +6003,9 @@ pub struct WriteReceipt {
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
     pub provenance_summary: Option<SurfaceProvenanceSummary>,
+    pub append_budget: Option<AppendBudgetReceipt>,
     pub transport_continuity: Option<TransportContinuityReceipt>,
+    pub transport_convergence: Option<SourceConvergenceReceipt>,
     pub emission_journal: Option<EmissionJournal>,
     pub feasibility_witness: Option<FeasibilityWitness>,
     pub post_write_validation: Vec<ValidationFinding>,
@@ -5840,6 +6124,8 @@ before any bytes are written.
 - `ownership_transitions`
 - `blocked_preserve_regions`
 - `full_rewrite_reasons`
+- `signature_reservation_plan`
+- `append_budget_receipt`
 - `preservation_constraint_graph`
 - `feasibility_witness`
 - `structure_impact`
@@ -6708,6 +6994,45 @@ shares the normal render/content/color machinery; it must not fork into a separa
     such as SWOP/CGATS and FOGRA families to recognizable press-condition narratives so preflight
     can say not merely "an output intent exists" but what production condition it implies.
 
+### Proof-condition lattice for prepress and soft proofing
+
+Prepress proof is not just "turn on CMYK-ish rendering." It is evaluation under
+an explicit press/viewing condition that must be shared by soft-proof,
+separation preview, TAC analysis, and trap diagnostics.
+
+```
+pub struct ProofCondition {
+    pub target_profile: OutputIntentRef,
+    pub rendering_intent: String,
+    pub black_point_compensation: bool,
+    pub tac_limit_percent: Option<f32>,
+    pub screening_mode: Option<String>,
+    pub trap_policy: Option<String>,
+}
+
+pub struct SeparationReceipt {
+    pub condition_digest: [u8; 32],
+    pub colorants: Vec<String>,
+    pub overprint_mode: Option<u8>,
+    pub simulated_on_rgb: bool,
+}
+
+pub struct InkHazardGraph {
+    pub page_index: u32,
+    pub hotspots: Vec<RegionRef>,
+    pub hazard_codes: Vec<String>,
+}
+```
+
+Rules:
+- soft-proof, separation preview, TAC reporting, and trap diagnostics SHOULD
+  all cite a shared `ProofCondition`
+- benchmark witnesses, oracle artifacts, and prepress ledgers MUST record the
+  active proof condition whenever prepress comparisons are claimed
+- `ColorWitness`, separation preview, and TAC hazard reporting remain useful
+  without full screening or trap simulation, but any missing proof-condition
+  dimension MUST stay explicit in receipts and degradations
+
 ### Digital signature lifecycle and PAdES expansion contract
 
 Preserving byte ranges is necessary but not sufficient. A serious engine must model the signature
@@ -6739,6 +7064,45 @@ workflow end to end.
    certification or approval, validate the DocMDP/FieldMDP modification chain, and expose when a
    later approval signature is inconsistent with the certification policy established by the first
    signer.
+
+### Signature reservation and append-budget doctrine
+
+Signing correctness depends on reservation economics before emission, not only on
+CMS parsing after the fact.
+
+```
+pub enum ReservationOverflowPolicy {
+    RefuseAndExplain,
+    EscalateToLargerUnsignedPlaceholder,
+    EscalateToCounterfactualPlan,
+}
+
+pub struct SignatureReservationPlan {
+    pub field_ref: ObjRef,
+    pub reserved_contents_bytes: u64,
+    pub reserved_dss_bytes: u64,
+    pub reserved_vri_bytes: u64,
+    pub overflow_policy: ReservationOverflowPolicy,
+}
+
+pub struct AppendBudgetReceipt {
+    pub prior_revision_count: u32,
+    pub predicted_append_bytes: u64,
+    pub reserved_bytes: u64,
+    pub overflow_risk: String,
+}
+```
+
+Rules:
+- signing workflows MUST compute a `SignatureReservationPlan` and
+  `AppendBudgetReceipt` before byte emission
+- under-reserved placeholders MUST fail with an explicit receipt rather than a
+  late opaque serialization failure
+- counterfactual planning SHOULD propose the nearest legal larger-reservation
+  signing plan when the requested reservation is too small
+- reservation planning MUST account for DSS/VRI growth, timestamp growth, and
+  incremental-history overhead rather than treating `/Contents` length as the
+  whole signing problem
 
 ### Tagged PDF and accessibility-audit expansion contract
 
@@ -7504,6 +7868,41 @@ Rules:
 
 This captures the best part of the "self-evolving harness" idea while staying faithful to the
 spec's auditable baseline-first doctrine.
+
+### Algorithm-variant manifest doctrine
+
+Hot-path tournaments need first-class variant manifests so "fast path" never
+quietly becomes "different semantics under a new default."
+
+```rust
+pub struct AlgorithmVariantId(pub [u8; 32]);
+
+pub struct AlgorithmVariantManifest {
+    pub variant_id: AlgorithmVariantId,
+    pub subsystem: String,
+    pub baseline_variant: String,
+    pub active_variant: String,
+    pub proof_metric: String,
+    pub cost_metric: String,
+}
+
+pub struct VariantSelectionReceipt {
+    pub subsystem: String,
+    pub chosen_variant: AlgorithmVariantId,
+    pub rejected_variants: Vec<AlgorithmVariantId>,
+    pub reason: String,
+}
+```
+
+Rules:
+- SIMD, GPU, spectral color, robust-predicate, rasterizer, and compression
+  tournaments SHOULD emit `AlgorithmVariantManifest`s in canonical benchmarks
+  and proof runs
+- no experimental winner may become default without receiptable evidence
+  against its declared baseline competitor
+- `VariantSelectionReceipt` is complementary to `PlanSelectionRecord`: the
+  former explains which hot-path implementation variant won inside a legal plan,
+  while the latter explains which plan was chosen overall
 
 ### Decoder equivalence laboratory
 

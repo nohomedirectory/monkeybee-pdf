@@ -41,10 +41,10 @@ versioned substrate.
 At minimum, the substrate must unify:
 
 - source bytes and preserved byte spans
-- parsed COS syntax with provenance
+- parsed COS syntax with provenance, parser token tapes, and salvage indexes
 - semantic object graphs and ownership classes
 - content interpretation and graphics-state transitions
-- derived surfaces such as page plans, render-chunk graphs, coverage-cell indexes, extraction outputs, text-paint correspondence receipts, semantic anchors, geometry witnesses, scene receipts, truth/provenance surfaces, and diffs
+- derived surfaces such as page plans, render-chunk graphs, coverage-cell indexes and coverage atlases, extraction outputs, text-paint correspondence receipts, semantic anchors, geometry witnesses, scene receipts and scene normal forms, font authority/subset-closure receipts, truth/provenance surfaces, and diffs
 - cross-document import provenance, alias maps, import-closure certificates, and semantic-normal-form evidence
 - edit deltas, invalidation witnesses, write plans, feasibility witnesses, solver-backed frontier witnesses, emission journals, materialization receipts, and temporal lineage
 - proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, and invariant certificates
@@ -78,7 +78,7 @@ Baseline v1 must prove all of the following:
 - **Reader-kernel correctness** on hard, pathological, real-world PDFs that simpler engines mishandle or refuse.
 - **Interactive 3D PDF rendering on PRC and U3D content** — the first open-source implementation and a native baseline capability rather than a post-v1 escape hatch.
 - **Persistent immutable snapshots** backed by a content-addressed substrate rather than whole-document cloning.
-- **Exact dependency-tracked invalidation** so small edits only recompute affected pages, resources, and derived artifacts, with witnessable reuse/recompute causality.
+- **Exact dependency-tracked invalidation and cache reuse admissibility** so small edits only recompute affected pages, resources, and derived artifacts, with witnessable reuse/recompute causality and no cross-mode cache poisoning.
 - **A first-class numeric/geometry kernel** so rendering, annotation placement, redaction, hit-testing, function/color/prepress math, and 3D cross-sections all consume one auditable tolerance, degeneracy, and escalation doctrine.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent semantic drift.
 - **Cross-document import integrity**: copy/merge/split workflows remap resources and identities explicitly, preserve provenance, emit import-closure evidence, and never silently collide.
@@ -110,11 +110,12 @@ hand-waved future wishes.
 - **Enterprise print-production and prepress:** halftones, transfer functions, black generation /
   undercolor removal, RGB overprint simulation, soft proofing, ink coverage analysis, separation
   preview, print preflight, and trap-network handling, including halftone Types 1/5/6/10/16,
-  spot-function and threshold-screen inspection, and document/page-level output-intent handling.
+  spot-function and threshold-screen inspection, document/page-level output-intent handling, and
+  explicit shared proof conditions for meaningful soft-proof/separation comparisons.
 - **Digital signature lifecycle:** PAdES B-B/B-T/B-LT/B-LTA, DSS/VRI, certificate-chain building,
   OCSP/CRL/TSA evidence, offline long-term validation, and signature creation rather than mere
-  preservation, with explicit modeling of per-signature validation material and incremental-append
-  signing workflows.
+  preservation, with explicit modeling of per-signature validation material,
+  incremental-append signing workflows, reservation planning, and append-budget evidence.
 - **Tagged PDF and accessibility auditing:** richer structure semantics, `/ActualText`, `/Alt`,
   `/E`, `/Lang`, pronunciation hints, artifact handling, structure destinations, the full standard
   structure-role family, PDF/UA audit reports, and reading-order visualization without promising
@@ -254,7 +255,7 @@ edge cases, scanned documents, CJK and RTL text, producer-specific quirks, XFA a
 
 Monkeybee is a Rust workspace organized around six explicit strata:
 
-1. **Byte/revision layer** — immutable source bytes, fetch-epoch continuity, appended revisions, and range-backed access.
+1. **Byte/revision layer** — immutable source bytes, fetch-epoch continuity, sparse-convergence trust state, appended revisions, and range-backed access.
 2. **Persistent substrate/query layer** — content-addressed roots, temporal lineage, structural
    sharing, exact invalidation, store lifecycle, segmented out-of-core materialization, acceleration indexes, materialization receipts, hypothesis tracking, and invariant certificates.
 3. **Syntax/COS layer** — immutable parsed objects, provenance, repair records, raw formatting, and
@@ -272,13 +273,13 @@ Workspace crates:
 | `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduling, access plans, revision chains, raw-span ownership |
 | `monkeybee-security` | Security profiles, worker isolation, budget broker, hostile-input policy |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
-| `monkeybee-parser` | PDF tokenization, syntax parsing, repair, encryption handling, tolerant/strict/preserve ingestion |
+| `monkeybee-parser` | PDF tokenization, immutable parser artifact tapes, salvage indexes, syntax parsing, repair, encryption handling, tolerant/strict/preserve ingestion |
 | `monkeybee-substrate` | Persistent incremental kernel: node digests, content-addressed store, snapshot roots, lineage, store lifecycle, hypothesis sets, query engine, materialized acceleration indexes, exact invalidation plus invalidation witnesses, temporal replay scaffolding, and invariant certificate generation |
 | `monkeybee-syntax` | Syntax/COS preservation layer: immutable parsed objects, token/span provenance, xref provenance, object-stream membership, formatting retention, repair records. The preservation boundary |
 | `monkeybee-document` | Semantic document graph built from syntax snapshots and substrate roots: page tree, inherited state, resource resolution, ownership classes, dependency graph contract, transaction/change journal, semantic object indexes, cross-document import/remap provenance, import-closure evidence, and semantic-normal-form evidence |
 | `monkeybee-catalog` | Catalog semantics: outlines, named destinations, page labels, name/number trees, viewer preferences, optional-content configs, embedded-file inventory, collections, presentation metadata, and document-level rich-structure roots |
 | `monkeybee-content` | Content-stream IR + interpreter shared by render/extract/inspect/edit; graphics-state algebra and sink adapters |
-| `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline for existing PDF text, authoring pipeline for generated text, subsetting, search/hit-test primitives |
+| `monkeybee-text` | Font programs, CMaps, Unicode mapping, font-authority graphs, deterministic subset-closure receipts, decode pipeline for existing PDF text, authoring pipeline for generated text, subsetting, search/hit-test primitives |
 | `monkeybee-color` | Shared color/prepress kernel: ICC evaluation, output-intent cascade, DeviceN/Separation resolution, soft-proofing, TAC accounting, and color witness emission |
 | `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, prepress proof modes, tile/band surfaces, render-chunk graphs, cooperative cancellation, and progressive rendering |
 | `monkeybee-3d` | PRC/U3D parsing, unified scene graph, wgpu rendering (Vulkan/Metal/DX12/WebGPU), named views, cross-sections, illustration modes |
@@ -323,7 +324,7 @@ before subsystem fan-out.
 - temporal revision model and semantic-anchor stability rules
 - substrate-store lifecycle and acceleration-index freshness semantics
 - cross-document import provenance and semantic-normal-form rules
-- cache namespace doctrine and determinism/provider-manifest boundaries
+- cache namespace and reuse-admissibility doctrine, including determinism/provider-manifest/module/isolation boundaries
 - reproducibility-manifest and oracle-disagreement schema boundaries
 - scope registry/test-gate bootstrap
 
