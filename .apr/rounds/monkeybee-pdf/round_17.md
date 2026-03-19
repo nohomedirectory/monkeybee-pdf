@@ -1,0 +1,1 @@
+I’m reading the README and full spec closely, mapping the architecture, proof surfaces, and subsystem contracts before proposing a strictly additive revision set with concrete git-diff patches and rationale.
