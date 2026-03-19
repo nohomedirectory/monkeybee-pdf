@@ -885,7 +885,14 @@ Font handling in real-world PDFs is where the gap between spec and reality is wi
 **Specific font-type recovery notes:**
 
 - **Type 1 with broken PFB:** Some producers embed Type 1 fonts with incorrect segment lengths in the PFB binary header. Recovery: ignore segment lengths and parse the ASCII/binary segments by looking for the `eexec` and `cleartomark` markers directly.
+- **Type 1 with non-standard encryption keys:** When the standard Type 1 charstring key (`4330`)
+  or normal eexec assumptions produce garbage, try the small known set of non-standard keys (with
+  `0` as the most common alternate) before giving up, and record the winning key in the
+  compatibility ledger.
 - **CFF with wrong offsets:** CFF (Compact Font Format) data uses offset-based indexing. If the Top DICT's CharStrings offset is wrong, scan for the CharStrings INDEX structure (count followed by offsize followed by offset array) in likely positions.
+- **CFF subroutine integrity during subsetting:** Subsetting must compute the full dependency
+  closure over global and local subroutines, remove dead subroutines, renumber survivors, and
+  recalculate the bias based on the surviving counts rather than the original counts.
 - **TrueType with broken `loca` table:** The `loca` table maps glyph IDs to offsets in the `glyf` table. If `loca` entries point outside `glyf` bounds, clamp to the `glyf` table length and record the error. Individual broken glyphs use `.notdef`; the rest of the font remains usable.
 - **CJK identity CIDFonts with no embedded data:** Very common in files from Asian producers. The font dictionary specifies a CIDFont with no embedded font program, relying on the viewer having the font installed. The engine must: (a) recognize common CIDFont names and map them to available CJK fonts, (b) provide a CJK fallback font or clearly report the missing font so the user can supply one.
 
@@ -988,6 +995,12 @@ For V5 (R5-R6), key derivation uses SHA-256/SHA-384/SHA-512:
 **Per-object key derivation:** For V1-V4, each object is encrypted with a per-object key derived from: file encryption key + object number (little-endian 3 bytes) + generation number (little-endian 2 bytes), hashed with MD5, truncated to min(key_length + 5, 16) bytes. For AES (V4), append the bytes `0x73 0x41 0x6C 0x54` ("sAlT") before the final MD5. For V5, the file encryption key is used directly (no per-object derivation).
 
 **What gets encrypted:** All strings and streams are encrypted, with exceptions: the `/ID` array values in the trailer, the encryption dictionary itself, strings within the encryption dictionary, and cross-reference streams (their data is not encrypted, though objects referenced from them may be). String encryption uses the per-object key; stream encryption also uses the per-object key but may use a different algorithm (e.g., strings with RC4 and streams with AES in a V4 file, controlled by `/StrF` and `/StmF`).
+
+**Crypt-filter identity handling:** If a string or stream uses `/Filter /Crypt` with
+`/DecodeParms` naming the `/Identity` crypt filter, that crypt stage is a no-op and must not
+trigger decryption attempts or "encrypted stream" confusion. Producers sometimes emit this
+redundantly; the engine must preserve the declaration, treat it deterministically, and ledger it as
+an identity/no-op case rather than an encryption failure.
 
 **Password handling edge cases:**
 - Empty owner/user passwords (very common). The engine must correctly handle the empty-string password case, which requires specific padding per the spec (28 bytes of the standard padding string).
@@ -1105,6 +1118,131 @@ compatibility ledger, and implementation contracts so APR/proof work can fan out
 - Higher-quality resampling kernels, N-dimensional sampled-function interpolation, shading-edge
   anti-aliasing, and matte un-premultiplication precision are promoted from scattered notes to
   named rendering contracts.
+
+**Deep correctness and hardening surfaces:**
+- Redaction canary scanning must verify that redacted strings do not survive anywhere in the saved
+  file, including strings, names, XMP, bookmarks, annotations, forms, attachments, and font-side
+  metadata.
+- Font resilience must explicitly cover CFF subroutine dependency analysis and renumbering,
+  alternate-key recovery for damaged Type 1 encryption, `/FontDescriptor` flag cross-validation,
+  and CIDFont vertical metrics.
+- Tagged/document-structure integrity must explicitly cover RoleMap-chain termination and circular
+  detection, marked-content nesting repair, page/resource-level metadata streams, web-capture
+  provenance, and structure destinations.
+- Parser/render hardening must explicitly cover inline-image resource leakage, deep `/Limits`
+  validation for name/number trees, blend-mode preference lists, Type 4 function complexity
+  analysis, stream-extent cross-validation, and `/Identity` crypt-filter no-op handling.
+- Prepress/color fidelity must explicitly cover `/Trapped`, ICC version hazards, alternate image
+  representations, custom spot-function cataloging, DeviceN attributes/mixing hints, and output
+  intent condition identifiers.
+- OCG/action/signature detail must explicitly cover named optional-content configurations, cloudy
+  annotation borders, JavaScript trigger timing graphs, and certification-vs-approval signature
+  classification with MDP-chain validation.
+
+APR sequencing for these expansion lanes is explicit:
+
+- **Wave 1 — immediate differentiators:** digital-signature creation/LTV, accessibility audit,
+  enterprise prepress, FDF/XFDF plus form flattening, and full action inventory/link-map
+  extraction. These lanes most directly turn Monkeybee from a general-purpose engine thesis into a
+  useful engine for regulated, enterprise, and forensic workflows.
+- **Wave 2 — supporting document-reality inventory:** article threads, portfolios, transitions,
+  thumbnails, alternate presentations, page-piece dictionaries, web capture, and multimedia
+  catalogs. These are not optional decorations; they are the surrounding preservation and
+  inspection surfaces that make the first wave materially more credible.
+- **Wave 3 — rendering-quality uplift:** higher-order resampling, N-dimensional interpolation,
+  shading-edge anti-aliasing, and matte precision. These remain named contracts now, but their
+  backend work compounds best once the first two waves have fixture coverage and stable reporting.
+
+For APR arithmetic, `143` means `104 + 39` priority uplift families. `155` means `143 + 12`
+supporting catalog/inventory lanes. `169` means `104 + 39 + 26` once the second hardening uplift
+is counted alongside the first priority uplift. `181` means `169 + 12` when the broader
+catalog/inventory lanes are included too. All four counts are valid if labeled; none of them
+license any reduction in ambition.
+
+The `39`-item priority uplift is itself spelled out so APR rounds do not lose arithmetic fidelity:
+
+- original spec inventory: `104`
+- print production: `+9`
+- digital signature lifecycle: `+8`
+- tagged PDF / accessibility: `+10`
+- advanced rendering quality: `+4`
+- advanced forms and interchange: `+7`
+- full action catalog and link-map extraction: `+1`
+
+That yields the working priority total of **`104 + 39 = 143` named algorithms and techniques**.
+Using the current APR comparison shorthand of **FrankenTUI at `30+`**, Monkeybee's `143`-item
+named inventory is nearly **5x** larger on algorithmic breadth. That comparison is not a license
+for rhetorical inflation or scope reduction; it is a concise explanation for why the scope
+registry, proof harness, and implementation contracts now foreground these lanes explicitly.
+
+The second hardening uplift is also spelled out explicitly so APR rounds do not collapse these
+details back into generic subsystem names:
+
+- redaction, signatures, and active-content forensics: `+3`
+  - redaction canary scanner over the entire emitted file
+  - JavaScript trigger timing graph
+  - certification-vs-approval signature classification with MDP-chain validation
+- font resilience and text correctness: `+4`
+  - CFF subroutine dependency analysis, dead-code elimination, renumbering, and bias recalculation
+  - Type 1 alternate-key recovery for damaged eexec/charstring encryption
+  - `/FontDescriptor` flag cross-validation against embedded font data
+  - CIDFont vertical metrics (`/W2`, `/DW2`)
+- structure and metadata integrity: `+5`
+  - RoleMap-chain termination and circular detection
+  - marked-content nesting repair and audit
+  - page/resource-level metadata stream enumeration and preservation
+  - web-capture provenance (`/SourceInfo`)
+  - structure destinations (`/SD`)
+- parser/render hardening: `+6`
+  - inline-image resource leakage tolerance
+  - name/number-tree `/Limits` validation and repair
+  - blend-mode preference-list handling
+  - Type 4 function complexity analysis
+  - stream-extent cross-validation
+  - `/Identity` crypt-filter no-op handling
+- prepress and color fidelity: `+6`
+  - `/Trapped` semantics
+  - ICC profile version detection and mixed-profile hazard reporting
+  - alternate image representations
+  - custom spot-function library/catalog
+  - PDF 2.0 DeviceN attributes and mixing hints
+  - output-intent condition-identifier lookup
+- OCG and annotation rendering detail: `+2`
+  - optional-content configuration sequences (`/Configs`)
+  - cloudy annotation border effects (`/BE`)
+
+That yields the second working APR total of **`104 + 39 + 26 = 169` named algorithms and
+techniques** on the priority-plus-hardening track, or **`181`** when the broader
+catalog/inventory lanes are counted too. Using the same **FrankenTUI at `30+`** shorthand,
+Monkeybee's `169`-item framing is well beyond **5x** the named algorithmic breadth.
+
+For APR rounds, demos, and public-proof compression, the highest-signal additions to foreground are:
+
+1. **PAdES digital-signature creation plus long-term validation** because it turns the engine into
+   an immediately useful legal/regulatory workflow tool rather than a passive signature-preserving
+   reader.
+2. **PDF/UA accessibility auditing** because the compliance surface is increasingly mandated and
+   yields clear report artifacts for proof and press.
+3. **Enterprise print-production coverage** because ink coverage, soft proofing, separation
+   preview, preflight, and trap networks are where enterprise prepress value concentrates.
+4. **FDF/XFDF round-trip and form flattening** because they create obvious utility for
+   government-form, benefits, and regulated-document interchange.
+5. **Full action catalog and link-map extraction** because they strengthen the forensics/security
+   narrative by showing every action family a document can trigger or reference.
+
+For the second hardening pass, the highest-signal additions to foreground are:
+
+1. **Redaction canary scanning across the entire emitted file** because real redaction failures
+   usually survive in metadata, names, attachment labels, form values, or font-side objects rather
+   than in the visible content stream alone.
+2. **CFF subroutine recompilation plus damaged-Type-1 recovery** because correct embedded-font
+   repair/subsetting is rare and technically legible in proof artifacts.
+3. **JavaScript trigger timing graphs** because they surface document-open/page/annotation/form/
+   print/save action timing without executing hostile code.
+4. **Certification-vs-approval signature classification with MDP-chain validation** because it
+   turns vague DocMDP support into a clear trust-policy and post-signing-forensics story.
+5. **DeviceN/ICC/output-intent/trapped hazard reporting** because it shows the engine understands
+   real press semantics rather than generic RGB rendering only.
 
 ---
 
@@ -1255,6 +1393,11 @@ pub struct CapabilityReport {
     pub temporal_revision_depth: u32,
     pub hypothesis_summary: Option<HypothesisSetSummary>,
     pub semantic_surface: Option<SemanticSurfaceSummary>,
+    pub prepress_summary: Option<PrepressSummary>,
+    pub accessibility_summary: Option<AccessibilitySummary>,
+    pub forms_summary: Option<FormInterchangeSummary>,
+    pub action_inventory_summary: Option<ActionInventorySummary>,
+    pub rich_structure_summary: Option<RichStructureSummary>,
 }
 
 pub struct SaveConstraintReport {
@@ -1278,6 +1421,86 @@ pub struct SemanticSurfaceSummary {
     pub has_semantic_anchors: bool,
     pub anchor_policy: AnchorStabilityPolicy,
 }
+
+pub enum PadesLevel {
+    BB,
+    BT,
+    BLT,
+    BLTA,
+}
+
+pub struct SignatureSummary {
+    pub signature_count: u32,
+    pub pades_levels_present: Vec<PadesLevel>,
+    pub has_document_timestamp: bool,
+    pub has_dss: bool,
+    pub vri_entry_count: u32,
+    pub offline_ltv_ready_count: u32,
+}
+
+pub struct PrepressSummary {
+    pub output_intents: Vec<OutputIntentRef>,
+    pub page_output_intent_count: u32,
+    pub halftone_types: Vec<HalftoneType>,
+    pub has_transfer_functions: bool,
+    pub has_bg_ucr: bool,
+    pub has_overprint_sensitive_content: bool,
+    pub tac_risk: Option<TacRiskClass>,
+    pub low_dpi_asset_count: u32,
+    pub bleed_risk_count: u32,
+    pub separation_names: Vec<String>,
+    pub trap_network_count: u32,
+}
+
+pub struct AccessibilitySummary {
+    pub standard_roles_seen: Vec<String>,
+    pub has_actual_text: bool,
+    pub has_alt_text: bool,
+    pub has_expansion_text: bool,
+    pub has_language_spans: bool,
+    pub has_pronunciation_metadata: bool,
+    pub artifact_span_count: u32,
+    pub figure_without_alt_count: u32,
+    pub heading_hierarchy_findings: u32,
+    pub table_header_findings: u32,
+    pub pdfua_findings: Vec<PdfUaFinding>,
+}
+
+pub struct FormInterchangeSummary {
+    pub has_xfa: bool,
+    pub can_import_fdf: bool,
+    pub can_export_fdf: bool,
+    pub can_import_xfdf: bool,
+    pub can_export_xfdf: bool,
+    pub flatten_ready: bool,
+    pub javascript_hook_count: u32,
+    pub submit_target_count: u32,
+    pub barcode_field_count: u32,
+    pub signature_field_count: u32,
+}
+
+pub struct ActionInventorySummary {
+    pub total_actions: u32,
+    pub actions_by_kind: Vec<ActionKindCount>,
+    pub navigation_target_count: u32,
+    pub link_map_edge_count: u32,
+    pub execute_capable_action_count: u32,
+    pub rich_media_action_count: u32,
+    pub execute_deny_findings: u32,
+}
+
+pub struct RichStructureSummary {
+    pub article_thread_count: u32,
+    pub bead_count: u32,
+    pub page_transition_count: u32,
+    pub thumbnail_count: u32,
+    pub portfolio_item_count: u32,
+    pub alternate_presentation_count: u32,
+    pub page_piece_entry_count: u32,
+    pub web_capture_count: u32,
+    pub multimedia_item_count: u32,
+    pub rendition_tree_count: u32,
+}
 ```
 
 ### Open probe contract
@@ -1296,13 +1519,19 @@ It may inspect:
 - linearization dictionary and first-page hint presence
 - encryption dictionary presence
 - signature field presence and `/ByteRange` inventory
-- `/Catalog` feature hints (AcroForm, XFA, StructTreeRoot, OCGs, JavaScript)
+- `/Catalog` feature hints (AcroForm, XFA, StructTreeRoot, OCGs, JavaScript, `/OutputIntents`,
+  `/Collection`, `/Threads`, presentation metadata, and rich-media roots when cheaply knowable)
 - likely risky decoder set
 - approximate page count / object count when cheaply knowable
 
 `OpenProbe` returns a preliminary `CapabilityReport`, an estimated complexity class,
 a recommended `OperationProfile`, an optional `PreliminaryAccessPlan`, and any `RecoveryCandidateSummary` records that
 can be determined cheaply.
+
+Expansion-lane summaries in `CapabilityReport` are allowed to be partial at probe time. Their
+contract is to surface useful early truth, not to pretend bounded probing can fully validate
+PAdES/LTV readiness, PDF/UA findings, TAC risk, form interchange coverage, or multimedia topology
+without the later full-open pass.
 
 `AccessPlan` is a reusable artifact for lazy/remote sessions. It records:
 - page -> object/resource dependency closure
@@ -2039,7 +2268,7 @@ structured than raw COS preservation:
 - outline / bookmark trees
 - named destinations and destination arrays
 - page labels
-- name trees and number trees
+- name trees and number trees, including deep `/Limits` validation and repair
 - viewer preferences, page mode, and page layout
 - optional content configurations (`/OCProperties`, default configs, print/export states)
 - embedded-file inventory and AF relationships
@@ -2312,6 +2541,9 @@ PDF optional content allows content to be organized into groups that can be show
 - Individual content streams use `BDC /OC /OptionalContentGroupName` ... `EMC` to mark content belonging to a group.
 - The `/OCGs` array lists all optional content groups.
 - The `/D` (default) configuration specifies: `/ON` (visible groups), `/OFF` (hidden groups), `/Order` (UI display order), `/AS` (auto-state rules for print/export).
+- The `/Configs` array may define additional named viewing configurations (for example screen,
+  print, redacted, or reviewer views). These configurations must be parsed, preserved, surfaced to
+  callers, and switchable without flattening them into the default configuration.
 - Optional Content Membership Dictionaries (OCMDs) combine multiple OCGs with Boolean logic (`/AllOn`, `/AnyOn`, `/AllOff`, `/AnyOff`).
 - The renderer must evaluate OCG/OCMD visibility for each marked content span and skip invisible content.
 
@@ -2508,15 +2740,15 @@ Several PDF features (shading patterns, tint transforms for Separation/DeviceN, 
 
 - **Type 3 (stitching function):** Combines multiple sub-functions defined on adjacent intervals of the input domain. Parameters: `/Functions` (array of sub-functions), `/Bounds` (boundary points between intervals), `/Encode` (maps each interval to the sub-function's domain). Used to create piecewise-defined color gradients with different behaviors in different regions.
 
-- **Type 4 (PostScript calculator function):** A small PostScript-like stack language with arithmetic, comparison, and conditional operators. The engine must implement a bounded interpreter for this language. Operators include: `add`, `sub`, `mul`, `div`, `idiv`, `mod`, `neg`, `abs`, `ceiling`, `floor`, `round`, `truncate`, `sqrt`, `sin`, `cos`, `atan`, `exp`, `ln`, `log`, `cvi`, `cvr`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or`, `xor`, `not`, `bitshift`, `true`, `false`, `if`, `ifelse`, `copy`, `exch`, `pop`, `dup`, `roll`, `index`. Type 4 functions must be resource-bounded: enforce a maximum stack depth (100) and maximum instruction count (10,000) to prevent hostile inputs from causing unbounded computation.
+- **Type 4 (PostScript calculator function):** A small PostScript-like stack language with arithmetic, comparison, and conditional operators. The engine must implement a bounded interpreter for this language. Operators include: `add`, `sub`, `mul`, `div`, `idiv`, `mod`, `neg`, `abs`, `ceiling`, `floor`, `round`, `truncate`, `sqrt`, `sin`, `cos`, `atan`, `exp`, `ln`, `log`, `cvi`, `cvr`, `eq`, `ne`, `gt`, `ge`, `lt`, `le`, `and`, `or`, `xor`, `not`, `bitshift`, `true`, `false`, `if`, `ifelse`, `copy`, `exch`, `pop`, `dup`, `roll`, `index`. Type 4 functions must be resource-bounded: enforce a maximum stack depth (100) and maximum instruction count (10,000) to prevent hostile inputs from causing unbounded computation. Beyond raw instruction limits, the engine must analyze the function's effective complexity class and flag pathological branching/stack-manipulation patterns such as deeply nested `ifelse` trees or `roll`-heavy programs that imply super-linear or exponential behavior.
 
 **Metadata extraction specifics:**
 
 PDF documents carry metadata in two locations:
 
-1. **Document Info dictionary** (`/Info` in the trailer): Contains `/Title`, `/Author`, `/Subject`, `/Keywords`, `/Creator`, `/Producer`, `/CreationDate`, `/ModDate`, and optionally `/Trapped`. Dates are in PDF date format: `D:YYYYMMDDHHmmSSOHH'mm'` where `O` is the UTC offset indicator. The parser must handle: missing timezone offsets (assume local), two-digit years (rare but exists), and invalid date strings (report as-is rather than crashing).
+1. **Document Info dictionary** (`/Info` in the trailer): Contains `/Title`, `/Author`, `/Subject`, `/Keywords`, `/Creator`, `/Producer`, `/CreationDate`, `/ModDate`, and optionally `/Trapped`. Dates are in PDF date format: `D:YYYYMMDDHHmmSSOHH'mm'` where `O` is the UTC offset indicator. The parser must handle: missing timezone offsets (assume local), two-digit years (rare but exists), and invalid date strings (report as-is rather than crashing). `/Trapped` has three legal values (`True`, `False`, `Unknown`) and must be surfaced as prepress-significant state rather than collapsed into a generic string field.
 
-2. **XMP metadata** (`/Metadata` stream on the catalog, page objects, or individual resource objects): An XML packet using the Extensible Metadata Platform format. The engine must parse enough XMP to extract: Dublin Core properties (dc:title, dc:creator, dc:description, dc:subject), XMP basic properties (xmp:CreateDate, xmp:ModifyDate, xmp:CreatorTool), PDF-specific properties (pdf:Producer, pdf:Keywords), and PDF/A identification (pdfaid:part, pdfaid:conformance). Full XMP schema validation is not required for v1, but the engine must preserve XMP metadata byte-perfectly during round-trip operations (XMP packets often contain padding whitespace that must be preserved).
+2. **XMP metadata** (`/Metadata` stream on the catalog, page objects, or individual resource objects): An XML packet using the Extensible Metadata Platform format. The engine must parse enough XMP to extract: Dublin Core properties (dc:title, dc:creator, dc:description, dc:subject), XMP basic properties (xmp:CreateDate, xmp:ModifyDate, xmp:CreatorTool), PDF-specific properties (pdf:Producer, pdf:Keywords), and PDF/A identification (pdfaid:part, pdfaid:conformance). Metadata enumeration is not catalog-only: page objects, image XObjects, font objects, and form XObjects may each carry their own `/Metadata` stream and all of them must be preserved and reportable independently. Full XMP schema validation is not required for v1, but the engine must preserve XMP metadata byte-perfectly during round-trip operations (XMP packets often contain padding whitespace that must be preserved).
 
 **XMP stream preservation rules:**
 
@@ -2702,7 +2934,13 @@ The write path must enforce the following invariants. These are not optional —
 
 2. **Cross-reference integrity:** Every indirect object referenced anywhere in the document must have a cross-reference entry. The entry's byte offset must be exactly correct (pointing to the first digit of the object number in the `N G obj` line). The `/Size` entry in the trailer must be one greater than the highest object number used.
 
-3. **Stream length accuracy:** Every stream's `/Length` entry must exactly match the number of bytes between `stream\n` (or `stream\r\n`) and `endstream`. Off-by-one errors here are one of the most common causes of PDF corruption. The write path should compute lengths after all content is finalized, not before.
+3. **Stream length accuracy:** Every stream's `/Length` entry must exactly match the number of
+   bytes between `stream\n` (or `stream\r\n`) and `endstream`. Off-by-one errors here are one of
+   the most common causes of PDF corruption. The write path should compute lengths after all
+   content is finalized, not before. Validation must cross-check three surfaces independently when
+   available: declared `/Length`, actual raw byte extent, and decoded size implied by the stream's
+   semantic consumer (for example image dimensions / bits-per-component). When these disagree, the
+   report must say which values disagree and what assumption the engine actually used.
 
 4. **Page tree validity:** The page tree must have a root node (the `/Pages` object referenced by `/Root` → `/Pages`). Every `/Pages` node must have a `/Kids` array and a `/Count` that accurately reflects the total number of leaf pages in its subtree. Every page object must have `/Type /Page` and a `/Parent` back-reference.
 
@@ -4097,12 +4335,19 @@ Font handling must resolve: font dictionary → encoding → ToUnicode → glyph
    - If `/Encoding` is a dictionary: check `/BaseEncoding` for the base mapping, then apply `/Differences` array overrides.
    - If `/Encoding` is absent: for Type 1, use the font's built-in encoding; for TrueType, use the `cmap` table (platform 1 encoding 0 or platform 3 encoding 1, depending on the symbolic flag in `/FontDescriptor`).
    - **Edge case:** TrueType fonts with the symbolic flag set but no built-in encoding. Fall back to the `cmap` table's first available encoding.
+   - **Font-descriptor flag cross-check:** The `/FontDescriptor` `/Flags` bits (FixedPitch,
+     Serif, Symbolic, Script, NonSymbolic, Italic, AllCap, SmallCap, ForceBold) must be checked
+     against the embedded font program and reported when they disagree. This is especially
+     important for Symbolic vs NonSymbolic because it changes which `cmap` subtables are valid for
+     extraction and glyph lookup.
 
 4. **Encoding resolution (composite fonts — Type 0 → CIDFont):**
    - The Type 0 font's `/Encoding` names a CMap (predefined name or embedded stream).
    - The CMap maps character codes (1-4 bytes) to CIDs.
    - The CIDFont's `/CIDToGIDMap` (for CIDFontType2) maps CIDs to glyph IDs.
    - For CIDFontType0 (CFF-based), CIDs directly index the CFF charstring INDEX.
+   - Vertical writing metrics from `/W2` and `/DW2` must be honored when present, including the
+     vertical origin offsets and vertical advances needed for correct CJK vertical layout.
 
 5. **ToUnicode mapping:** Applied regardless of font type. If `/ToUnicode` is present, it overrides all other Unicode mapping paths. The ToUnicode CMap's `beginbfchar`/`beginbfrange` entries map character codes (in the content stream encoding) to Unicode values. **The ToUnicode CMap uses the original character codes from the content stream, not the CIDs.** This is a common point of confusion.
 
@@ -4171,6 +4416,10 @@ for optimizer work.
 - **Black generation** (`/BG`, `/BG2`) and **undercolor removal** (`/UCR`, `/UCR2`): CMYK-specific adjustments
 - **Font** (`/Font`): array of [font size] — rarely used in ExtGState, usually set by `Tf`
 
+When `/BM` is an array, the renderer must treat it as a preference list and select the first blend
+mode it actually supports under the active backend/profile. Falling through the array without a
+match is an explicit degradation and must be reported rather than silently assuming `Normal`.
+
 **Operator dispatch categories for the shared graphics state machine:**
 
 The interpreter receives each operator and dispatches to the appropriate handler. The categories are:
@@ -4219,6 +4468,10 @@ The PDF path model is built on cubic Bézier curves and straight-line segments. 
 7. **XObject and shading operators** (`Do`, `sh`): invoke external resources. `Do` requires resolving the named XObject from resources and dispatching based on its subtype (Image, Form, or PS). Form XObjects require recursive content stream interpretation with the form's own matrix and resources. `sh` paints the current area with a shading pattern.
 
 8. **Inline image operators** (`BI`, `ID`, `EI`): define and render an inline image. The image dictionary is between `BI` and `ID`; the raw image data is between `ID` and `EI`. Inline image dictionaries use abbreviated key names: `/W` for `/Width`, `/H` for `/Height`, `/BPC` for `/BitsPerComponent`, `/CS` for `/ColorSpace` (with abbreviations: `/G` = DeviceGray, `/RGB` = DeviceRGB, `/CMYK` = DeviceCMYK, `/I` = Indexed), `/F` for `/Filter` (with abbreviations: `/AHx` = ASCIIHexDecode, `/A85` = ASCII85Decode, `/LZW` = LZWDecode, `/Fl` = FlateDecode, `/RL` = RunLengthDecode, `/CCF` = CCITTFaxDecode, `/DCT` = DCTDecode), `/D` for `/DecodeParms`, `/DP` for `/DecodeParms`. Finding the `EI` marker is non-trivial because the image data itself may contain the bytes `EI` — the parser must track the expected data length (from Width × Height × BPC × components, accounting for filters) to know where the data ends.
+   - Tolerant mode must also detect the producer bug where an inline image references a full
+     colorspace name from the page/resource dictionary instead of only the abbreviated inline-image
+     forms. When that happens, resolve through the resource dictionary, render if safe, and emit an
+     explicit diagnostic rather than failing silently.
 
 **EI detection algorithm:**
 
@@ -4294,7 +4547,11 @@ Annotations must be resolved with their appearance streams. If an appearance str
 
 *Line:* Generate a line from `/L` [x1 y1 x2 y2] with optional line endings (`/LE` — e.g., OpenArrow, ClosedArrow, Circle, Diamond, Square, Butt, None). The appearance stream must draw the line and any ending shapes, using the annotation's color and border width.
 
-*Square / Circle:* Generate a rectangle/ellipse within `/Rect`. Apply `/IC` (interior color) for fill and `/C` for stroke. Border from `/BS`.
+*Square / Circle:* Generate a rectangle/ellipse within `/Rect`. Apply `/IC` (interior color) for
+fill and `/C` for stroke. Border from `/BS`. If the annotation carries a `/BE` border-effect
+dictionary with the cloudy style, generate a cloudy border geometry rather than a plain stroke;
+cloud intensity must affect the arc/radius sequence along the boundary and be preserved through
+round trip even when appearance regeneration is deferred.
 
 *Polygon / PolyLine:* Generate a path from the `/Vertices` array. For Polygon, close the path. Apply interior and border colors.
 
@@ -4312,7 +4569,17 @@ When a redaction is applied, the engine first constructs a `RedactionPlan` and s
 - `SecureRasterizeRegion` — replace the affected region with a safe raster surrogate when exact semantic removal cannot be proven (e.g., reused XObjects, partial image overlap, complex transparency)
 - `SecureRasterizePage` — rebuild the entire page as a safe raster surrogate when region-level proof is insufficient
 
-Post-apply verification is mandatory: extraction must not recover redacted text, and surviving canary bytes/resources are scanned where feasible.
+Post-apply verification is mandatory: extraction must not recover redacted text, and surviving
+canary bytes/resources must be scanned aggressively rather than only where convenient.
+
+The redaction assurance path must include a **redaction canary scanner** that accepts the original
+redacted text (or caller-supplied canary fragments) and searches the entire emitted file for
+surviving fragments. This scan is not limited to visible page content. It must inspect raw bytes
+and parsed structures including string objects, name objects, metadata streams, XMP packets,
+outline/bookmark titles, annotation contents, form field values, font CMaps, ToUnicode maps, file
+attachment names, and other preserved metadata-bearing surfaces. The report must say whether the
+match was found in visible content, hidden structure, metadata, or opaque byte ranges so callers
+can distinguish "safe by proof" from "probably removed."
 
 `apply_redactions()` returns a `RedactionAssuranceReport`:
 - selected apply mode
@@ -4521,6 +4788,26 @@ shares the normal render/content/color machinery; it must not fork into a separa
    when the active backend supports it. Trap annotations and trap-network metadata must be
    discoverable even on execute-deny or non-prepress profiles. Lack of trap support is an explicit
    degradation, never a silent omission.
+8. **`/Trapped` semantics:** Surface the document's `True` / `False` / `Unknown` trap status in
+   preflight and treat it as operational guidance rather than decorative metadata. A document
+   already marked trapped must not be silently routed into auto-trapping logic without an explicit
+   override.
+9. **ICC profile version awareness:** Detect ICC v2 versus v4 profile versions, use the correct
+   interpretation rules for each, and emit hazard diagnostics when a document mixes versions in
+   ways that suggest producer bugs or profile misuse.
+10. **Alternate image representations:** Parse `/Alternates` arrays on image XObjects, preserve the
+    alternate set, expose the available representations in extraction, and prefer the best screen
+    or print variant based on the active render/prepress profile.
+11. **Spot-function library:** Catalog standard and custom spot functions, including Type 4
+    calculator-based screens such as diamond, cross, rhomboid, and double-dot variants, so print
+    inspection can explain the actual halftone program rather than only report that a halftone
+    exists.
+12. **DeviceN attributes and mixing hints:** Parse PDF 2.0 DeviceN `/Subtype`, `/Process`,
+    `/Colorants`, and `/MixingHints` dictionaries and surface the printing order, dot-gain hints,
+    and process/spot relationships needed for credible separation preview.
+13. **Output-intent condition identifiers:** Resolve common `/OutputConditionIdentifier` values
+    such as SWOP/CGATS and FOGRA families to recognizable press-condition narratives so preflight
+    can say not merely "an output intent exists" but what production condition it implies.
 
 ### Digital signature lifecycle and PAdES expansion contract
 
@@ -4549,6 +4836,10 @@ workflow end to end.
 7. **Offline long-term validation:** When DSS/VRI/revocation/timestamp material is present, the
    engine must be able to validate without network access and report why a document does or does not
    meet LT/LTA expectations.
+8. **Certification versus approval signatures:** Classify each signature explicitly as
+   certification or approval, validate the DocMDP/FieldMDP modification chain, and expose when a
+   later approval signature is inconsistent with the certification policy established by the first
+   signer.
 
 ### Tagged PDF and accessibility-audit expansion contract
 
@@ -4556,12 +4847,13 @@ Preserving tags and using them as extraction hints is only the baseline. The sem
 larger and must be owned explicitly.
 
 1. **Structure-role coverage:** Recognize the full family of standard structure element types,
-   namespace-qualified variants, and role-map chains. This includes at minimum `Document`, `Part`,
-   `Art`, `Sect`, `Div`, `BlockQuote`, `Caption`, `TOC`, `TOCI`, `Index`, `NonStruct`, `Private`,
-   `P`, `H`, `H1`-`H6`, `L`, `LI`, `Lbl`, `LBody`, `Table`, `TR`, `TH`, `TD`, `THead`, `TBody`,
-   `TFoot`, `Span`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code`, `Link`, `Annot`, `Ruby`,
-   `Warichu`, `Figure`, `Formula`, `Form`, plus PDF 2.0 additions and standards-based namespace
-   extensions.
+   namespace-qualified variants, and role-map chains. Role maps must be resolved transitively until
+   they terminate at a standard role, and circular or broken chains must be flagged explicitly
+   rather than silently truncated. This includes at minimum `Document`, `Part`, `Art`, `Sect`,
+   `Div`, `BlockQuote`, `Caption`, `TOC`, `TOCI`, `Index`, `NonStruct`, `Private`, `P`, `H`,
+   `H1`-`H6`, `L`, `LI`, `Lbl`, `LBody`, `Table`, `TR`, `TH`, `TD`, `THead`, `TBody`, `TFoot`,
+   `Span`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code`, `Link`, `Annot`, `Ruby`, `Warichu`,
+   `Figure`, `Formula`, `Form`, plus PDF 2.0 additions and standards-based namespace extensions.
 2. **Attribute/class-map parsing:** Parse layout, list, table, print-field, and user-property
    attributes together with class maps and expose them through extraction/inspection APIs.
 3. **Semantic text overrides:** Prefer `/ActualText` for extraction when present; expose `/Alt`,
@@ -4570,11 +4862,15 @@ larger and must be owned explicitly.
 4. **Artifacts and destinations:** Detect artifact-marked content, allow artifact-aware extraction
    modes, and expose structure destinations and semantic links. Artifact handling must cover common
    headers, footers, page numbers, and watermark-style content.
-5. **Audit without remediation:** PDF/UA-style validation belongs in Monkeybee as an audit/report
+5. **Marked-content integrity:** Track `BMC` / `BDC` / `EMC` nesting precisely, auto-close
+   unclosed spans in tolerant mode at content-stream end, flag overlapping/impossible nesting as
+   tagged-PDF audit findings, and preserve repaired intent in diagnostics rather than silently
+   flattening it away.
+6. **Audit without remediation:** PDF/UA-style validation belongs in Monkeybee as an audit/report
    surface even though accessibility remediation and tag generation remain outside the baseline gate.
    Audit rules must cover structure-tree completeness, figure alt-text presence, heading hierarchy,
    table header associations, and reading-order plausibility.
-6. **Reading-order visualization:** Provide a debug/inspection overlay that shows structure order,
+7. **Reading-order visualization:** Provide a debug/inspection overlay that shows structure order,
    artifacts, and the mapping from marked content to structure elements.
 
 ### Form-data interchange and flattening expansion contract
@@ -4611,12 +4907,17 @@ The engine must inventory these surfaces comprehensively even when execution/pla
    than collapsed into opaque strings.
 2. **Document link map:** Extract a typed link map from navigational actions and related
    annotations so downstream tooling can reason about document navigation without replaying UI
-   behavior.
-3. **Document-structure extras:** Parse and expose article threads and beads, page transitions,
-   thumbnails, collections/portfolios, alternate presentations, `/PieceInfo`, and web-capture
-   structures. Collection support includes schema and navigator extraction; web-capture support
-   includes content sets, source info, and capture-command dictionaries.
-4. **Multimedia inventory:** Parse and expose screen annotations, sound objects, movie annotations,
+   behavior. Link maps must distinguish page destinations, named destinations, remote targets, and
+   structure destinations (`/SD`) rather than collapsing them into a single opaque target field.
+3. **JavaScript timing graph:** Inventory document-open, page-open/page-close, annotation
+   focus/blur/mouse events, form keystroke/validate/calculate/format hooks, and save/print timing
+   triggers as a queryable graph even when JavaScript execution is denied.
+4. **Document-structure extras:** Parse and expose article threads and beads, page transitions,
+   thumbnails, collections/portfolios, alternate presentations, `/PieceInfo`, named
+   optional-content configurations (`/Configs`), and web-capture structures. Collection support
+   includes schema and navigator extraction; web-capture support includes content sets,
+   `SourceInfo`, and capture-command dictionaries.
+5. **Multimedia inventory:** Parse and expose screen annotations, sound objects, movie annotations,
    media clips, rendition trees, and media-player parameters. Preserve them during round trip while
    default policy remains execute-deny; legacy movie and sound objects must still be cataloged even
    when no playback implementation is active.
@@ -6107,7 +6408,7 @@ The current spec inventory names 104 algorithms and techniques.
 
 The 104-item total above remains the current locked baseline inventory. This specification now also
 names additional expansion lanes so APR/proof work can treat them as real contracts rather than
-vibes. Depending on counting policy, they can be tracked in two additive ways:
+vibes. Depending on counting policy, they can be tracked in three additive buckets:
 
 - **Priority algorithm/capability uplift: +39**
   - Print production: +9
@@ -6170,11 +6471,57 @@ vibes. Depending on counting policy, they can be tracked in two additive ways:
     - movie annotations
     - media clips
     - rendition trees and player parameters
+- **Deep correctness / hardening uplift: +26**
+  - Redaction, signatures, and active-content forensics: +3
+    - redaction canary scanner across the full emitted file
+    - JavaScript action timing graph
+    - certification-vs-approval signature classification and MDP-chain validation
+  - Font resilience and text correctness: +4
+    - CFF subroutine dependency analysis, dead-code elimination, renumbering, and bias recalculation
+    - Type 1 alternate-key recovery for damaged encrypted font programs
+    - font-descriptor `/Flags` cross-validation against embedded font data
+    - CIDFont vertical metrics (`/W2`, `/DW2`)
+  - Structure and metadata integrity: +5
+    - RoleMap-chain termination and circular detection
+    - marked-content nesting repair and audit
+    - page/resource-level metadata stream enumeration and preservation
+    - web-capture provenance (`/SourceInfo`)
+    - structure destinations (`/SD`)
+  - Parser/render hardening: +6
+    - inline-image resource leakage tolerance
+    - name/number-tree `/Limits` validation and repair
+    - blend-mode preference-list handling
+    - Type 4 function complexity analysis
+    - stream-extent cross-validation
+    - `/Identity` crypt-filter no-op handling
+  - Prepress and color fidelity: +6
+    - `/Trapped` tri-state semantics
+    - ICC profile version detection and mixed-profile hazard reporting
+    - alternate image representations
+    - custom spot-function library/catalog
+    - PDF 2.0 DeviceN attributes and mixing hints
+    - output-intent condition-identifier lookup
+  - OCG and annotation rendering detail: +2
+    - optional-content configuration sequences (`/Configs`)
+    - cloudy annotation border effects (`/BE`)
 
-This yields two useful forward-looking counts:
+This yields four useful forward-looking counts:
 - `104 + 39 = 143` when tracking only the priority uplift families.
 - `104 + 51 = 155` when the document-structure and multimedia inventory lanes are counted too.
+- `104 + 39 + 26 = 169` when the hardening uplift is counted alongside the priority uplift.
+- `104 + 39 + 12 + 26 = 181` when all currently named uplift families are counted together.
 
-Both counts are legitimate as long as the counting policy is stated. The architectural requirement
-is the same in either case: these lanes are now part of the named ambition and must be represented
-in scope, ledger, proof, and implementation planning.
+All of these counts are legitimate as long as the counting policy is stated. The architectural
+requirement is the same in every case: these lanes are now part of the named ambition and must be
+represented in scope, ledger, proof, and implementation planning.
+
+For sequencing purposes, APR rounds should prioritize the 39-item uplift in this order:
+signature lifecycle, tagged-accessibility audit, enterprise prepress, form interchange, full
+action inventory, then the broader document-structure/multimedia catalog lanes and rendering
+quality uplifts. That ordering is about proof leverage, not about shrinking any later lane.
+
+Within the 26-item hardening uplift, the first APR/proof emphasis should be:
+redaction canary scanning, certification/approval signature classification, JavaScript timing
+graphs, CFF/Type1 font repair and subsetting correctness, then the print-fidelity hazard surfaces
+(`Trapped`, ICC versioning, DeviceN attributes, output-condition identifiers, and alternate image
+selection). Those items create the clearest information gain per proof artifact.

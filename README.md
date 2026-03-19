@@ -124,17 +124,105 @@ hand-waved future wishes.
 - **Rendering-quality uplifts:** N-dimensional sampled-function interpolation, better resampling
   kernels, shading-edge anti-aliasing, and robust matte un-premultiplication algorithms, with
   Lanczos-3 downscaling and Mitchell-Netravali upscaling as named target kernels.
+- **Deep correctness and hardening surfaces:** redaction canary scanning across the entire emitted
+  file, CFF subroutine decompilation/recompilation, damaged-Type-1 alternate-key recovery,
+  RoleMap-chain resolution, inline-image resource leakage tolerance, name/number-tree `/Limits`
+  repair, marked-content nesting repair, page/resource-level metadata enumeration, optional-content
+  configuration sequences, `/Trapped` tri-state semantics, blend-mode preference lists, Type 4
+  function complexity analysis, stream-extent validation, font-descriptor flag cross-checking,
+  CIDFont vertical metrics, ICC-version hazard reporting, `/Identity` crypt-filter no-op handling,
+  cloudy annotation borders, alternate image selection, custom spot-function cataloging, PDF 2.0
+  DeviceN attributes, output-intent condition lookup, JavaScript trigger graph extraction, web
+  capture provenance, structured destinations, and certification-vs-approval signature
+  classification.
 
 These are not excuses to dilute the closed-loop proof. They are the high-value adjacencies that a
 closed-loop engine naturally grows into once the substrate, preservation model, and proof harness
 are real.
 
-Counting policy is now explicit. The locked current inventory remains **104 named algorithms and
-techniques**; the priority uplift above adds **39** more for a forward-looking total of **143**,
-and the broader document-structure plus multimedia inventory lanes bring the inclusive count to
-**155**. That matters because these additions are not cosmetic backlog items: they are the lanes
-that make the engine matter in prepress, regulated e-signature, accessibility compliance,
-government-form interchange, and document forensics.
+Expansion-wave ordering is also explicit so APR and proof work do not diffuse across too many
+surfaces at once:
+
+- **Wave 1 — highest-signal adoption surfaces:** PAdES creation/LTV, PDF/UA-style audit, prepress
+  inspection/proofing, FDF/XFDF plus form flattening, and full action inventory/link-map
+  extraction. These are the lanes that most directly unlock legal/compliance workflows, print-shop
+  evaluation, government-form interchange, and document forensics.
+- **Wave 2 — surrounding document-reality inventory:** article threads, portfolios, page
+  transitions, thumbnails, alternate presentations, page-piece/web-capture structures, and
+  multimedia/rendition inventory. These strengthen preservation, inspection, and forensics once
+  the first wave is real.
+- **Wave 3 — rendering-quality uplifts:** Lanczos/Mitchell resampling, N-dimensional sampled
+  function interpolation, shading-edge anti-aliasing, and matte un-premultiplication. These are
+  important, but they compound best after the first two waves have stable proof fixtures and report
+  surfaces.
+
+Counting policy is explicit. The locked current inventory remains **104 named algorithms and
+techniques**. The first forward-looking number is **143**, meaning `104 + 39` priority uplift
+families. A broader inclusive planning number of **155** adds **12** document-structure and
+multimedia catalog lanes tracked separately because they are primarily parse/expose/preserve
+surfaces rather than new math-heavy kernels. This revision also adds a second explicit
+**deep-correctness and hardening uplift of +26**, bringing the priority-plus-hardening planning
+number to **169** and the fully inclusive planning number to **181**. All of these counts are
+valid when the counting policy is stated. What matters is that these additions are not cosmetic
+backlog items: they are the lanes that make the engine matter in prepress, regulated e-signature,
+accessibility compliance, government-form interchange, document forensics, and high-assurance
+redaction/font/metadata correctness.
+
+For APR/public-round arithmetic, the priority uplift is intentionally spelled out:
+
+- original spec inventory: `104`
+- print production: `+9`
+- digital signature lifecycle: `+8`
+- tagged PDF / accessibility: `+10`
+- advanced rendering quality: `+4`
+- advanced forms and interchange: `+7`
+- full action catalog and link-map extraction: `+1`
+- deep correctness and hardening uplift: `+26`
+  - redaction, signatures, and active-content forensics: `+3`
+  - font resilience and text correctness: `+4`
+  - structure and metadata integrity: `+5`
+  - parser/render hardening: `+6`
+  - prepress and color fidelity: `+6`
+  - OCG and annotation rendering detail: `+2`
+
+That yields two useful APR-facing totals:
+
+- **`104 + 39 = 143`** for the original priority uplift framing
+- **`104 + 39 + 26 = 169`** for the priority-plus-hardening framing now needed by APR/proof work
+
+Using the current APR comparison shorthand of **FrankenTUI at `30+`**, Monkeybee's original
+`143`-item framing remains nearly **5x** the named algorithmic breadth, while the `169`-item
+priority-plus-hardening framing is well beyond **5x**.
+
+For APR rounds, demos, and public-signaling compression, the highest-signal additions to foreground
+are:
+
+1. **PAdES digital-signature creation and long-term validation** because it makes the engine
+   immediately useful for legal and regulatory workflows rather than mere passive signature
+   preservation.
+2. **PDF/UA accessibility auditing** because accessibility requirements increasingly carry legal
+   force and produce crisp, reportable proof artifacts.
+3. **Print-production pipeline coverage** because ink coverage, soft proofing, separation preview,
+   preflight, and trap analysis are where enterprise prepress value lives.
+4. **FDF/XFDF round-trip and form flattening** because they create instant utility for
+   government-form and regulated-document workflows.
+5. **Full action catalog and link-map extraction** because they sharpen the forensics/security
+   narrative: the engine can enumerate what a document would attempt to execute, launch, or
+   navigate.
+
+For the second hardening pass, the highest-signal additions to foreground are:
+
+1. **Redaction canary scanning across the entire emitted file** because real redaction failures
+   happen when text survives in metadata, names, attachments, form values, or font tables rather
+   than in visible content alone.
+2. **CFF subroutine recompilation and damaged-Type-1 recovery** because getting font subsetting and
+   damaged embedded-font repair right is rare, technically sharp, and highly defensible.
+3. **JavaScript trigger-graph extraction** because trigger timing across open/page/annotation/form/
+   print/save surfaces is forensically useful even when execution is denied.
+4. **Certification-vs-approval signature classification with MDP-chain validation** because it
+   turns vague DocMDP support into a concrete trust-policy narrative.
+5. **DeviceN/ICC/output-intent/trapped prepress hazard reporting** because it demonstrates that the
+   engine understands real print semantics rather than generic RGB rendering only.
 
 ## Compatibility doctrine
 
@@ -318,8 +406,12 @@ The current locked baseline inventory names 104 algorithms and techniques across
 post-baseline, and experimental lanes (57 pre-existing plus 47 restored or added), including
 restored 3D rendering, GPU backends, PDF 2.0 supplements, forensics, subpixel text, advanced path
 geometry, compression, and hot-path optimizations. The priority uplift captured in the current
-specification adds 39 more named capabilities for a forward-looking total of 143, or 155 when the
-document-structure and multimedia inventory lanes are counted separately.
+specification adds 39 more named capabilities for a forward-looking total of 143. A separate
+supporting inventory bucket adds 12 document-structure and multimedia catalog lanes, which yields
+an inclusive planning total of 155 when those preserve/expose surfaces are counted too. This
+revision also adds a 26-item deep-correctness and hardening uplift, producing a 169-item
+priority-plus-hardening planning total and a fully inclusive planning total of 181 when all named
+uplift families are counted.
 
 ## Specification philosophy
 

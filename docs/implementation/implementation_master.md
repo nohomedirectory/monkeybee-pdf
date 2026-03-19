@@ -23,14 +23,118 @@ This implementation master now carries the same explicit inventory expansion tra
 The locked current inventory remains **104 named algorithms and techniques**. The priority uplift
 for print production, digital signatures, tagged-accessibility, advanced forms, action inventory,
 and rendering-quality upgrades adds **39** more named capabilities for a forward-looking total of
-**143**. Counting broader document-structure and multimedia cataloging lanes separately yields an
-inclusive planning total of **155**.
+**143**. A separate supporting inventory bucket adds **12** document-structure and multimedia
+catalog lanes, yielding an inclusive planning total of **155** when those preserve/expose surfaces
+are counted too. This revision also adds a **26-item deep-correctness and hardening uplift**,
+yielding a **169-item priority-plus-hardening total** and a **181-item fully inclusive planning
+total** when every currently named uplift family is counted together.
 
 Those counts are not marketing garnish. In implementation terms they mean the workspace topology,
 report structures, ledger code families, fixture manifests, and test obligations must all be able
 to represent enterprise prepress, PAdES/LTV, PDF/UA-style audit, FDF/XFDF interchange, full action
-cataloging, and rich-structure/multimedia inventory as first-class lanes rather than vague future
-ideas.
+cataloging, rich-structure/multimedia inventory, redaction canary verification, font repair/
+subsetting correctness, metadata/structure integrity, and parser/render hardening as first-class
+lanes rather than vague future ideas.
+
+For APR arithmetic, the priority uplift is tracked explicitly:
+
+- original spec inventory: `104`
+- print production: `+9`
+- digital signature lifecycle: `+8`
+- tagged PDF / accessibility: `+10`
+- advanced rendering quality: `+4`
+- advanced forms and interchange: `+7`
+- full action catalog and link-map extraction: `+1`
+- deep correctness and hardening uplift: `+26`
+  - redaction, signatures, and active-content forensics: `+3`
+  - font resilience and text correctness: `+4`
+  - structure and metadata integrity: `+5`
+  - parser/render hardening: `+6`
+  - prepress and color fidelity: `+6`
+  - OCG and annotation rendering detail: `+2`
+
+That yields two working implementation totals:
+
+- **`104 + 39 = 143`** for the original priority-uplift framing
+- **`104 + 39 + 26 = 169`** for the priority-plus-hardening framing now required by APR/proof work
+
+Using the current APR comparison shorthand of **FrankenTUI at `30+`**, Monkeybee's `143`-item
+named inventory is nearly **5x** larger on named algorithmic breadth, while the `169`-item
+priority-plus-hardening framing is well beyond **5x**. Implementation planning must therefore
+preserve the full information gain from both uplifts in crate boundaries, proof fixtures, report
+schemas, and ledger code families rather than compressing them into generic "future work."
+
+## APR sequencing for expansion lanes
+
+Expansion breadth stays maximal, but APR sequencing is explicit so proof work lands in coherent
+waves rather than scattering across every surface at once.
+
+- **Wave 1 — immediate adoption and proof leverage:** PAdES creation/LTV, PDF/UA-style audit,
+  enterprise prepress, FDF/XFDF plus form flattening, and full action inventory/link-map
+  extraction. Every bead in this wave must wire all four surfaces: `CapabilityReport`, stable
+  ledger codes, CLI/report summaries, and fixture classes in `monkeybee-proof`.
+- **Wave 2 — supporting document-reality inventory:** article threads/beads, transitions,
+  thumbnails, portfolios, alternate presentations, `PieceInfo`, web capture, and
+  screen/sound/movie/media-clip/rendition inventory. These are preserve-and-expose contracts that
+  strengthen forensics and round-trip credibility once Wave 1 exists.
+- **Wave 3 — rendering-quality uplifts:** Lanczos/Mitchell resampling, N-dimensional sampled
+  function interpolation, shading-edge anti-aliasing, and matte un-premultiplication. These land
+  behind pluggable render traits or backend flags until proof shows they beat the baseline path.
+
+This ordering is prioritization, not exclusion. All three waves remain in the scope registry and
+compatibility ledger from the start.
+
+For APR rounds, demo readiness, and outward-facing proof packaging, the highest-signal additions to
+foreground are:
+
+1. **PAdES digital-signature creation plus long-term validation** because they demand visible
+   `monkeybee-signature`, `monkeybee-write`, `monkeybee-validate`, and proof-harness integration
+   and immediately unlock legal/regulatory workflows.
+2. **PDF/UA accessibility auditing** because it yields crisp report artifacts across
+   `monkeybee-extract`, `monkeybee-validate`, CLI summaries, and compatibility ledgers while
+   addressing increasingly mandatory compliance workflows.
+3. **Enterprise print-production coverage** because prepress reports, separation preview, ink/TAC
+   analysis, soft proofing, and trap inspection demonstrate enterprise-grade rendering and
+   validation depth rather than commodity page rasterization.
+4. **FDF/XFDF round-trip and form flattening** because they connect `monkeybee-forms`,
+   `monkeybee-write`, and preserve-mode proof into obvious everyday utility for government and
+   regulated documents.
+5. **Full action catalog and link-map extraction** because they give `monkeybee-extract`,
+   `monkeybee-forensics`, and CLI reporting a strong forensics narrative around every action a PDF
+   can trigger, reference, or preserve.
+
+For the second hardening pass, the highest-signal additions to foreground are:
+
+1. **Redaction canary scanning across the full emitted file** because it forces
+   `monkeybee-edit`, `monkeybee-forensics`, `monkeybee-write`, and proof fixtures to prove actual
+   content removal rather than visible overlay only.
+2. **CFF subroutine recompilation plus damaged-Type-1 alternate-key recovery** because they force
+   `monkeybee-text` and `monkeybee-compose` to own embedded-font correctness rather than merely
+   parse fonts loosely.
+3. **JavaScript trigger timing graphs** because they connect `monkeybee-extract`,
+   `monkeybee-forensics`, and CLI/reporting into a concrete active-content narrative without code
+   execution.
+4. **Certification-vs-approval signature classification with MDP-chain validation** because they
+   make `monkeybee-signature` and `monkeybee-validate` tell a defensible trust-policy story.
+5. **DeviceN/ICC/output-intent/trapped hazard reporting** because they show that
+   `monkeybee-render`, `monkeybee-validate`, and `monkeybee-extract` understand real prepress
+   semantics rather than generic RGB conversion only.
+
+The 26-item hardening uplift is intentionally cross-cutting rather than isolated in a single crate:
+
+- `monkeybee-edit` and `monkeybee-forensics` own redaction canary scanning and leakage reporting.
+- `monkeybee-text` owns CFF subroutine closure, Type 1 alternate-key recovery, font-flag
+  cross-validation, and CID vertical metrics.
+- `monkeybee-content`, `monkeybee-extract`, and `monkeybee-validate` own RoleMap-chain repair
+  visibility, marked-content nesting audit, and metadata-stream enumeration.
+- `monkeybee-parser`, `monkeybee-catalog`, and `monkeybee-render` own inline-image leakage
+  tolerance, tree-limit repair, blend-mode preference lists, stream-extent validation, and
+  optional-content configuration sequences.
+- `monkeybee-render`, `monkeybee-extract`, and `monkeybee-validate` own `/Trapped`, ICC-version,
+  alternate-image, spot-function, DeviceN-attribute, and output-intent-condition reporting.
+- `monkeybee-signature`, `monkeybee-extract`, and `monkeybee-forensics` own certification/
+  approval classification, JavaScript timing graphs, structured destinations, and web-capture
+  provenance.
 
 ## Workspace topology
 
@@ -761,6 +865,33 @@ pub struct OpenProbe {
     pub recovery_candidates: Vec<RecoveryCandidateSummary>,
 }
 
+pub enum PadesLevel {
+    BB,
+    BT,
+    BLT,
+    BLTA,
+}
+
+pub struct SignatureSummary {
+    pub signature_count: u32,
+    pub pades_levels_present: Vec<PadesLevel>,
+    pub has_document_timestamp: bool,
+    pub has_dss: bool,
+    pub vri_entry_count: u32,
+    pub offline_ltv_ready_count: u32,
+    pub certification_signature_count: u32,
+    pub approval_signature_count: u32,
+    pub mdp_chain_valid: Option<bool>,
+}
+
+pub struct FontHealthSummary {
+    pub cff_font_count: u32,
+    pub cff_subr_rewrite_count: u32,
+    pub type1_alternate_key_count: u32,
+    pub font_flag_mismatch_count: u32,
+    pub cid_vertical_metric_font_count: u32,
+}
+
 pub struct CapabilityReport {
     pub signed: bool,
     pub signature_summary: SignatureSummary,
@@ -782,6 +913,7 @@ pub struct CapabilityReport {
     pub temporal_revision_depth: u32,
     pub hypothesis_summary: Option<HypothesisSetSummary>,
     pub semantic_surface: Option<SemanticSurfaceSummary>,
+    pub font_health_summary: Option<FontHealthSummary>,
     pub prepress_summary: Option<PrepressSummary>,
     pub accessibility_summary: Option<AccessibilitySummary>,
     pub forms_summary: Option<FormInterchangeSummary>,
@@ -791,12 +923,22 @@ pub struct CapabilityReport {
 
 pub struct PrepressSummary {
     pub output_intents: Vec<OutputIntentRef>,
+    pub output_condition_identifiers: Vec<String>,
     pub page_output_intent_count: u32,
+    pub trapped_state: Option<String>,
+    pub icc_profile_versions: Vec<String>,
+    pub mixed_icc_version_hazard: bool,
     pub halftone_types: Vec<HalftoneType>,
     pub has_transfer_functions: bool,
     pub has_bg_ucr: bool,
+    pub has_overprint_sensitive_content: bool,
     pub tac_risk: Option<TacRiskClass>,
+    pub low_dpi_asset_count: u32,
+    pub bleed_risk_count: u32,
     pub separation_names: Vec<String>,
+    pub alternate_image_count: u32,
+    pub spot_function_count: u32,
+    pub device_n_attribute_count: u32,
     pub trap_network_count: u32,
 }
 
@@ -808,13 +950,23 @@ pub struct AccessibilitySummary {
     pub has_language_spans: bool,
     pub has_pronunciation_metadata: bool,
     pub artifact_span_count: u32,
+    pub role_map_cycle_count: u32,
+    pub broken_role_map_count: u32,
+    pub marked_content_nesting_violations: u32,
+    pub structured_destination_count: u32,
+    pub figure_without_alt_count: u32,
+    pub heading_hierarchy_findings: u32,
+    pub table_header_findings: u32,
     pub pdfua_findings: Vec<PdfUaFinding>,
 }
 
 pub struct FormInterchangeSummary {
     pub has_xfa: bool,
     pub can_import_fdf: bool,
+    pub can_export_fdf: bool,
+    pub can_import_xfdf: bool,
     pub can_export_xfdf: bool,
+    pub flatten_ready: bool,
     pub javascript_hook_count: u32,
     pub submit_target_count: u32,
     pub barcode_field_count: u32,
@@ -825,6 +977,11 @@ pub struct ActionInventorySummary {
     pub total_actions: u32,
     pub actions_by_kind: Vec<ActionKindCount>,
     pub navigation_target_count: u32,
+    pub link_map_edge_count: u32,
+    pub javascript_trigger_site_count: u32,
+    pub structured_destination_count: u32,
+    pub execute_capable_action_count: u32,
+    pub rich_media_action_count: u32,
     pub execute_deny_findings: u32,
 }
 
@@ -834,7 +991,14 @@ pub struct RichStructureSummary {
     pub page_transition_count: u32,
     pub thumbnail_count: u32,
     pub portfolio_item_count: u32,
+    pub alternate_presentation_count: u32,
+    pub named_oc_config_count: u32,
+    pub page_piece_entry_count: u32,
+    pub metadata_stream_count: u32,
+    pub web_capture_count: u32,
+    pub web_capture_source_info_count: u32,
     pub multimedia_item_count: u32,
+    pub rendition_tree_count: u32,
 }
 ```
 
@@ -1061,6 +1225,14 @@ pub struct InvariantCertificate {
     pub external_attestations: Vec<ExternalAttestationRef>,
 }
 
+pub struct RedactionVerificationSummary {
+    pub canary_terms: Vec<String>,
+    pub raw_byte_match_count: u32,
+    pub structural_match_count: u32,
+    pub scanned_surfaces: Vec<String>,
+    pub verdict: String,
+}
+
 pub struct WriteReceipt {
     pub schema_version: String,
     pub snapshot_id: SnapshotId,
@@ -1076,6 +1248,7 @@ pub struct WriteReceipt {
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
     pub post_write_validation: Vec<ValidationFinding>,
+    pub redaction_verification: Option<RedactionVerificationSummary>,
 }
 ```
 
@@ -1143,18 +1316,32 @@ pub struct LedgerSummary {
 ```
 
 The ledger implementation MUST reserve stable code families for the expansion lanes:
-`print.*`, `signature.*`, `tagged.*`, `pdfua.*`, `forms.*`, `actions.*`, `catalog.*`, and
-`multimedia.*`. Stable subfamilies include `print.halftone`, `print.transfer`, `print.bg_ucr`,
-`print.overprint_sim`, `print.softproof`, `print.output_intent`, `print.separations`, `print.tac`,
+`print.*`, `signature.*`, `tagged.*`, `pdfua.*`, `forms.*`, `actions.*`, `catalog.*`,
+`multimedia.*`, `redaction.*`, `font.*`, `parse.*`, `color.*`, `crypt.*`, and `ocg.*`. Stable
+subfamilies include `print.halftone`, `print.transfer`, `print.bg_ucr`,
+`print.overprint_sim`, `print.softproof`, `print.output_intent`, `print.output_condition`,
+`print.separations`, `print.preflight`, `print.tac`, `print.trap`, `print.trapped_status`,
+`print.spot_function`, `print.devicen_attrs`, `print.icc_version`, `print.alternate_image`,
 `signature.pades`, `signature.dss`, `signature.vri`, `signature.cert_path`, `signature.ocsp`,
-`signature.crl`, `signature.tsa`, `signature.creation`, `tagged.standard_role`,
-`tagged.actualtext`, `tagged.alt`, `tagged.expansion_text`, `tagged.lang`,
-`tagged.pronunciation`, `pdfua.heading_hierarchy`, `pdfua.table_headers`, `forms.fdf`,
-`forms.xfdf`, `forms.flatten`, `forms.submit_target`, `actions.goto_3d_view`, `actions.hide`,
-`actions.named`, `actions.rendition`, `catalog.beads`, `catalog.collection_schema`,
-`catalog.alternate_presentation`, `multimedia.media_clip`, and `multimedia.rendition_tree`. Even
-when handling is Tier 2/3, those features must be detected and categorized deterministically so
-proof dashboards and APR rounds can track them.
+`signature.crl`, `signature.tsa`, `signature.creation`, `signature.offline_ltv`,
+`signature.certification`, `tagged.standard_role`, `tagged.rolemap_cycle`,
+`tagged.rolemap_broken`, `tagged.attributes`, `tagged.actualtext`, `tagged.alt`,
+`tagged.expansion_text`, `tagged.lang`, `tagged.pronunciation`, `tagged.artifact`,
+`tagged.destination`, `tagged.marked_nesting`, `pdfua.heading_hierarchy`,
+`pdfua.table_headers`, `pdfua.reading_order`, `forms.fdf`, `forms.xfdf`, `forms.flatten`,
+`forms.js_actions`, `forms.submit_target`, `forms.signature_field`, `forms.barcode`,
+`forms.xfa_static_flatten`, `actions.goto_3d_view`, `actions.thread`, `actions.hide`,
+`actions.named`, `actions.transition`, `actions.rendition`, `actions.richmedia`,
+`actions.javascript_timing`, `actions.structure_destination`, `catalog.threads`,
+`catalog.beads`, `catalog.thumbnail`, `catalog.collection_schema`,
+`catalog.alternate_presentation`, `catalog.page_piece`, `catalog.web_capture`,
+`catalog.source_info`, `catalog.metadata_stream`, `catalog.tree_limits`, `multimedia.screen`,
+`multimedia.sound`, `multimedia.movie`, `multimedia.media_clip`, `multimedia.rendition_tree`,
+`multimedia.player_params`, `redaction.canary`, `font.cff_subr`, `font.type1_alt_key`,
+`font.flags`, `font.vertical_metrics`, `parse.inline_image_colorspace`, `parse.stream.extent`,
+`color.blend_preference`, `color.icc_version`, `crypt.identity_filter`, `ocg.configs`, and
+`ocg.membership`. Even when handling is Tier 2/3, those features must be detected and categorized
+deterministically so proof dashboards and APR rounds can track them.
 
 ### PDF object model (`monkeybee-core::object`)
 
@@ -1917,7 +2104,9 @@ PdfSnapshot + extract profile
 - Unit tests: lexer on known token sequences, object parsing on all types, xref parsing on well-formed and malformed tables.
 - Corpus tests: parse every file in the pathological corpus, verify no panics, collect diagnostics.
 - Fuzz tests: random bytes -> parser -> no panics, no UB, bounded memory.
-- Repair tests: known malformed inputs -> verify repair produces usable output.
+- Repair tests: known malformed inputs -> verify repair produces usable output, including
+  non-standard Type 1 encryption keys, `/Identity` crypt-filter no-op streams, and broken
+  name/number-tree `/Limits`.
 - Ambiguity tests: ambiguous fixtures produce multiple candidates or an explicit unresolved classification; no silent collapse.
 
 ### monkeybee-substrate
@@ -1952,7 +2141,9 @@ PdfSnapshot + extract profile
 - Sink adapter tests: RenderSink, ExtractSink, InspectSink, EditSink receive correct events for known content streams.
 - Property tests: PagePlan IR equivalence with streaming events.
 - Cache/query tests: PagePlan cache invalidation on content/resource changes.
-- Error recovery tests: operator-level isolation, state rollback on partial failure, resource resolution failure handling, inline image recovery, Q stack underflow recovery, recursion limit enforcement.
+- Error recovery tests: operator-level isolation, state rollback on partial failure, resource
+  resolution failure handling, inline image recovery including resource-leakage color-space cases,
+  marked-content nesting repair, Q stack underflow recovery, and recursion limit enforcement.
 - Graphics-algebra tests: save/restore and CTM composition remain consistent with formal state transitions.
 
 ### monkeybee-text
@@ -1961,15 +2152,24 @@ PdfSnapshot + extract profile
 - Authoring pipeline tests: Unicode -> shaping/bidi/line breaking/font fallback -> positioned glyph runs.
 - Unicode fallback chain tests: known fonts with broken/missing ToUnicode produce expected mappings.
 - Shaping/bidi tests: complex scripts (Arabic, Hebrew, Devanagari), ligatures, bidi reordering (authoring pipeline only).
-- Subsetting tests: subset -> re-embed -> verify glyph coverage and metrics round-trip.
+- Subsetting tests: subset -> re-embed -> verify glyph coverage and metrics round-trip, including
+  CFF global/local subroutine closure, renumbering, and bias recalculation.
+- Recovery tests: damaged Type 1 fonts try the allowed alternate key set deterministically and
+  record which key succeeded.
+- Validation tests: `/FontDescriptor` flag bits are cross-checked against embedded font data and
+  CID vertical metrics from `/W2` / `/DW2` drive expected vertical layout.
 - Search/hit-test tests: known text at known positions -> verify search finds it, hit-test returns correct quads.
 
 ### monkeybee-render
 - Unit tests: backend drawing operations, color space conversions, tile/band scheduling.
 - Render comparison tests: render corpus documents -> compare against reference renderers.
 - Visual regression tests: golden-image comparisons with perceptual diff thresholds.
-- Edge case tests: transparency stacking, pattern rendering, Type 3 fonts, unusual blend modes.
-- Prepress tests: RGB overprint simulation, soft-proof output-intent transforms, separation-preview plate images, TAC accumulation, halftone Types 1/5/6/10/16 inspection, and trap-annotation rendering where supported.
+- Edge case tests: transparency stacking, pattern rendering, Type 3 fonts, unusual blend modes,
+  blend-mode preference lists, alternate-image selection, and cloudy annotation-border rendering.
+- Prepress tests: RGB overprint simulation, soft-proof output-intent transforms, separation-preview
+  plate images, TAC accumulation, halftone Types 1/5/6/10/16 inspection, spot-function
+  catalog/evaluation, DeviceN attribute handling, ICC v2/v4 hazard cases, `/Trapped` semantics,
+  output-condition lookup, and trap-annotation rendering where supported.
 - Function-evaluation tests: transfer functions, BG/UCR hooks, spot-function and threshold-screen inspection, and N-dimensional sampled-function interpolation fixtures.
 - Quality tests: Lanczos/Mitchell resampling behavior, shading-edge anti-aliasing, and matte un-premultiplication stability.
 - Cooperative cancellation tests: cancel mid-render at each checkpoint type.
@@ -2005,14 +2205,19 @@ PdfSnapshot + extract profile
 - Unit tests: object serialization for all types, xref generation, stream encoding.
 - WritePlan tests: classification correctness (PreserveBytes/AppendOnly/RewriteOwned/etc.) on known document states.
 - Preservation algebra tests: composed transform claims yield expected preserved / invalidated properties.
-- WriteReceipt tests: receipt digests remain stable under deterministic mode and include correct signature-coverage entries.
+- WriteReceipt tests: receipt digests remain stable under deterministic mode and include correct
+  signature-coverage entries plus redaction-verification summaries when redactions are applied.
 - Round-trip tests: parse -> write -> re-parse -> compare object graphs.
 - Self-consistency tests: write output -> parse with monkeybee-parser -> verify structural validity.
 - Reference validation: write output -> open in PDFium/MuPDF -> verify renders correctly.
+- Stream-extent tests: declared `/Length`, raw byte extent, and decoded semantic extent are
+  cross-checked and mismatches are surfaced with the chosen engine assumption.
 
 ### monkeybee-edit
 - Unit tests: EditTransaction commit/rollback, resource GC, deduplication.
-- Redaction tests: text-only, image-only, mixed, reused XObjects, canary-text leakage.
+- Redaction tests: text-only, image-only, mixed, reused XObjects, canary-text leakage, and full
+  emitted-file scanning across strings, names, XMP, bookmarks, annotations, forms, attachments,
+  and font-side metadata.
 - Optimization tests: compaction produces smaller valid output, recompression round-trips.
 - Content stream rewrite tests: parse-filter-reemit round-trip preserves unfiltered operators exactly, operator drop removes target operators and old stream is deleted from change journal, operator replace substitutes correctly with full graphics state context, injection inserts at correct positions with q/Q wrapping, annotation flattening appends appearance stream with correct coordinate transform, TJ array splitting for partial-overlap redaction.
 - Receipt tests: edit receipts point back to changed digests and affected anchors when applicable.
@@ -2030,7 +2235,8 @@ PdfSnapshot + extract profile
 - XFA tests: static-XFA inspection and flattening degrade explicitly when safe recovery is impossible.
 
 ### monkeybee-annotate
-- Unit tests: annotation creation, geometry calculations, appearance stream generation.
+- Unit tests: annotation creation, geometry calculations, appearance stream generation, and cloudy
+  `/BE` border-effect synthesis.
 - Round-trip tests: annotate -> save -> reload -> verify annotations preserved.
 - Integration tests: annotate corpus documents -> save -> open in reference viewers.
 - Geometry-preservation tests: incremental append does not drift existing annotation quads.
@@ -2039,22 +2245,36 @@ PdfSnapshot + extract profile
 - Unit tests: Arlington-model rules against known valid/invalid objects.
 - Profile tests: PDF/A-4, PDF/X-6 constraint checking on known-conforming documents.
 - Preflight tests: write preflight catches structural errors before serialization.
-- Signature tests: byte-range verification on signed documents.
-- Print-preflight tests: image DPI, bleed/TrimBox/BleedBox, output-intent presence, color-space suitability, TAC thresholds, font completeness, and trap-network checks.
-- Accessibility-audit tests: structure completeness, alt-text presence, heading hierarchy, table association, artifact-marking rules, and reading-order plausibility on tagged fixtures.
-- PAdES/LTV tests: DSS/VRI completeness, revocation-evidence availability, cert-path construction, and offline-validation readiness classification.
+- Signature tests: byte-range verification on signed documents, certification-vs-approval
+  classification, and DocMDP/FieldMDP chain validation.
+- Print-preflight tests: image DPI, bleed/TrimBox/BleedBox, output-intent presence,
+  output-condition lookup, color-space suitability, ICC-version hazards, TAC thresholds, font
+  completeness, `/Trapped` status, DeviceN attributes, alternate images, and trap-network checks.
+- Accessibility-audit tests: structure completeness, alt-text presence, heading hierarchy, table
+  association, artifact-marking rules, RoleMap cycles/breaks, marked-content nesting violations,
+  and reading-order plausibility on tagged fixtures.
+- PAdES/LTV tests: DSS/VRI completeness, revocation-evidence availability, cert-path construction,
+  certification-policy consistency, and offline-validation readiness classification.
 - Receipt cross-check tests: validation findings match receipt-reported post-write validation.
 
 ### monkeybee-extract
 - Unit tests: text extraction on known documents with ground-truth positions.
 - Multi-surface tests: PhysicalText matches exact glyph geometry, LogicalText produces correct reading order with confidence, TaggedText uses structure tree when present.
 - Search/hit-test tests: SearchIndex finds known text, SelectionQuads returns correct regions, HitTest resolves correct characters.
-- Metadata tests: extraction accuracy on documents with known metadata.
-- Tagged-semantic tests: standard roles, role maps, attributes/class maps, ActualText, Alt, expansion text, Lang, pronunciation metadata, artifact handling, and structure destinations match expected outputs.
-- Action/link-map tests: full action inventory, including GoTo3DView/Hide/Named/Rendition/Transition families, and navigational link maps match curated fixtures.
-- Structure-inventory tests: article threads/beads, portfolios, thumbnails, transitions, alternate presentations, PieceInfo, and web-capture structures are exposed deterministically.
+- Metadata tests: extraction accuracy on documents with known metadata, including page/image/font/
+  form-XObject metadata streams and web-capture `SourceInfo`.
+- Tagged-semantic tests: standard roles, transitive role maps, attributes/class maps, ActualText,
+  Alt, expansion text, Lang, pronunciation metadata, marked-content nesting repair, artifact
+  handling, and structure destinations match expected outputs.
+- Action/link-map tests: full action inventory, including GoTo3DView/Hide/Named/Rendition/
+  Transition/JavaScript timing families, and navigational link maps match curated fixtures.
+- Structure-inventory tests: article threads/beads, portfolios, thumbnails, transitions,
+  alternate presentations, named optional-content configs, PieceInfo, metadata streams, and
+  web-capture structures are exposed deterministically.
 - Multimedia-inventory tests: screen/sound/movie/media-clip/rendition structures are detected and reported without execution.
-- Print-inspection tests: output-intent inventory, separation-name extraction, TAC summaries, and placed-image resolution metadata match fixtures.
+- Print-inspection tests: output-intent inventory, output-condition identifiers, separation-name
+  extraction, alternate-image inventory, spot-function catalogs, DeviceN attributes, TAC
+  summaries, and placed-image resolution metadata match fixtures.
 - Semantic graph tests: graph node/edge construction is deterministic for fixed extract profile.
 - Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
