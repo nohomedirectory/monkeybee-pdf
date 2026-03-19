@@ -46,8 +46,8 @@ At minimum, the substrate must unify:
 - content interpretation and graphics-state transitions
 - derived surfaces such as page plans, render-chunk graphs, viewport-aware byte-need graphs, coverage-cell indexes and coverage atlases, extraction outputs, text-paint correspondence receipts, semantic anchors, geometry witnesses, scene receipts and scene normal forms, font authority/subset-closure receipts, truth/provenance surfaces, semantic-delta witnesses, and diffs
 - cross-document import provenance, alias maps, import-closure certificates, and semantic-normal-form evidence
-- edit deltas, invalidation witnesses, write plans, feasibility witnesses, solver-backed frontier witnesses, emission journals, materialization receipts, and temporal lineage
-- proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, publication-closure manifests, and invariant certificates
+- edit deltas, invalidation witnesses, write plans, feasibility witnesses, solver-backed frontier witnesses, emission journals, materialization receipts, taint/erasure receipts, and temporal lineage
+- proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, publication-closure manifests, evidence-closure graphs, signing-session receipts, distribution receipts, and invariant certificates
 
 This matters because several promises that are easy to state and hard to make real — cheap
 snapshots, structural sharing, exact invalidation, explainable diffs, temporal replay, and
@@ -89,6 +89,8 @@ Baseline v1 must prove all of the following:
 - **Governed optimization and dispatch**: hot-path algorithm families, host-capability manifests,
   and proof-canonical downgrades are explicit receipts rather than silent runtime branches.
 - **Receiptable derived artifacts, write receipts, and invariant certificates** for save, diff, redaction, render, extraction, and cache-reuse workflows.
+- **Evidence-closure unification**: receipts, ledgers, manifests, and published artifacts join into one content-addressed closure graph instead of remaining isolated digest islands.
+- **Taint/erasure and layer-state proof**: redaction, sanitization, and optional-content-sensitive workflows carry typed taint classes, erasure receipts, and pinned layer-state witnesses.
 - **Durable persisted artifacts**: file-backed saves and persisted proof artifacts publish atomically and never leave ledgers, receipts, or manifests pointing at partial blobs.
 - **Remote/progressive locality planning**: first-paint fetches are explainable through
   viewport-aware byte-need planning tied to transport-continuity evidence instead of opaque
@@ -98,10 +100,13 @@ Baseline v1 must prove all of the following:
 - **Signature-safe incremental workflows**: signing and timestamping reserve append headroom
   explicitly, account for DSS/VRI growth, and fail before commit when future increments would be
   cornered.
+- **Key-isolated signing**: production signing can route through keystore, HSM, or KMS providers so raw private-key material never enters Monkeybee memory.
+- **Safe-share distribution outputs**: external-share derivatives can strip active content, attachments, hidden layers, and sensitive metadata with explicit distribution and erasure receipts.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, surfaced in a generated capability surface matrix, and never silently swallowed.
 - **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, environment locks, typed oracle-consensus and oracle-disagreement records with region-level explainability, blind-spot ledgers, coverage lattices, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers, evidence bundles, and failure capsules.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
+- **Adaptive transport/execution control**: progressive fetch and runtime-lane adaptation stay inside the resolved policy envelope and emit typed control receipts when they shift.
 - **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, hardware-capability manifests, kernel-dispatch receipts, calibrated prediction-error witnesses, segmented working-set forecasts, and peak-memory witnesses, not ad hoc timing logs.
 - **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, anchor fragility, invalidation causes, and transport continuity in a way users can act on.
 
@@ -271,7 +276,7 @@ Monkeybee is a Rust workspace organized around six explicit strata:
    the preservation boundary.
 4. **Semantic document layer** — resolved page/resource/object meaning, ownership classes, cross-document import provenance, and semantic normal forms.
 5. **Content layer** — graphics-state interpretation, shared IR for render/extract/inspect/edit, and page-space evidence indexes.
-6. **Facade/report layer** — stable public API, diff/signature/report surfaces, proof harness, and CLI.
+6. **Facade/report layer** — stable public API, diff/signature/report surfaces, evidence-closure graphs, proof harness, and CLI.
 
 Workspace crates:
 
@@ -294,7 +299,7 @@ Workspace crates:
 | `monkeybee-3d` | PRC/U3D parsing, unified scene graph, wgpu rendering (Vulkan/Metal/DX12/WebGPU), named views, cross-sections, illustration modes |
 | `monkeybee-gpu` | Optional GPU-accelerated 2D rendering backend via wgpu, shared device/queue with the 3D pipeline, compute shader path rasterization, hardware compositing |
 | `monkeybee-compose` | High-level authoring and composition: document/page builders, appearance synthesis, resource naming, font embedding planning |
-| `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, preservation-aware `WritePlan` execution, replayable emission journals, xref/trailer emission, structural validation, and final compression/encryption |
+| `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, preservation-aware `WritePlan` execution, replayable emission journals, share-safe distribution outputs, xref/trailer emission, structural validation, and final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content-stream rewrite pipeline |
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, FDF/XFDF interchange, flattening, widget/signature bridge, and static-XFA helpers |
 | `monkeybee-paint` | Shared page-independent paint and appearance primitives reused by render, compose, forms, and annotate |
@@ -303,8 +308,8 @@ Workspace crates:
 | `monkeybee-forensics` | Hidden-content detection, redaction audits, post-signing modification analysis, active-content analysis, print-risk analysis, exploit-pattern detection, producer/font fingerprinting |
 | `monkeybee-validate` | Arlington/profile validation, print preflight, PDF/UA-style audit, PAdES/LTV checks, write preflight, signature byte-range checks |
 | `monkeybee-diff` | Structural, text, render, save-impact, and revision-frame comparison engine reused by the facade, proof harness, and CLI |
-| `monkeybee-signature` | Signature parsing, byte-range preservation, PAdES/DSS/VRI modeling, OCSP/CRL/TSA handling, signature creation, DocMDP/FieldMDP policy, verification plumbing, and save-impact analysis |
-| `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, reproducibility manifests, oracle-consensus/disagreement records, blind-spot ledgers, plan-selection evidence, benchmark witnesses, certificate recomputation, and regression gates |
+| `monkeybee-signature` | Signature parsing, byte-range preservation, PAdES/DSS/VRI modeling, OCSP/CRL/TSA handling, key-isolated signature creation, DocMDP/FieldMDP policy, verification plumbing, signing-session receipts, and save-impact analysis |
+| `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, reproducibility manifests, oracle-consensus/disagreement records, blind-spot ledgers, plan-selection evidence, evidence-closure graphs, benchmark witnesses, certificate recomputation, and regression gates |
 | `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, native-isolation attestations, subprocess-friendly broker hooks |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, prepress/signature/accessibility reporting, diffing, plan-save previews, diagnostics, proof execution |
 

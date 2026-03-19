@@ -42,6 +42,15 @@ explicit bridge object, signature reservation grows into append-budget
 forecasting, and durable publication is modeled as artifact-closure
 transactions rather than blob-at-a-time convention.
 
+This revision also closes several cross-cutting gaps that were previously
+spread across adjacent sections rather than owned explicitly: evidence artifacts
+now converge through typed evidence-closure graphs; redaction, sanitization,
+and share-safe output flows gain taint/erasure receipts plus layer-state
+witnesses; signature creation gains a key-isolated provider boundary rather
+than assuming raw-key ingestion; and adaptive transport/execution control is
+treated as a policy-bounded receipt-bearing control surface instead of a hidden
+runtime heuristic.
+
 The most important architectural refinement since the prior revision is simple to state and
 consequential in practice: Monkeybee is no longer described merely as a layered
 parser/document/render/write stack. It now has a baseline computational kernel —
@@ -196,13 +205,13 @@ monkeybee-pdf/
 │   │   │   ├── diagnostics.rs    # DiagnosticSink, Diagnostic, sink adapters
 │   │   │   ├── version.rs        # PdfVersion tracking and version-gated feature registry
 │   │   │   ├── scope.rs          # generated support/scope registry bindings, witness surfaces, evidence gating
-│   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider, OracleProvider
+│   │   │   └── traits.rs         # ByteSource, FontProvider, ColorProfileProvider, CryptoProvider, SigningProvider, OracleProvider
 │   │   └── Cargo.toml
 │   ├── monkeybee-bytes/          # byte sources, revision chain, raw span ownership
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── source.rs         # ByteSource implementations (mmap, in-memory, range-backed)
-│   │   │   ├── fetch.rs          # fetch scheduler and prefetch planning for remote/lazy sources
+│   │   │   ├── fetch.rs          # fetch scheduler, prefetch planning, and adaptive transport control for remote/lazy sources
 │   │   │   ├── access_plan.rs    # reusable page/resource/byte-range access plans
 │   │   │   ├── revision.rs       # revision chain tracking
 │   │   │   └── span.rs           # raw span ownership for preserve mode / raw-span nodes
@@ -391,6 +400,7 @@ monkeybee-pdf/
 │   │   │   ├── rewrite.rs        # full document rewrite (deterministic mode)
 │   │   │   ├── incremental.rs    # incremental append save
 │   │   │   ├── plan.rs           # WritePlan, preservation claims, signature impact
+│   │   │   ├── distribution.rs   # share-safe distribution planning and receipt emission
 │   │   │   ├── receipt.rs        # WriteReceipt assembly, invariant-certificate linkage
 │   │   │   ├── encrypt.rs        # final encryption and output assembly
 │   │   │   └── validate.rs       # output structural validation
@@ -489,10 +499,10 @@ monkeybee-pdf/
 │   │   │   ├── benchmark.rs      # performance benchmarks
 │   │   │   ├── fuzz.rs           # fuzz testing coordination
 │   │   │   ├── reducer.rs        # automatic failure minimization
-│   │   │   └── evidence.rs       # artifact generation
+│   │   │   └── evidence.rs       # artifact generation, evidence-closure graphs, and bundle publication
 │   │   └── Cargo.toml
 │   ├── monkeybee-diff/           # structural/text/render/save-impact/revision diff engine
-│   ├── monkeybee-signature/      # signature dictionaries, byte-range maps, policy + verification
+│   ├── monkeybee-signature/      # signature dictionaries, byte-range maps, key-isolated signing, policy + verification
 │   │   ├── src/
 │   │   │   ├── lib.rs
 │   │   │   ├── model.rs          # signature dictionaries, DSS, VRI
@@ -502,6 +512,7 @@ monkeybee-pdf/
 │   │   │   ├── trust.rs          # trust-anchor policy, AIA/SKI/AKI path helpers
 │   │   │   ├── timestamp.rs      # RFC 3161 parsing and verification
 │   │   │   ├── create.rs         # CMS/PAdES creation
+│   │   │   ├── signing.rs        # key-isolated signing-provider bridge and signing-session receipts
 │   │   │   └── ltv.rs            # offline long-term validation readiness
 │   │   └── Cargo.toml
 │   ├── monkeybee-native/         # all optional FFI/native bridges, broker adapters, and isolation attestations
@@ -814,6 +825,13 @@ Implementation notes:
 - viewport-critical render work must remain isolatable from proof/oracle and
   persistent-artifact publication lanes under the configured topology policy
 
+Adaptive control is an explicit implementation concern rather than a hidden
+runtime trick. Remote fetchers, progressive renderers, and execution-lane
+supervisors may tighten fetch concurrency, lane caps, chunk granularity, or
+decode isolation in response to viewport shifts, transport continuity risk,
+memory pressure, or decoder instability, but every such shift must remain
+policy-bounded and receiptable through `AdaptationDecisionReceipt`.
+
 ### Async orchestration layer
 
 Monkeybee PDF uses `asupersync` as its async runtime and orchestration substrate. Per the upstream
@@ -951,6 +969,7 @@ pub struct MonkeybeeEngine {
     pub font_provider: Box<dyn FontProvider>,
     pub color_profile_provider: Box<dyn ColorProfileProvider>,
     pub crypto_provider: Option<Box<dyn CryptoProvider>>,
+    pub signing_provider: Option<Box<dyn SigningProvider>>,
     pub oracle_provider: Option<Box<dyn OracleProvider>>,
     pub engine_policy: EnginePolicy,
 }
@@ -1851,6 +1870,7 @@ pub struct WriteReceipt {
     pub bytes_appended: u64,
     pub preservation: BytePreservationMap,
     pub signature_coverage: Vec<SignedCoverageEntry>,
+    pub signing_session: Option<SigningSessionReceipt>,
     pub ownership_transitions: Vec<OwnershipTransitionRecord>,
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
@@ -1862,6 +1882,9 @@ pub struct WriteReceipt {
     pub feasibility_witness: Option<FeasibilityWitness>,
     pub frontier_witness: Option<FrontierWitness>,
     pub byte_patch_receipt: Option<BytePatchReceipt>,
+    pub erasure_receipts: Vec<ErasureReceipt>,
+    pub distribution_receipt: Option<DistributionReceipt>,
+    pub evidence_closure: Option<EvidenceClosureReceipt>,
     pub post_write_validation: Vec<ValidationFinding>,
     pub redaction_verification: Option<RedactionVerificationSummary>,
 }
@@ -1901,6 +1924,9 @@ pub enum PublicationArtifactKind {
     SavedPdf,
     WriteReceipt,
     InvariantCertificate,
+    DistributionReceipt,
+    SigningSessionReceipt,
+    EvidenceClosureReceipt,
     FrontierWitness,
     BenchmarkWitness,
     FailureCapsule,
@@ -1950,6 +1976,9 @@ Implementation notes:
 - save/proof publication should stage an `ArtifactClosureManifest` and publish
   the closure manifest last so crash recovery can quarantine incomplete child
   artifact sets deterministically
+- publication closure is wider than the primary PDF blob; distribution,
+  signing-session, and evidence-closure artifacts participate in the same
+  manifest-last durability contract when present
 
 ### Temporal replay (`monkeybee-substrate::temporal`)
 
@@ -1987,6 +2016,9 @@ pub struct CompatibilityLedger {
     pub plan_selection_refs: Vec<ArtifactDigestRef>,
     pub oracle_consensus_refs: Vec<ArtifactDigestRef>,
     pub oracle_disagreement_refs: Vec<ArtifactDigestRef>,
+    pub evidence_closure_refs: Vec<ArtifactDigestRef>,
+    pub distribution_receipt_refs: Vec<ArtifactDigestRef>,
+    pub erasure_receipt_refs: Vec<ArtifactDigestRef>,
     pub pages: Vec<PageLedger>,
     pub summary: LedgerSummary,
 }
@@ -2018,6 +2050,48 @@ pub struct ArtifactRef {
 }
 
 #[derive(Serialize, Deserialize)]
+pub enum EvidenceArtifactKind {
+    MaterializationReceipt,
+    InvalidationWitness,
+    WriteReceipt,
+    InvariantCertificate,
+    DistributionReceipt,
+    ErasureReceipt,
+    SigningSessionReceipt,
+    CompatibilityLedger,
+    ReproducibilityManifest,
+    PlanSelectionRecord,
+    OracleDisagreementRecord,
+    BenchmarkWitness,
+    FailureCapsule,
+    PublicationReceipt,
+}
+
+#[derive(Serialize, Deserialize)]
+pub enum EvidenceRelationKind {
+    DerivedFrom,
+    Verifies,
+    Refines,
+    Publishes,
+    Externalizes,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EvidenceEdge {
+    pub from: String,
+    pub to: String,
+    pub relation: EvidenceRelationKind,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EvidenceClosureReceipt {
+    pub root: String,
+    pub artifacts: Vec<(String, EvidenceArtifactKind)>,
+    pub edges: Vec<EvidenceEdge>,
+    pub bundle_digest: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct LedgerSummary {
     pub total_features: u32,
     pub tier1_count: u32,
@@ -2031,14 +2105,19 @@ pub struct LedgerSummary {
 ```
 
 The ledger implementation MUST reserve stable code families for the expansion lanes:
-`print.*`, `signature.*`, `tagged.*`, `pdfua.*`, `forms.*`, `actions.*`, `catalog.*`,
-`multimedia.*`, `redaction.*`, `font.*`, `parse.*`, `color.*`, `crypt.*`, and `ocg.*`. Stable
+`print.*`, `signature.*`, `evidence.*`, `distribution.*`, `tagged.*`, `pdfua.*`, `forms.*`,
+`actions.*`, `catalog.*`, `multimedia.*`, `redaction.*`, `font.*`, `parse.*`, `color.*`,
+`crypt.*`, and `ocg.*`. Stable
 subfamilies include `print.halftone`, `print.transfer`, `print.bg_ucr`,
 `print.overprint_sim`, `print.softproof`, `print.output_intent`, `print.output_condition`,
 `print.separations`, `print.preflight`, `print.tac`, `print.trap`, `print.trapped_status`,
 `print.spot_function`, `print.devicen_attrs`, `print.icc_version`, `print.alternate_image`,
 `signature.pades`, `signature.dss`, `signature.vri`, `signature.cert_path`, `signature.ocsp`,
 `signature.crl`, `signature.tsa`, `signature.creation`, `signature.offline_ltv`,
+`signature.key_isolation`, `evidence.closure`, `evidence.bundle`,
+`distribution.share_safe`, `distribution.metadata_strip`,
+`distribution.attachment_policy`, `distribution.layer_pin`,
+`distribution.signature_tradeoff`,
 `signature.certification`, `tagged.standard_role`, `tagged.rolemap_cycle`,
 `tagged.rolemap_broken`, `tagged.attributes`, `tagged.actualtext`, `tagged.alt`,
 `tagged.expansion_text`, `tagged.lang`, `tagged.pronunciation`, `tagged.artifact`,
@@ -2053,10 +2132,16 @@ subfamilies include `print.halftone`, `print.transfer`, `print.bg_ucr`,
 `catalog.source_info`, `catalog.metadata_stream`, `catalog.tree_limits`, `multimedia.screen`,
 `multimedia.sound`, `multimedia.movie`, `multimedia.media_clip`, `multimedia.rendition_tree`,
 `multimedia.player_params`, `redaction.canary`, `font.cff_subr`, `font.type1_alt_key`,
-`font.flags`, `font.vertical_metrics`, `parse.inline_image_colorspace`, `parse.stream.extent`,
-`color.blend_preference`, `color.icc_version`, `crypt.identity_filter`, `ocg.configs`, and
-`ocg.membership`. Even when handling is Tier 2/3, those features must be detected and categorized
+`redaction.erasure`, `font.flags`, `font.vertical_metrics`, `parse.inline_image_colorspace`,
+`parse.stream.extent`, `color.blend_preference`, `color.icc_version`,
+`crypt.identity_filter`, `ocg.configs`, `ocg.membership`, and `ocg.layer_state`. Even when
+handling is Tier 2/3, those features must be detected and categorized
 deterministically so proof dashboards and APR rounds can track them.
+
+Evidence-closure graphs are first-class external receipts, not proof-only glue.
+Compatibility ledgers and publication receipts should reference them by digest,
+while large child artifacts remain externalized instead of being inlined into
+the ledger payload.
 
 ### Proof reproducibility and oracle resolution (`monkeybee-proof::repro` / `monkeybee-proof::oracle_resolution`)
 
@@ -3824,11 +3909,38 @@ pub trait CryptoProvider: Send + Sync {
     fn digest(&self, algorithm: DigestAlgorithm, data: &[u8]) -> Vec<u8>;
 }
 
+pub enum KeyIsolationClass {
+    TestEphemeral,
+    ProcessLocalUnlocked,
+    OsKeystoreBound,
+    HardwareTokenIsolated,
+    RemoteKmsIsolated,
+}
+
+pub trait SigningProvider: Send + Sync {
+    fn describe_key(
+        &self,
+        selector: &SigningKeySelector,
+    ) -> Result<SigningKeyDescriptor>;
+
+    fn sign_detached(
+        &self,
+        selector: &SigningKeySelector,
+        payload: &DetachedSigningPayload,
+    ) -> Result<DetachedSignatureMaterial>;
+}
+
 pub trait OracleProvider: Send + Sync {
     fn resolve(&self, key: &OracleKey) -> Option<Arc<[u8]>>;
     fn manifest(&self) -> OracleManifest;
 }
 ```
+
+Implementation note: raw private-key material is forbidden in engine state,
+substrate blobs, receipts, and failure artifacts. Signing flows construct the
+detached payload inside Monkeybee, hand only that payload to the
+`SigningProvider`, and surface the resulting `KeyIsolationClass` through
+signing-session and write receipts.
 
 ### Test obligation matrix reference
 
@@ -3842,6 +3954,7 @@ preserve, and redaction safety), the revised matrix also adds:
 - `historical-replay`
 - `hypothesis-recovery`
 - `semantic-anchor-stability`
+- `share-safe-distribution`
 
 The regression policy remains blocking: any previously passing gated class that fails in a new CI
 run is a merge blocker unless explicitly triaged.

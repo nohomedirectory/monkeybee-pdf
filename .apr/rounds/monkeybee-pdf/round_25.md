@@ -1,0 +1,1 @@
+I’m grounding the final review in exact spec locations now, and the new emphasis is on cross-cutting closure layers: evidence unification, taint/erasure and layer-state proofs, key-isolated signing, safe-share/distribution outputs, and adaptive transport/execution control.

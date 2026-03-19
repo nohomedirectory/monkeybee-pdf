@@ -227,6 +227,9 @@ Modes are low-level contracts. Most callers should start from an `OperationProfi
 - `BrowserWasm`
   - parse=tolerant, write=deterministic, security=strict, open=in_memory_remote,
     provider_policy=pinned_only
+- `ShareSafeDistribution`
+  - parse=tolerant, write=plan_selected, security=strict, open=eager,
+    provider_policy=pinned_only, active_content=strip_on_write
 
 `ExecutionContext::from_profile(profile)` materializes budgets, cache policy,
 provider policy, optional provider overrides, determinism, and default
@@ -342,6 +345,54 @@ Rules:
   typed artifact, not an anecdotal performance note
 - benchmark witnesses SHOULD attach work receipts for parse, decode, render,
   query-materialize, and save-plan phases on canonical runs
+
+### Adaptive transport and execution control doctrine
+
+Monkeybee may adapt fetch priorities, lane caps, chunk granularity, placeholder
+aggressiveness, and isolation choices at runtime, but only inside the already
+resolved policy envelope. Adaptation is a typed control surface, not a license
+for silent behavior drift.
+
+```
+pub enum AdaptationTrigger {
+    ViewportShift,
+    FetchStall,
+    TransportContinuityRisk,
+    MemoryPressure,
+    DecoderInstability,
+    LatencyBudgetThreat,
+}
+
+pub enum AdaptationActuator {
+    FetchConcurrency,
+    PrefetchWindow,
+    LaneConcurrencyCap,
+    RenderChunkGranularity,
+    DecodeIsolation,
+    PlaceholderAggressiveness,
+}
+
+pub struct AdaptationDecisionReceipt {
+    pub trigger: AdaptationTrigger,
+    pub actuators: Vec<AdaptationActuator>,
+    pub prior_policy_digest: [u8; 32],
+    pub resulting_policy_digest: [u8; 32],
+    pub reason: String,
+    pub trace_digest: [u8; 32],
+}
+```
+
+Rules:
+- adaptation may choose only among policy-valid candidates that were already
+  legal under the enclosing `ResolvedPolicySet`
+- adaptation may tighten budgets, reduce concurrency, or degrade non-canonical
+  quality, but it may never silently relax determinism, security, preserve, or
+  signature constraints
+- proof-canonical runs pin or disable adaptation unless the test explicitly
+  targets controller behavior
+- remote progressive sessions SHOULD emit `AdaptationDecisionReceipt`s whenever
+  transport, viewport, or execution conditions materially change the selected
+  control posture
 
 ### Diagnostic streaming model
 
@@ -497,7 +548,8 @@ Rules:
 - provider-oracle fallbacks and consensus-derived proof facts remain useful, but
   they must stay labeled as such all the way out to public APIs and proof artifacts
 
-Provider interfaces include `FontProvider`, `ColorProfileProvider`, `CryptoProvider`, and `OracleProvider`.
+Provider interfaces include `FontProvider`, `ColorProfileProvider`,
+`CryptoProvider`, `SigningProvider`, and `OracleProvider`.
 Default provider instances live on `MonkeybeeEngine`.
 `ExecutionContext` does not own the provider registry; it carries only the
 policy and any per-call override layer used to resolve providers.
@@ -507,6 +559,7 @@ pub struct ProviderOverrides {
     pub font_provider: Option<Arc<dyn FontProvider>>,
     pub color_profile_provider: Option<Arc<dyn ColorProfileProvider>>,
     pub crypto_provider: Option<Arc<dyn CryptoProvider>>,
+    pub signing_provider: Option<Arc<dyn SigningProvider>>,
     pub oracle_provider: Option<Arc<dyn OracleProvider>>,
 }
 ```
@@ -540,6 +593,70 @@ crypto). Full PKI verification requires a configured provider (e.g., backed by O
 or a platform keystore). When no verification-capable provider is configured, signature
 inspection reports the signature structure (issuer, serial, algorithm, timestamps) without
 trust validation.
+
+**SigningProvider:**
+```
+pub enum KeyIsolationClass {
+  TestEphemeral,
+  ProcessLocalUnlocked,
+  OsKeystoreBound,
+  HardwareTokenIsolated,
+  RemoteKmsIsolated,
+}
+
+pub struct SigningKeySelector {
+  pub key_id: String,
+}
+
+pub struct SigningKeyDescriptor {
+  pub key_id: String,
+  pub algorithm: String,
+  pub isolation_class: KeyIsolationClass,
+  pub exportable: bool,
+}
+
+pub struct DetachedSigningPayload {
+  pub byte_range_digest: [u8; 32],
+  pub signed_attributes_digest: [u8; 32],
+  pub reservation_window: Option<ReservationWindowId>,
+  pub policy_digest: [u8; 32],
+}
+
+pub struct DetachedSignatureMaterial {
+  pub cms_der: Vec<u8>,
+  pub signature_algorithm: String,
+}
+
+pub struct SigningSessionReceipt {
+  pub key: SigningKeyDescriptor,
+  pub payload_digest: [u8; 32],
+  pub cms_digest: [u8; 32],
+  pub provider_identity: String,
+  pub policy_digest: [u8; 32],
+}
+
+trait SigningProvider {
+  /// Describe the signing key without exporting private-key material.
+  fn describe_key(
+    &self,
+    selector: &SigningKeySelector,
+  ) -> Result<SigningKeyDescriptor>;
+
+  /// Sign the detached PDF signing payload. The private key never leaves the provider boundary.
+  fn sign_detached(
+    &self,
+    selector: &SigningKeySelector,
+    payload: &DetachedSigningPayload,
+  ) -> Result<DetachedSignatureMaterial>;
+}
+```
+
+The default engine ships with no `SigningProvider`; signature creation is unavailable until one is
+configured. Monkeybee must never ingest, persist, or replay raw private-key bytes. Production
+signing flows construct the detached payload inside Monkeybee, hand only that payload to the
+provider, and receive back signature material plus isolation metadata. `TestEphemeral` keys are
+allowed only for fixtures, demos, and explicitly non-production profiles; release-facing signing
+claims must name the `KeyIsolationClass`.
 
 **OracleProvider:**
 ```
@@ -651,6 +768,55 @@ pub struct SanitizationReceipt {
 
 `CapabilityReport` MUST grow an `active_content_inventory_digest` field, and
 the CLI MUST support `inspect --active-content` and `sanitize --receipt-json`.
+
+### Share-safe distribution contract
+
+Producing an externally shareable PDF is not the same as ordinary save.
+Monkeybee SHOULD expose a distribution-planning surface that composes
+active-content sanitization, metadata minimization, attachment policy,
+layer-state pinning, taint/erasure proof, and signature impact into one
+explicit derivative-output contract.
+
+```
+pub enum DistributionProfile {
+    InternalPreserve,
+    ExternalShareSafe,
+    ReviewerBundle,
+}
+
+pub struct DistributionPlan {
+    pub profile: DistributionProfile,
+    pub sanitization: SanitizationPlan,
+    pub metadata_fields_to_strip: Vec<String>,
+    pub embedded_files_to_remove: Vec<ObjRef>,
+    pub pinned_layer_state: Option<LayerStateWitness>,
+    pub expected_signature_impact: SignatureImpactReport,
+}
+
+pub struct DistributionReceipt {
+    pub plan_digest: [u8; 32],
+    pub output_digest: [u8; 32],
+    pub removed_taints: Vec<TaintKind>,
+    pub surviving_taints: Vec<TaintKind>,
+    pub metadata_removed: Vec<String>,
+    pub attachments_removed: Vec<ObjRef>,
+    pub layer_state: Option<LayerStateWitness>,
+    pub erasure_receipts: Vec<ErasureReceipt>,
+    pub signature_impact: SignatureImpactReport,
+}
+```
+
+Rules:
+- `ExternalShareSafe` SHOULD default to `ActiveContentPolicy::StripOnWrite`
+  unless the caller explicitly asks for a weaker policy and accepts the risk
+- distribution planning may not silently preserve execute-capable content,
+  hidden layers, embedded payloads, or sensitive metadata when the selected
+  profile forbids them
+- if a requested distribution profile would invalidate required signatures or
+  violate preserve constraints, the plan MUST explain that tradeoff before byte
+  emission
+- `DistributionReceipt` is a caller-visible artifact that may be published
+  alongside `WriteReceipt`, not an internal cleanup note
 
 ### Policy composition validity contract
 
@@ -869,7 +1035,8 @@ state, surface certificate-chain and revocation evidence, and explain which save
 invalidate signature guarantees. This includes explicit chain building from signing leaf to trust
 anchor via SKI/AKI/AIA metadata, OCSP/CRL evidence capture or embedding, RFC 3161 TSA integration,
 and per-signature VRI material keyed so each signature can be validated independently without a
-network round trip.
+network round trip. Production signing may route through keystore, HSM, or remote-KMS providers so
+raw private-key material never enters Monkeybee memory.
 
 Proof surfaces: signature-creation interoperability tests, timestamp-validation fixtures, DSS/VRI
 round trips, offline long-term validation tests, and post-signing save-impact classification.
@@ -929,6 +1096,22 @@ that must be cataloged even when execution is denied.
 Proof surfaces: parse-and-preserve round trips for portfolios and threaded documents, inventory
 fixtures for page transitions and thumbnails, and multimedia cataloging tests that verify detection
 without execution.
+
+### Workflow 21: Produce share-safe distribution outputs
+
+A user wants to send a PDF outside the trust boundary without leaking hidden
+layers, active content, attachments, or redacted/sensitive metadata. Monkeybee
+can plan a share-safe derivative output, pin the intended optional-content
+configuration, strip or stub active content, remove or retain attachments by
+policy, minimize metadata, and emit erasure and distribution receipts that
+explain exactly what survived and why. This workflow is explicit about
+signature tradeoffs: if a requested safe-share transform would invalidate
+existing signatures or preserve forbidden taint classes, Monkeybee says so
+before bytes are emitted.
+
+Proof surfaces: distribution-plan fixtures, metadata/attachment stripping
+regressions, layer-state pinning checks, taint/erasure receipts on
+redaction-heavy files, and share-safe signature-impact classification.
 
 ---
 
@@ -3955,6 +4138,9 @@ PDF optional content allows content to be organized into groups that can be show
   callers, and switchable without flattening them into the default configuration.
 - Optional Content Membership Dictionaries (OCMDs) combine multiple OCGs with Boolean logic (`/AllOn`, `/AnyOn`, `/AllOff`, `/AnyOff`).
 - The renderer must evaluate OCG/OCMD visibility for each marked content span and skip invisible content.
+- layer evaluation for render, extract, redaction, and distribution workflows
+  SHOULD emit or reference a `LayerStateWitness` so the chosen OCG/OCMD state
+  remains auditable
 
 **Content stream operator set:**
 
@@ -5258,7 +5444,8 @@ Key responsibilities:
 - `monkeybee trace <file>` — emit page/subsystem spans, repair decisions, cache statistics, and budget consumption as JSON
 - `monkeybee signatures <file>` — inspect signature dictionaries, byte ranges, CMS envelope metadata, and provider-backed verification results
 - `monkeybee signatures <file> --pades --dss --vri --ocsp --crl --timestamps` — long-term validation inventory and readiness classification
-- `monkeybee sign <file> --field <name> --cert <p12|pem> --tsa <url> -o <o>` — create CMS/PAdES signatures in incremental-append mode
+- `monkeybee sign <file> --field <name> --signer <provider-key-id|p12|pem> --tsa <url> -o <o>` — create CMS/PAdES signatures in incremental-append mode, optionally through a key-isolated signer
+- `monkeybee share-safe <file> -o <o>` — produce a share-safe derivative with distribution and erasure receipts
 - `monkeybee forms import-fdf <pdf> --fdf <data.fdf> -o <o>` / `monkeybee forms export-fdf <pdf>` / `monkeybee forms flatten <pdf> -o <o>`
 - `monkeybee inspect <file> --actions --link-map --threads --portfolio --piece-info --web-capture --multimedia`
 - `monkeybee render <file> --simulate-overprint [--soft-proof <icc>] [--separations <all|plate>]`
@@ -6001,6 +6188,71 @@ Composition rules:
 Baseline v1 implements this with an auditable rule engine and receipts. Stronger external proof
 mechanisms may be layered later, but the preservation algebra itself is baseline architecture.
 
+### Taint, erasure, and layer-state doctrine
+
+Preservation alone is not enough for redaction, sanitization, or share-safe
+distribution. Monkeybee must also model which sensitive or execution-bearing
+facts are tainted, which layer states can reveal them, and what evidence proves
+they were removed or intentionally retained.
+
+```
+pub enum TaintKind {
+    RedactionTarget,
+    HiddenLayerContent,
+    SensitiveMetadata,
+    EmbeddedFilePayload,
+    ActiveContentPayload,
+    SignatureScopedContent,
+    ShareRestricted,
+}
+
+pub struct TaintAtom {
+    pub taint: TaintKind,
+    pub subject: String,
+    pub source_objects: Vec<ObjRef>,
+    pub provenance: Vec<CausalRef>,
+}
+
+pub struct LayerStateWitness {
+    pub configuration_name: Option<String>,
+    pub usage_intent: String,
+    pub visible_ocgs: Vec<String>,
+    pub hidden_ocgs: Vec<String>,
+    pub layer_digest: [u8; 32],
+}
+
+pub enum ErasureVerdict {
+    ProvenRemoved,
+    RemovedWithResidualOpaqueRisk,
+    NotProven,
+}
+
+pub struct ErasureReceipt {
+    pub taints_requested: Vec<TaintKind>,
+    pub taints_removed: Vec<TaintKind>,
+    pub taints_remaining: Vec<TaintKind>,
+    pub layer_state: Option<LayerStateWitness>,
+    pub verdict: ErasureVerdict,
+    pub verification_artifacts: Vec<[u8; 32]>,
+}
+```
+
+Rules:
+- redaction, active-content sanitization, metadata stripping, attachment
+  removal, and share-safe distribution SHOULD propagate `TaintAtom`s through
+  content, metadata, attachments, font maps, named destinations, action
+  dictionaries, and OCG states
+- any claim of erasure or sanitization MUST cite an `ErasureReceipt`; canary
+  scanning alone is insufficient when layer-state or metadata surfaces remain
+  relevant
+- render, extract, redaction, and distribution outputs whose semantics depend
+  on OCG/OCMD visibility or usage intent (view/print/export/share-safe) MUST be
+  able to cite a `LayerStateWitness`
+- proof-canonical redaction and share-safe fixtures MUST pin the relevant layer
+  state before claiming erasure
+- if tainted content survives only in opaque or unmodeled surfaces, the verdict
+  may not exceed `RemovedWithResidualOpaqueRisk`
+
 ### Semantic-equivalence normal form contract
 
 `SemanticEquivalence` is only meaningful relative to a declared normal form and
@@ -6233,6 +6485,7 @@ pub struct WriteReceipt {
     pub bytes_appended: u64,
     pub preservation: BytePreservationMap,
     pub signature_coverage: Vec<SignedCoverageEntry>,
+    pub signing_session: Option<SigningSessionReceipt>,
     pub ownership_transitions: Vec<OwnershipTransitionRecord>,
     pub invariant_certificate: Option<InvariantCertificate>,
     pub hypothesis_set: Option<HypothesisSetSummary>,
@@ -6242,6 +6495,9 @@ pub struct WriteReceipt {
     pub transport_convergence: Option<SourceConvergenceReceipt>,
     pub emission_journal: Option<EmissionJournal>,
     pub feasibility_witness: Option<FeasibilityWitness>,
+    pub erasure_receipts: Vec<ErasureReceipt>,
+    pub distribution_receipt: Option<DistributionReceipt>,
+    pub evidence_closure: Option<EvidenceClosureReceipt>,
     pub post_write_validation: Vec<ValidationFinding>,
 }
 ```
@@ -6940,6 +7196,10 @@ can distinguish "safe by proof" from "probably removed."
 - unresolved risks
 - proof artifact references
 
+The assurance report SHOULD include or reference the relevant
+`ErasureReceipt`s and `LayerStateWitness` so callers can see which taint
+classes and optional-content state were actually covered by proof.
+
 Default policy is fail-closed: if the achieved assurance level is below caller policy, the save is rejected.
 
 The applied redaction must be irreversible — the original content must not be recoverable from the saved file. This means: do not merely cover the content with an opaque rectangle (the content would still be extractable). The selected apply mode guarantees actual removal or destruction of underlying content.
@@ -7054,6 +7314,9 @@ pub enum PublicationArtifactKind {
     SavedPdf,
     WriteReceipt,
     InvariantCertificate,
+    DistributionReceipt,
+    SigningSessionReceipt,
+    EvidenceClosureReceipt,
     FrontierWitness,
     BenchmarkWitness,
     FailureCapsule,
@@ -7134,6 +7397,65 @@ Rules:
   that is absent from the lockfile
 - reproducibility manifests SHOULD treat the environment lock as a first-class
   child artifact rather than a prose-only description
+
+### Evidence-closure and unification doctrine
+
+Monkeybee already emits many receipts, ledgers, manifests, and witnesses. Those
+artifacts must compose into one typed closure graph rather than remaining a bag
+of unrelated digests.
+
+```
+pub struct EvidenceArtifactId(pub [u8; 32]);
+
+pub enum EvidenceArtifactKind {
+    MaterializationReceipt,
+    InvalidationWitness,
+    WriteReceipt,
+    InvariantCertificate,
+    DistributionReceipt,
+    ErasureReceipt,
+    SigningSessionReceipt,
+    CompatibilityLedger,
+    ReproducibilityManifest,
+    PlanSelectionRecord,
+    OracleDisagreementRecord,
+    BenchmarkWitness,
+    FailureCapsule,
+    PublicationReceipt,
+}
+
+pub enum EvidenceRelationKind {
+    DerivedFrom,
+    Verifies,
+    Refines,
+    Publishes,
+    Externalizes,
+}
+
+pub struct EvidenceEdge {
+    pub from: EvidenceArtifactId,
+    pub to: EvidenceArtifactId,
+    pub relation: EvidenceRelationKind,
+}
+
+pub struct EvidenceClosureReceipt {
+    pub root: EvidenceArtifactId,
+    pub artifacts: Vec<(EvidenceArtifactId, EvidenceArtifactKind)>,
+    pub edges: Vec<EvidenceEdge>,
+    pub bundle_digest: Option<[u8; 32]>,
+}
+```
+
+Rules:
+- `WriteReceipt`, `CompatibilityLedger`, `BenchmarkWitness`, `FailureCapsule`,
+  `PublicationReceipt`, and canonical evidence bundles SHOULD be able to publish
+  an `EvidenceClosureReceipt`
+- large child artifacts remain externalized by digest; evidence unification is
+  typed linkage, not forced inlining
+- save/proof publication SHOULD validate that every artifact referenced by an
+  evidence closure is already durable or explicitly marked external
+- cross-surface explanations SHOULD join through the evidence closure before
+  falling back to ad hoc prose
 
 **Self-consistency invariant:** Monkeybee must be able to parse its own output without errors in strict mode. This is a hard test requirement, not a soft aspiration. Every generated PDF is round-tripped through Monkeybee's strict-mode parser as part of the write-path test suite.
 
@@ -7349,6 +7671,10 @@ workflow end to end.
    certification or approval, validate the DocMDP/FieldMDP modification chain, and expose when a
    later approval signature is inconsistent with the certification policy established by the first
    signer.
+9. **Key-isolated signing:** Signature creation must support OS-keystore, HSM, or remote-KMS
+   flows where the private key never enters Monkeybee memory. The engine constructs the detached
+   payload, the `SigningProvider` signs it, and the resulting `SigningSessionReceipt` records key
+   isolation class, provider identity, and placeholder-budget coupling.
 
 ### Signature reservation and append-budget doctrine
 
@@ -7413,6 +7739,9 @@ Rules:
 - reservation planning MUST account for DSS/VRI growth, timestamp growth, and
   incremental-history overhead rather than treating `/Contents` length as the
   whole signing problem
+- production signing receipts MUST record the active `KeyIsolationClass`; test
+  ephemeral signing keys are fixture-only and may not masquerade as production
+  signing evidence
 - multi-signature and LTV-heavy fixtures SHOULD test reservation-window
   exhaustion, controlled escalation, and remaining append headroom explicitly
 
@@ -7804,6 +8133,7 @@ The following round-trip chains must pass on representative documents from the p
 9. **Load → extract semantic anchors → safe rewrite/incremental append → reload → verify stable anchors or alias map** (anchor stability)
 10. **Load ambiguous file → inspect hypothesis set → force candidate or auto-collapse → compare receipts** (hypothesis truthfulness)
 11. **Load source + target → import/copy pages/resources between documents → save → reload → verify provenance/remap/render** (cross-document import fidelity)
+12. **Load → plan share-safe distribution → save derivative → reload → verify stripped active content, metadata, attachments, layer-state pinning, and distribution receipts** (safe-share fidelity)
 
 **Specific failure modes each chain is designed to catch:**
 
@@ -7828,6 +8158,10 @@ The following round-trip chains must pass on representative documents from the p
 *Chain 10 (hypothesis truthfulness):* Detects: silent candidate collapse, missing hypothesis lineage in receipts/ledgers, and repair policies that return materially different semantics without user-visible evidence.
 
 *Chain 11 (cross-document import fidelity):* Detects: source-to-target `ObjRef` collisions, incomplete import-closure remapping, lost named destinations or form-field identity, silent active-content/signature escalation across documents, and provenance gaps that make imported pages impossible to audit later.
+
+*Chain 12 (safe-share fidelity):* Detects: hidden-layer leakage, active-content stripping drift,
+metadata or attachment residues, incorrect signature-impact explanations, and distribution
+receipts that overstate erasure or sanitization coverage.
 
 ### Compatibility ledger schema
 
@@ -8012,12 +8346,16 @@ The ledger taxonomy MUST reserve stable code families for the expansion lanes so
 and APR triage can track them without free-form strings:
 
 - `print.*` — halftone, transfer, bg_ucr, overprint_sim, softproof, output_intent, separations, tac, preflight, trap
-- `signature.*` — pades, dss, vri, chain_build, cert_path, ocsp, crl, tsa, creation, offline_ltv
+- `signature.*` — pades, dss, vri, chain_build, cert_path, ocsp, crl, tsa, creation, offline_ltv, key_isolation
+- `evidence.*` — closure, artifact_graph, bundle, provenance_join, publication_linkage
+- `distribution.*` — share_safe, metadata_strip, attachment_policy, layer_pin, signature_tradeoff
 - `tagged.*` / `pdfua.*` — standard_role, role_map, attributes, actualtext, alt, expansion_text, lang, pronunciation, artifact, destination, audit, heading_hierarchy, table_headers
 - `forms.*` — fdf, xfdf, flatten, js_actions, submit_target, signature_field, barcode, xfa_static_flatten
 - `actions.*` — goto, goto_remote, goto_embedded, goto_3d_view, thread, launch, uri, sound, movie, hide, named, ocg_state, rendition, transition, javascript, submit, import, reset, richmedia
 - `catalog.*` — threads, beads, transitions, thumbnails, portfolio, collection_schema, alternate_presentation, pieceinfo, web_capture
 - `multimedia.*` — screen, sound, movie, media_clip, rendition_tree, rendition_action, player_params
+- `redaction.*` — canary, erasure
+- `ocg.*` — configs, membership, layer_state
 
 Tier assignment for these families is not optional. Even before Tier 1 implementation exists, the
 engine must detect, classify, and ledger them.
@@ -8036,6 +8374,9 @@ feature summaries. Concretely, the schema family should include:
 - plan-selection references for open/save/import/backend decisions that materially affected outcome
 - typed oracle-consensus references when arbitration established the expected interpretation
 - typed oracle-disagreement references when consensus arbitration was required
+- evidence-closure references for major save/proof artifact families
+- distribution and erasure receipt references when redaction or share-safe
+  outputs were produced
 
 This does **not** mean the ledger becomes a dumping ground for giant internal graphs. Large artifacts
 remain externalized and content-addressed; the ledger stores digests, summaries, and references.
@@ -8048,6 +8389,9 @@ The following outputs are schema-versioned external interfaces:
 - `WritePlanReport`
 - `DiffReport`
 - `BenchmarkWitness`
+- `SigningSessionReceipt`
+- `DistributionReceipt`
+- `EvidenceClosureReceipt`
 - `TraceEventStream`
 - CLI JSON envelope
 - `ExpectationManifest`
@@ -9021,7 +9365,7 @@ Rules:
 - [ ] Pathological corpus is curated, indexed, and CI-exercised.
 - [ ] Render comparison harness runs against at least PDFium and MuPDF.
 - [ ] Multi-oracle rendering arbitration is operational (typed disagreements recorded, resolved, or explicitly triaged).
-- [ ] Round-trip harness covers all eleven chain types on representative documents.
+- [ ] Round-trip harness covers all twelve chain types on representative documents.
 - [ ] Annotation round-trip harness passes on representative documents.
 - [ ] Compatibility ledger is complete and machine-readable per the schema in Part 6.
 - [ ] Baseline parser/render/write paths pass the v1 proof gates without experimental backends.
@@ -9075,6 +9419,7 @@ Each gated test class has a defined pass threshold and responsible crate:
 | semantic-anchor-stability | extract | ≥95% stable anchors on semantically unchanged regions | Anchor continuity precision + truth-surface correctness |
 | hidden-content-forensics | forensics + extract | ≥95% planted-fixture detection | Precision/recall on known hidden content |
 | redaction-audit | forensics + edit | ≥95% intentionally bad redactions detected | Audit precision/recall |
+| share-safe-distribution | write + edit + forensics | ≥95% of share-safe fixtures | DistributionReceipt completeness + no forbidden taint leakage |
 | post-signing-forensics | forensics + signature | ≥95% correct classification on signed corpus | Permitted-vs-suspicious accuracy |
 | redaction-safety | edit | Non-gating in v1 unless B-EDIT-003 is separately promoted |
 
@@ -9267,6 +9612,8 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-CORE-006: DiagnosticSink trait and implementations (VecSink, CallbackSink, FilteringSink, CountingSink)
 - B-CORE-007: PDF version tracking (input/feature/output versions)
 - B-CORE-008: Policy composition, conflict taxonomy, and plan-selection records
+- B-CORE-009: SigningProvider boundary, key-isolation classes, and detached-signing receipts
+- B-CORE-010: Adaptive execution-control receipts and policy-safe actuation
 
 ### Byte layer beads
 - B-BYTES-001: ByteSource trait and implementations (mmap, in-memory, range-backed)
@@ -9274,6 +9621,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-BYTES-003: Raw span ownership for preserve-mode
 - B-BYTES-004: Fetch scheduler and prefetch planning for range-backed sources
 - B-BYTES-005: Transport continuity classification, fetch-epoch invalidation, and sparse-blob resumption receipts
+- B-BYTES-006: Adaptive transport control and fetch-plan adaptation receipts
 
 
 ### Substrate beads
@@ -9310,6 +9658,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-CONTENT-005: Marked content span tracking
 - B-CONTENT-006: Consumer sink adapters (RenderSink, ExtractSink, InspectSink, EditSink)
 - B-CONTENT-007: Content stream error recovery protocol
+- B-CONTENT-008: Layer-state witness emission for OCG/OCMD evaluation
 
 ### Codec beads
 - B-CODEC-001: Stream filter implementations (FlateDecode, LZWDecode, ASCII85Decode, etc.)
@@ -9421,12 +9770,14 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-WRITE-012: Signature impact analysis for save planning
 - B-WRITE-013: Preservation-frontier solver, minimal unsat cores, and Pareto witness emission
 - B-WRITE-014: Experimental byte-patch planning and receipt emission
+- B-WRITE-015: Share-safe distribution planning and receipt emission
 
 ### Edit beads
 - B-EDIT-001: EditTransaction framework
 - B-EDIT-002: Resource GC and deduplication
 - B-EDIT-003: Redaction application (high-assurance rewrite) [post-v1 unless separately proven]
 - B-EDIT-004: Optimization operations (compaction, recompression)
+- B-EDIT-005: Taint propagation, erasure receipts, and layer-aware redaction assurance
 
 ### Validate beads
 - B-VALIDATE-001: Arlington-model conformance validation
@@ -9473,7 +9824,7 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 ### Proof beads
 - B-PROOF-001: Pathological corpus acquisition and indexing
 - B-PROOF-002: Render comparison harness
-- B-PROOF-003: Round-trip validation harness (all eleven chains)
+- B-PROOF-003: Round-trip validation harness (all twelve chains)
 - B-PROOF-004: Compatibility ledger system (per schema in Part 6)
 - B-PROOF-005: Performance benchmark harness
 - B-PROOF-006: Fuzz testing harness
@@ -9488,6 +9839,7 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-PROOF-015: Reproducibility manifest generation and artifact linkage
 - B-PROOF-016: Oracle disagreement records and plan-selection evidence
 - B-PROOF-017: Coverage-lattice acquisition planning and decoder-equivalence laboratory
+- B-PROOF-018: Evidence-closure graphs, share-safe distribution fixtures, and key-isolation signing evidence
 
 ### CLI beads
 - B-CLI-001: Render command
