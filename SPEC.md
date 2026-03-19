@@ -653,6 +653,92 @@ via glyph outline matching.
 Proof surfaces: hidden content detection on known-planted corpus, redaction sufficiency audit on
 intentionally bad redactions, post-signing modification classification accuracy.
 
+### Workflow 15: Prepress inspection, soft proofing, and separation preview
+
+A user opens a print-oriented PDF and asks not only "does it render?" but "is it ready for the
+press condition I care about?" Monkeybee can simulate CMYK overprint on an RGB display, soft-proof
+against the document's output intent or a caller-supplied ICC profile, preview individual process
+and spot-color separations, estimate total area coverage (TAC), and run print-preflight checks for
+image resolution, bleed/trim alignment, color-space suitability, and trap annotations. This
+workflow explicitly includes halftone dictionaries (Types 1, 5, 6, 10, 16), spot-function and
+threshold-screen inspection, `/TR` and `/TR2` transfer-function evaluation, `/BG`, `/BG2`, `/UCR`,
+and `/UCR2` print-state reporting, document-level and page-level `/OutputIntents`, and TAC policy
+checks against caller-configured press ceilings such as 300-340%.
+
+Proof surfaces: overprint-simulation comparisons on CMYK corpus files, output-intent and
+soft-proof reference renders, TAC expectation fixtures, separation-preview image checks, and
+preflight regression suites for low-DPI images, missing bleed, and color-profile mismatches.
+
+### Workflow 16: Sign, timestamp, and long-term validate PDFs
+
+A user creates a signature field or reuses an existing one, signs the document in incremental
+append mode, adds trusted timestamps and validation material, and later verifies the result
+offline. Monkeybee can classify PAdES conformance level (B-B, B-T, B-LT, B-LTA), model DSS/VRI
+state, surface certificate-chain and revocation evidence, and explain which save plans preserve or
+invalidate signature guarantees. This includes explicit chain building from signing leaf to trust
+anchor via SKI/AKI/AIA metadata, OCSP/CRL evidence capture or embedding, RFC 3161 TSA integration,
+and per-signature VRI material keyed so each signature can be validated independently without a
+network round trip.
+
+Proof surfaces: signature-creation interoperability tests, timestamp-validation fixtures, DSS/VRI
+round trips, offline long-term validation tests, and post-signing save-impact classification.
+
+### Workflow 17: Audit tagged PDF and accessibility semantics
+
+A user loads a tagged PDF and asks for a semantic audit rather than a raw tree dump. Monkeybee can
+inspect structure roles, attribute/class-map state, `/ActualText`, `/Alt`, `/E`, `/Lang`,
+pronunciation metadata, artifacts, and structure destinations; it can also visualize reading order
+and emit a PDF/UA-style audit report that explains structural gaps without attempting remediation.
+That audit must be rich enough to reason about standard structure types, heading hierarchy,
+artifact-marked content, table header associations, figure alt text, and where tag-driven reading
+order diverges from geometric order.
+
+Proof surfaces: tagged corpus fixtures with expected role trees, ActualText-versus-decoded-text
+preference checks, artifact-exclusion extraction tests, audit-rule suites, and reading-order
+overlay regressions.
+
+### Workflow 18: Exchange, flatten, and preserve form data
+
+A user imports FDF/XFDF into an AcroForm document, exports the filled result back out, flattens the
+form when required, and still expects appearance correctness, field-tree integrity, and
+signature-safe preserve behavior. Monkeybee can also detect calculation/format/validate scripts,
+classify submit-form targets, create new signature fields with correct placeholders, and handle
+barcode fields or Tier 2 static-XFA flattening where safe. Form flattening in this workflow is not
+generic annotation flattening; it must resolve field inheritance, value synchronization, and
+calculation-order preservation before visual burn-in.
+
+Proof surfaces: FDF/XFDF round trips, form-flatten visual comparisons, script-detection fixtures,
+submit-target inventories, signature-field placeholder tests, and static-XFA flattening cases.
+
+### Workflow 19: Inventory actions, links, and active content
+
+A user opens a suspicious or highly interactive PDF and asks for a full action inventory. Monkeybee
+enumerates the action graph, classifies every action type, extracts a document link map for
+navigational actions, preserves all action dictionaries during round trip, and can produce a
+sanitization plan without executing any active content. The inventory covers the full family of PDF
+actions, including GoTo, GoToR, GoToE, GoTo3DView, Launch, Thread, URI, Sound, Movie, Hide, Named,
+SetOCGState, Rendition, Transition, JavaScript, ImportData, ResetForm, SubmitForm, and
+RichMediaExecute.
+
+Proof surfaces: action-corpus inventories, link-map equivalence tests, sanitization-receipt
+regressions, and round-trip preservation tests for action dictionaries across incremental append
+and full rewrite.
+
+### Workflow 20: Inspect portfolios, article threads, page transitions, and multimedia
+
+A user opens a PDF portfolio, slideshow, magazine-style article-thread document, or multimedia-rich
+file and wants the engine to expose what is there even when playback is denied. Monkeybee can
+enumerate collections, embedded-document relationships, article beads, page transitions,
+thumbnails, alternate presentations, page-piece dictionaries, web-capture structures, screen
+annotations, sound/movie objects, rendition trees, and media clips. This includes `/Threads` bead
+navigation, `/Trans` presentation dictionaries such as Dissolve/Wipe/Fly/Push/Cover/Uncover/Fade,
+`/Thumb` page thumbnails, `/Collection` schemas and navigators, and legacy movie or sound objects
+that must be cataloged even when execution is denied.
+
+Proof surfaces: parse-and-preserve round trips for portfolios and threaded documents, inventory
+fixtures for page transitions and thumbnails, and multimedia cataloging tests that verify detection
+without execution.
+
 ---
 
 ## Part 2 — Compatibility target
@@ -974,6 +1060,52 @@ Every document processed by Monkeybee produces a compatibility report: what was 
 
 The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 
+### Strategic expansion lanes beyond the baseline gate
+
+The baseline v1 gate remains the closed-loop kernel. However, several adjacent domains are too
+important to leave as vague future hand-waving. Monkeybee therefore names the following strategic
+lanes explicitly. They are not all baseline-gating, but they MUST appear in the scope registry,
+compatibility ledger, and implementation contracts so APR/proof work can fan out coherently.
+
+**Enterprise print production:**
+- Halftone dictionaries (Types 1, 5, 6, 10, 16), spot-function evaluation, threshold-based
+  screening, and explicit detection when full raster-screen simulation is unavailable.
+- Transfer functions (`/TR`, `/TR2`), black generation (`/BG`, `/BG2`), and undercolor removal
+  (`/UCR`, `/UCR2`) as first-class print-pipeline concerns rather than dead graphics-state fields.
+- RGB-display overprint simulation, soft proofing against document or caller-supplied output
+  intents, separation preview, TAC analysis, print preflight, and trap-network inspection.
+
+**Digital signature lifecycle:**
+- PAdES profile classification (B-B, B-T, B-LT, B-LTA) as an engine-visible concept, not an
+  external checklist.
+- DSS and VRI modeling, certificate-chain construction, OCSP/CRL evidence ingestion, TSA/RFC 3161
+  timestamp handling, and creation-side CMS/PAdES emission.
+- Offline long-term validation as a proof surface when the necessary material is embedded.
+
+**Tagged PDF and accessibility audit:**
+- Full recognition of standard structure element types and namespace-qualified variants.
+- Attribute objects, class maps, `/ActualText`, `/Alt`, `/E`, `/Lang`, pronunciation hints,
+  artifact marking, and structure destinations as extractable semantic inputs.
+- PDF/UA-style audit reporting and reading-order visualization as explicit post-baseline
+  capabilities, even though remediation/generation remains outside the baseline gate.
+
+**Forms and interchange:**
+- FDF/XFDF import/export, form flattening, JavaScript/submit-action inventory, signature-field
+  creation, barcode-field handling, and safe-contained static-XFA flattening.
+
+**Actions, document structure, and multimedia:**
+- Full typed action inventory for the complete PDF action family, plus document link-map extraction
+  for navigational actions.
+- Article threads, page transitions, thumbnails, collections/portfolios, alternate presentations,
+  page-piece dictionaries, and web-capture structures as parse/expose/preserve surfaces.
+- Screen/sound/movie/rendition/media structures as preserve-and-inventory features under
+  `PreserveButDenyExecute` by default.
+
+**Advanced rendering quality:**
+- Higher-quality resampling kernels, N-dimensional sampled-function interpolation, shading-edge
+  anti-aliasing, and matte un-premultiplication precision are promoted from scattered notes to
+  named rendering contracts.
+
 ---
 
 ## Part 3 — System architecture
@@ -986,6 +1118,15 @@ The compatibility ledger schema is specified in Part 6 (Proof Doctrine).
 DocMDP/FieldMDP policy, timestamp/trust metadata, verification plumbing, and write-impact classification.
 All other workspace crates are implementation crates unless explicitly re-exported by `monkeybee`.
 The workspace layout is not itself the public API contract.
+
+The high-value expansion lanes are intentionally cross-cutting rather than siloed into one
+"enterprise" crate. Prepress support spans `monkeybee-render`, `monkeybee-validate`, and
+`monkeybee-extract` on top of shared color/page-state machinery. PAdES/DSS/VRI/signing spans
+`monkeybee-signature`, `monkeybee-write`, and `monkeybee-forms`. Accessibility auditing spans
+`monkeybee-extract` and `monkeybee-validate`. Action, portfolio, article-thread, and multimedia
+inventory spans `monkeybee-catalog`, `monkeybee-extract`, and `monkeybee-forensics`. This is
+deliberate: the thesis is one engine with reusable substrate and shared semantics, not a pile of
+feature silos.
 
 Monkeybee is a Cargo workspace with six explicit strata:
 1. **Byte/revision layer** — immutable source bytes plus appended revisions.
@@ -1902,6 +2043,11 @@ structured than raw COS preservation:
 - viewer preferences, page mode, and page layout
 - optional content configurations (`/OCProperties`, default configs, print/export states)
 - embedded-file inventory and AF relationships
+- article threads and bead chains
+- page transitions, thumbnail images, and alternate presentations
+- collection / portfolio schema, navigator state, and embedded-document relationships
+- page-piece dictionaries (`/PieceInfo`) and web-capture structures
+- document-level multimedia and rendition inventory rooted in the catalog or name trees
 
 The catalog subsystem is the authoritative semantic model for these structures.
 Render/extract/write/diff/validate consume it; they do not each grow ad hoc
@@ -2077,6 +2223,15 @@ Key responsibilities:
   the scope registry.
 - Graphics state: CTM, clipping, line properties, rendering intent, and overprint
   state tracking; full OPM=1 semantics follow the support-class/scope-registry table.
+- Prepress-oriented render modes: RGB-display overprint simulation, soft proof against
+  output intents or caller-supplied ICC profiles, process/spot separation preview, and
+  TAC accumulation hooks shared with validation and diagnostics.
+- Print-oriented color hooks: transfer-function application, halftone/spot-function
+  evaluation hooks, black-generation/undercolor-removal evaluation hooks, and explicit
+  diagnostics when the active backend cannot realize the full print pipeline natively.
+- Rendering-quality uplift points: higher-quality resampling kernels (Lanczos /
+  Mitchell-Netravali), N-dimensional sampled-function interpolation, shading-edge
+  anti-aliasing, and robust matte un-premultiplication.
 - Page rendering: media box, crop box, bleed/trim/art boxes, rotation, user unit
 - Optional content (layers): OCG visibility, OCMD membership, default/print/export states
 - Output targets: raster (PNG/JPEG), vector (SVG), region render, thumbnail render, and extensible backend interface
@@ -2674,6 +2829,13 @@ Key responsibilities:
 - Widget/annotation bridge: connecting form field semantics to annotation visual representation
 - Signature-field helpers: byte-range tracking, CMS envelope inspection, incremental-append preservation
 - Form data import/export
+- FDF/XFDF import and export as first-class interchange operations
+- Form flattening after field-inheritance and appearance resolution
+- JavaScript action inventory for calculate / format / validate / keystroke handlers
+- Submit-form and reset-form analysis, including target classification and preservation
+- Signature-field creation with placeholder sizing and save-plan integration
+- Barcode-field parse/render support
+- Tier 2 static-XFA inspection and flattening where the authoritative visual layer is recoverable
 
 AcroForm handling is distinct from general annotation handling. Widgets are annotations visually, but the field tree semantics, inherited field properties, appearance regeneration rules, value synchronization, and signature handling justify a dedicated subsystem.
 
@@ -2728,6 +2890,17 @@ Key responsibilities:
 - Resource inventory (fonts, images, color spaces)
 - Object graph inspection and querying
 - Image extraction
+- Full tagged-semantic extraction: standard structure roles, namespace-aware roles,
+  attribute/class-map state, `/ActualText`, `/Alt`, `/E`, `/Lang`, pronunciation hints,
+  artifact marking, and structure destinations
+- Action inventory and document link-map extraction for GoTo/GoToR/GoToE/Thread/URI and
+  related navigational actions
+- Article-thread, thumbnail, collection/portfolio, alternate-presentation, `/PieceInfo`,
+  and web-capture inspection surfaces
+- Multimedia inventory: screen annotations, sound/movie objects, media clips, players,
+  rendition trees, and related active-content metadata
+- Print-oriented inspection surfaces: output-intent inventory, separation names, TAC
+  summaries, and preflight-facing image-resolution metadata
 
 ```
 pub struct ExtractResult {
@@ -2863,6 +3036,8 @@ Key responsibilities:
   signature as permitted (per DocMDP policy) or suspicious
 - Known CVE pattern detection: structural patterns matching historical PDF exploit signatures such
   as malformed streams, recursive objects, and crafted JavaScript trigger structures
+- Full action-graph and active-content inventory: all action types, trigger locations,
+  target destinations, external references, and sanitize-preserve-stub planning
 - Producer fingerprinting: identify actual producing software from structural patterns beyond the
   `/Producer` string
 - Font fingerprinting: match glyph outlines against known font databases to identify real font
@@ -2871,6 +3046,8 @@ Key responsibilities:
   in padding or whitespace regions
 - Metadata consistency analysis: cross-validate Info dictionary, XMP, font metadata, producer
   signatures, and structural patterns for inconsistencies
+- Print-risk diagnostics: TAC threshold exceedance, suspicious overprint usage, missing output
+  intents, low-resolution placed imagery, and trap-network anomalies
 
 Forensics is read-only by default: it consumes the same document/content/signature surfaces as the
 rest of the engine but never mutates the document model as part of analysis.
@@ -2915,6 +3092,12 @@ Key responsibilities:
 - Profile-specific validation (PDF/A-4, PDF/X-6)
 - Write preflight checks (structural validity before serialization)
 - Signature byte-range verification
+- Print preflight: image-resolution-at-print-size checks, bleed/TrimBox/BleedBox checks,
+  output-intent and color-space suitability checks, TAC thresholds, and trap-network validation
+- Accessibility audit: structure-tree completeness, figure alt-text presence, heading hierarchy,
+  table-header association checks, artifact labeling, and reading-order consistency diagnostics
+- Signature-lifecycle policy checks: PAdES profile classification, DSS/VRI completeness, and
+  offline long-term validation readiness
 - Consume validation results from the proof harness and turn them into evidence/regression artifacts
 
 #### `monkeybee-proof`
@@ -2934,6 +3117,14 @@ Key responsibilities:
 - Regression detection
 - Coverage tracking across corpus categories
 - Conformance validation integration (Arlington model, profile checks)
+- Prepress proof lanes: soft-proof regression sets, separation-preview fixtures, TAC baselines,
+  and print-preflight expectation suites
+- Signature-lifecycle proof lanes: PAdES profile fixtures, DSS/VRI/OCSP/CRL/TSA expectations,
+  signature-creation interoperability, and offline validation runs
+- Accessibility proof lanes: tagged-PDF semantic fixtures, ActualText/Alt/Lang/artifact
+  expectations, PDF/UA audit-rule suites, and reading-order overlay baselines
+- Rich-structure proof lanes: action-corpus inventories, article-thread fixtures, portfolios,
+  thumbnails, transitions, PieceInfo/web-capture samples, and multimedia inventory fixtures
 - Deterministic concurrency testing via LabRuntime
 - Cancellation chaos testing and crashpack generation
 
@@ -3034,6 +3225,12 @@ Key responsibilities:
 - `monkeybee optimize <file> [--dedup|--gc|--recompress] -o <o>` — full-rewrite compaction and cleanup as an explicit user operation
 - `monkeybee trace <file>` — emit page/subsystem spans, repair decisions, cache statistics, and budget consumption as JSON
 - `monkeybee signatures <file>` — inspect signature dictionaries, byte ranges, CMS envelope metadata, and provider-backed verification results
+- `monkeybee signatures <file> --pades --dss --vri --ocsp --crl --timestamps` — long-term validation inventory and readiness classification
+- `monkeybee sign <file> --field <name> --cert <p12|pem> --tsa <url> -o <o>` — create CMS/PAdES signatures in incremental-append mode
+- `monkeybee forms import-fdf <pdf> --fdf <data.fdf> -o <o>` / `monkeybee forms export-fdf <pdf>` / `monkeybee forms flatten <pdf> -o <o>`
+- `monkeybee inspect <file> --actions --link-map --threads --portfolio --piece-info --web-capture --multimedia`
+- `monkeybee render <file> --simulate-overprint [--soft-proof <icc>] [--separations <all|plate>]`
+- `monkeybee validate <file> --print-preflight` / `monkeybee validate <file> --pdf-ua-audit`
 
 
 
@@ -4288,6 +4485,159 @@ complexities:
 
 **Field calculations and actions:** PDF forms support JavaScript-based calculations and trigger actions (e.g., calculate the sum of other fields). Full JavaScript execution is not a v1 goal. The engine should: (a) detect and report the presence of calculation scripts in the compatibility ledger, (b) preserve them during round-trip operations, (c) not evaluate them.
 
+### Enterprise print-production and prepress expansion contract
+
+Monkeybee is not just a screen renderer. It must grow a serious print-oriented inspection and proof
+lane because enterprise print workflows are one of the largest PDF consumer categories. This lane
+shares the normal render/content/color machinery; it must not fork into a separate ad hoc pipeline.
+
+1. **Halftone modeling and screening:** Parse and preserve halftone dictionaries, including Types
+   1, 5, 6, 10, and 16. Spot-function evaluation for dot-shape generation and threshold-based
+   screening must be inspectable even when the active backend does not perform full raster-screen
+   simulation. Tier 1 screening behavior is tied to a backend/support-class contract; lower tiers
+   still report screen parameters, screen frequency/angle state, and degradation explicitly.
+2. **Transfer, BG/UCR, and print-state evaluation:** `/TR`, `/TR2`, `/BG`, `/BG2`, `/UCR`, and
+   `/UCR2` are not dead metadata. The engine must preserve them, expose them through inspection,
+   and provide evaluation hooks for print-preview and proof modes. These hooks must accept PDF
+   function Types 0, 2, 3, and 4 so transfer curves can be evaluated per component and BG/UCR
+   transforms can participate in proof-mode color analysis. When these transforms are not applied
+   on the active backend, the compatibility ledger must say so directly.
+3. **RGB overprint simulation:** The renderer must provide an explicit overprint-simulation mode
+   for RGB displays so CMYK overprint-heavy documents can be previewed without flattening away the
+   semantics that matter in prepress.
+4. **Soft proofing and separations:** Render against the document's `/OutputIntents` or a
+   caller-supplied ICC profile; expose individual process and spot separations as grayscale plate
+   previews; honor page-level output intents when present. Soft-proofing must be able to answer
+   both "show me the intended press condition" and "show me this target device/paper pair" without
+   creating a parallel renderer.
+5. **Ink coverage analysis:** Compute TAC per page/region and emit diagnostics when configured
+   thresholds are exceeded. TAC accounting must include spot/process separations consistently with
+   the selected proof mode and support shop-style limits such as 300-340% without hard-coding a
+   single threshold into the engine.
+6. **Print preflight:** Validate image resolution at final print size, bleed/TrimBox/BleedBox
+   relationships, output-intent presence, color-space suitability, font completeness, and other
+   press-facing issues such as images falling below 300 DPI at print size.
+7. **Trap networks:** Parse trap-related structures, expose them via inspection, and render them
+   when the active backend supports it. Trap annotations and trap-network metadata must be
+   discoverable even on execute-deny or non-prepress profiles. Lack of trap support is an explicit
+   degradation, never a silent omission.
+
+### Digital signature lifecycle and PAdES expansion contract
+
+Preserving byte ranges is necessary but not sufficient. A serious engine must model the signature
+workflow end to end.
+
+1. **PAdES profile classification:** Treat B-B, B-T, B-LT, and B-LTA as first-class states in
+   inspection, validation, and write planning rather than as prose attached to a generic CMS blob.
+2. **DSS and VRI modeling:** Parse, preserve, emit, and inspect the Document Security Store and
+   per-signature Validation Related Information structures. VRI indexing must remain stable per
+   signature digest so later offline validation can explain exactly which evidence applies to which
+   signature.
+3. **Certificate-path construction:** Build signing chains from leaf to trust anchor using
+   certificate extensions such as SKI, AKI, AIA, and CRL distribution points. Chain construction is
+   a deterministic engine-visible operation, not a black box hidden behind provider callbacks.
+4. **Revocation evidence:** OCSP responses and CRLs may be embedded, supplied by providers, or
+   absent. The engine must classify which evidence is available, whether it is embedded in DSS, and
+   whether offline LTV is possible for each signature independently.
+5. **Timestamp support:** RFC 3161 timestamps must be inspectable and verifiable; creation-side TSA
+   integration is required for B-T and above, including append-safe placeholder sizing and save-plan
+   explanations.
+6. **Signature creation:** Create CMS/PAdES signatures, allocate placeholder space correctly,
+   integrate with incremental append, and explain write-plan consequences before bytes are emitted.
+   Signature creation is a first-class write-side capability, not merely a preserve-mode side
+   effect.
+7. **Offline long-term validation:** When DSS/VRI/revocation/timestamp material is present, the
+   engine must be able to validate without network access and report why a document does or does not
+   meet LT/LTA expectations.
+
+### Tagged PDF and accessibility-audit expansion contract
+
+Preserving tags and using them as extraction hints is only the baseline. The semantic model is much
+larger and must be owned explicitly.
+
+1. **Structure-role coverage:** Recognize the full family of standard structure element types,
+   namespace-qualified variants, and role-map chains. This includes at minimum `Document`, `Part`,
+   `Art`, `Sect`, `Div`, `BlockQuote`, `Caption`, `TOC`, `TOCI`, `Index`, `NonStruct`, `Private`,
+   `P`, `H`, `H1`-`H6`, `L`, `LI`, `Lbl`, `LBody`, `Table`, `TR`, `TH`, `TD`, `THead`, `TBody`,
+   `TFoot`, `Span`, `Quote`, `Note`, `Reference`, `BibEntry`, `Code`, `Link`, `Annot`, `Ruby`,
+   `Warichu`, `Figure`, `Formula`, `Form`, plus PDF 2.0 additions and standards-based namespace
+   extensions.
+2. **Attribute/class-map parsing:** Parse layout, list, table, print-field, and user-property
+   attributes together with class maps and expose them through extraction/inspection APIs.
+3. **Semantic text overrides:** Prefer `/ActualText` for extraction when present; expose `/Alt`,
+   `/E`, `/Lang`, and pronunciation metadata as part of semantic extraction output. `/ActualText`
+   must win over raw decoded glyph content when the two disagree.
+4. **Artifacts and destinations:** Detect artifact-marked content, allow artifact-aware extraction
+   modes, and expose structure destinations and semantic links. Artifact handling must cover common
+   headers, footers, page numbers, and watermark-style content.
+5. **Audit without remediation:** PDF/UA-style validation belongs in Monkeybee as an audit/report
+   surface even though accessibility remediation and tag generation remain outside the baseline gate.
+   Audit rules must cover structure-tree completeness, figure alt-text presence, heading hierarchy,
+   table header associations, and reading-order plausibility.
+6. **Reading-order visualization:** Provide a debug/inspection overlay that shows structure order,
+   artifacts, and the mapping from marked content to structure elements.
+
+### Form-data interchange and flattening expansion contract
+
+AcroForm handling becomes materially more useful once data interchange and flattening are first-class.
+
+1. **FDF/XFDF interchange:** Import/export field values by fully qualified field name, preserve
+   field-tree semantics, and round-trip cleanly with appearance regeneration.
+2. **Form flattening:** Burn resolved widget appearances into page content after inheritance,
+   value resolution, and calculation-order preservation. Flattening is distinct from generic
+   annotation flattening and must respect field semantics and field-tree ownership.
+3. **Script inventory:** Detect calculate, format, validate, and keystroke JavaScript hooks;
+   preserve them; never execute them in baseline v1.
+4. **Submit/reset analysis:** Classify submit targets and payload modes (FDF, XFDF, PDF, HTML,
+   XML, email, URI) and surface them in active-content reports.
+5. **Signature-field creation:** Create empty signature fields with correct widget state and
+   placeholder sizing for later signing workflows.
+6. **Barcode fields:** Parse and render barcode-field appearances and preserve their semantics,
+   including common symbologies such as Code 128, QR, DataMatrix, and PDF417 where the document
+   model exposes them.
+7. **Static XFA flattening:** Tier 2 handling may flatten static XFA presentations into page
+   content when the authoritative visual layer is safely recoverable. Dynamic-XFA layout engines
+   remain outside the baseline, but detection and explicit ledgering are mandatory because these
+   documents remain common in government and enterprise workflows.
+
+### Action, document-structure, and multimedia catalog contract
+
+The engine must inventory these surfaces comprehensively even when execution/playback is denied.
+
+1. **Full action catalog:** Parse and preserve the entire PDF action family, including GoTo, GoToR,
+   GoToE, GoTo3DView, Launch, Thread, URI, Sound, Movie, Hide, Named, SetOCGState, Rendition,
+   Transition, JavaScript, ImportData, ResetForm, SubmitForm, and RichMediaExecute. Named actions
+   such as `NextPage`, `PrevPage`, `FirstPage`, `LastPage`, and `Print` must remain typed rather
+   than collapsed into opaque strings.
+2. **Document link map:** Extract a typed link map from navigational actions and related
+   annotations so downstream tooling can reason about document navigation without replaying UI
+   behavior.
+3. **Document-structure extras:** Parse and expose article threads and beads, page transitions,
+   thumbnails, collections/portfolios, alternate presentations, `/PieceInfo`, and web-capture
+   structures. Collection support includes schema and navigator extraction; web-capture support
+   includes content sets, source info, and capture-command dictionaries.
+4. **Multimedia inventory:** Parse and expose screen annotations, sound objects, movie annotations,
+   media clips, rendition trees, and media-player parameters. Preserve them during round trip while
+   default policy remains execute-deny; legacy movie and sound objects must still be cataloged even
+   when no playback implementation is active.
+
+### Rendering-quality expansion contract
+
+Some renderer details are not optional polish; they materially affect correctness on hard files.
+
+1. **Higher-quality resampling:** Support Lanczos-class downscaling and
+   Mitchell-Netravali-class upscaling as pluggable kernels beyond the simple baseline filters.
+   Lanczos-3 is the intended sharp downscale reference; Mitchell-Netravali is the intended
+   low-ringing upscale reference.
+2. **N-dimensional sampled-function interpolation:** Type 0 sampled functions with multiple input
+   dimensions must use a defined multilinear interpolation strategy rather than hand-wavy lookup.
+   Multi-input tint transforms such as CMYK DeviceN/Separation cases are the motivating examples.
+3. **Shading-edge anti-aliasing:** Smooth shadings clipped against geometry must share the same
+   exact-coverage discipline as the rest of the rasterizer.
+4. **Matte un-premultiplication:** Soft-masked images with `/Matte` require a numerically stable
+   un-premultiplication algorithm, including explicit handling of fully transparent and
+   near-transparent pixels to avoid divide-by-zero and ringing artifacts.
+
 ---
 
 ## Part 6 — Proof doctrine
@@ -4306,6 +4656,13 @@ The project must maintain a curated corpus of ugly, hard, and pathological PDFs.
 - RTL documents (Arabic, Hebrew)
 - Very large files (100+ pages, large embedded resources)
 - Malformed cross-references (missing entries, wrong offsets, hybrid tables)
+- Print-production files with output intents, spot colors, overprint-heavy artwork,
+  trap annotations, and TAC-sensitive separations
+- Signed documents spanning bare CMS, timestamped signatures, DSS/VRI-embedded LTV cases,
+  and post-signing modifications
+- Tagged PDFs with rich structure trees, ActualText/Alt/Lang/artifact markup, and known
+  PDF/UA audit expectations
+- Portfolios, article-thread documents, page-transition/slideshow files, and multimedia-rich PDFs
 - Adversarial inputs (fuzzed, hand-crafted to trigger parser bugs)
 - Complex vector art (intricate path constructions, gradient meshes)
 - Files from many different producers (Acrobat, Word, LaTeX, Chrome, LibreOffice, InDesign, Quartz, etc.)
@@ -4604,6 +4961,22 @@ downstream tools (dashboards, CI gates, regression detectors) can consume progra
 The schema is versioned. Breaking changes increment the major version. The proof harness validates
 ledger output against the schema. Downstream tools (dashboards, CI gates, regression detectors)
 consume the ledger via the schema.
+
+### Required code families for the expansion lanes
+
+The ledger taxonomy MUST reserve stable code families for the expansion lanes so proof, dashboards,
+and APR triage can track them without free-form strings:
+
+- `print.*` — halftone, transfer, bg_ucr, overprint_sim, softproof, output_intent, separations, tac, preflight, trap
+- `signature.*` — pades, dss, vri, chain_build, cert_path, ocsp, crl, tsa, creation, offline_ltv
+- `tagged.*` / `pdfua.*` — standard_role, role_map, attributes, actualtext, alt, expansion_text, lang, pronunciation, artifact, destination, audit, heading_hierarchy, table_headers
+- `forms.*` — fdf, xfdf, flatten, js_actions, submit_target, signature_field, barcode, xfa_static_flatten
+- `actions.*` — goto, goto_remote, goto_embedded, goto_3d_view, thread, launch, uri, sound, movie, hide, named, ocg_state, rendition, transition, javascript, submit, import, reset, richmedia
+- `catalog.*` — threads, beads, transitions, thumbnails, portfolio, collection_schema, alternate_presentation, pieceinfo, web_capture
+- `multimedia.*` — screen, sound, movie, media_clip, rendition_tree, rendition_action, player_params
+
+Tier assignment for these families is not optional. Even before Tier 1 implementation exists, the
+engine must detect, classify, and ledger them.
 
 
 ### Ledger extensions for roots, hypotheses, and certificates
@@ -5729,3 +6102,79 @@ The current spec inventory names 104 algorithms and techniques.
   - ML-DSA/SLH-DSA hybrid PAdES
 
 **Total:** 57 + 47 = 104 named algorithms and techniques.
+
+### Inventory expansion addendum
+
+The 104-item total above remains the current locked baseline inventory. This specification now also
+names additional expansion lanes so APR/proof work can treat them as real contracts rather than
+vibes. Depending on counting policy, they can be tracked in two additive ways:
+
+- **Priority algorithm/capability uplift: +39**
+  - Print production: +9
+    - halftone rendering (including Types 1, 5, 6, 10, 16, spot functions, and threshold screens)
+    - transfer-function evaluation (`/TR`, `/TR2`)
+    - black generation and undercolor removal (`/BG`, `/BG2`, `/UCR`, `/UCR2`)
+    - RGB-display overprint simulation
+    - soft proofing against output intents or caller-supplied ICC targets
+    - ink-coverage / TAC analysis
+    - color-separation preview
+    - print preflight
+    - trap-network detection and rendering
+  - Digital signature lifecycle: +8
+    - PAdES conformance levels (B-B, B-T, B-LT, B-LTA)
+    - DSS modeling
+    - VRI modeling
+    - certificate-chain building
+    - OCSP response handling
+    - CRL processing
+    - TSA / RFC 3161 timestamp integration
+    - signature creation
+  - Tagged PDF / accessibility: +10
+    - standard structure-element coverage
+    - attribute objects and class maps
+    - ActualText / Alt-aware semantic extraction
+    - expansion text (`/E`)
+    - language propagation (`/Lang`)
+    - pronunciation metadata
+    - artifact marking
+    - structure destinations
+    - PDF/UA-style validation
+    - reading-order visualization
+  - Advanced rendering quality: +4
+    - Lanczos/Mitchell resampling
+    - N-dimensional sampled-function interpolation
+    - shading-edge anti-aliasing
+    - matte un-premultiplication
+  - Advanced forms and interchange: +7
+    - XFA static flattening
+    - FDF/XFDF round-trip
+    - form flattening
+    - JavaScript-form-hook detection
+    - submit-form target analysis
+    - signature-field creation
+    - barcode-field handling
+  - Full action catalog and link-map extraction: +1
+    - typed inventory of the full action family plus navigational link-map extraction
+- **Broader catalog/inventory uplift: +12**
+  - Document structure surfaces: +7
+    - article threads
+    - article beads
+    - page transitions
+    - thumbnails
+    - collections / portfolios
+    - alternate presentations
+    - page-piece dictionaries and web-capture structures
+  - Multimedia and rich-content inventory: +5
+    - screen annotations
+    - sound annotations / sound objects
+    - movie annotations
+    - media clips
+    - rendition trees and player parameters
+
+This yields two useful forward-looking counts:
+- `104 + 39 = 143` when tracking only the priority uplift families.
+- `104 + 51 = 155` when the document-structure and multimedia inventory lanes are counted too.
+
+Both counts are legitimate as long as the counting policy is stated. The architectural requirement
+is the same in either case: these lanes are now part of the named ambition and must be represented
+in scope, ledger, proof, and implementation planning.

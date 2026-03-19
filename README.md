@@ -91,6 +91,51 @@ Baseline v1 must prove all of the following:
 Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
 accessibility remediation, PDF/UA-2 generation/validation, or semantic format conversion to v1.
 
+## Expansion lanes that the architecture already has to own
+
+Monkeybee is not trying to finish the entire PDF category inside the baseline gate, but it is
+explicitly ambitious enough to own the lanes that make serious engines matter in enterprise,
+compliance, prepress, and forensics environments. Those lanes are now captured in `SPEC.md` and
+`docs/implementation/implementation_master.md` as additive expansion contracts rather than
+hand-waved future wishes.
+
+- **Enterprise print-production and prepress:** halftones, transfer functions, black generation /
+  undercolor removal, RGB overprint simulation, soft proofing, ink coverage analysis, separation
+  preview, print preflight, and trap-network handling, including halftone Types 1/5/6/10/16,
+  spot-function and threshold-screen inspection, and document/page-level output-intent handling.
+- **Digital signature lifecycle:** PAdES B-B/B-T/B-LT/B-LTA, DSS/VRI, certificate-chain building,
+  OCSP/CRL/TSA evidence, offline long-term validation, and signature creation rather than mere
+  preservation, with explicit modeling of per-signature validation material and incremental-append
+  signing workflows.
+- **Tagged PDF and accessibility auditing:** richer structure semantics, `/ActualText`, `/Alt`,
+  `/E`, `/Lang`, pronunciation hints, artifact handling, structure destinations, the full standard
+  structure-role family, PDF/UA audit reports, and reading-order visualization without promising
+  remediation in baseline v1.
+- **Advanced forms and interchange:** FDF/XFDF import/export, form flattening, JavaScript and
+  submit-action detection, signature-field creation, barcode fields, and Tier 2 static-XFA
+  flattening where safe, with form flattening treated as a distinct field-aware operation rather
+  than generic annotation flattening.
+- **Action and forensics surfaces:** full action-type inventory, document link-map extraction,
+  execute-deny active-content analysis, and preservation of all action dictionaries during round
+  trip, covering the full PDF action family from GoTo/URI/Launch through RichMediaExecute.
+- **Rich document structure and multimedia cataloging:** article threads, page transitions,
+  thumbnails, collections/portfolios, alternate presentations, page-piece dictionaries, web-capture
+  structures, screen/movie/sound annotations, rendition actions, media clips, and rendition trees.
+- **Rendering-quality uplifts:** N-dimensional sampled-function interpolation, better resampling
+  kernels, shading-edge anti-aliasing, and robust matte un-premultiplication algorithms, with
+  Lanczos-3 downscaling and Mitchell-Netravali upscaling as named target kernels.
+
+These are not excuses to dilute the closed-loop proof. They are the high-value adjacencies that a
+closed-loop engine naturally grows into once the substrate, preservation model, and proof harness
+are real.
+
+Counting policy is now explicit. The locked current inventory remains **104 named algorithms and
+techniques**; the priority uplift above adds **39** more for a forward-looking total of **143**,
+and the broader document-structure plus multimedia inventory lanes bring the inclusive count to
+**155**. That matters because these additions are not cosmetic backlog items: they are the lanes
+that make the engine matter in prepress, regulated e-signature, accessibility compliance,
+government-form interchange, and document forensics.
+
 ## Compatibility doctrine
 
 Monkeybee does not hide from hard PDFs. It operates under a three-tier compatibility doctrine:
@@ -135,26 +180,26 @@ Workspace crates:
 | `monkeybee-substrate` | Persistent incremental kernel: node digests, content-addressed store, snapshot roots, lineage, hypothesis sets, query engine, invalidation, temporal replay scaffolding, invariant certificate generation |
 | `monkeybee-syntax` | Syntax/COS preservation layer: immutable parsed objects, token/span provenance, xref provenance, object-stream membership, formatting retention, repair records. The preservation boundary |
 | `monkeybee-document` | Semantic document graph built from syntax snapshots and substrate roots: page tree, inherited state, resource resolution, ownership classes, dependency graph contract, transaction/change journal, semantic object indexes |
-| `monkeybee-catalog` | Catalog semantics: outlines, named destinations, page labels, name/number trees, viewer preferences, optional-content configs, embedded-file inventory |
+| `monkeybee-catalog` | Catalog semantics: outlines, named destinations, page labels, name/number trees, viewer preferences, optional-content configs, embedded-file inventory, collections, presentation metadata, and document-level rich-structure roots |
 | `monkeybee-content` | Content-stream IR + interpreter shared by render/extract/inspect/edit; graphics-state algebra and sink adapters |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline for existing PDF text, authoring pipeline for generated text, subsetting, search/hit-test primitives |
-| `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, tile/band surfaces, cooperative cancellation, progressive rendering |
+| `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, prepress proof modes, tile/band surfaces, cooperative cancellation, progressive rendering |
 | `monkeybee-3d` | PRC/U3D parsing, unified scene graph, wgpu rendering (Vulkan/Metal/DX12/WebGPU), named views, cross-sections, illustration modes |
 | `monkeybee-gpu` | Optional GPU-accelerated 2D rendering backend via wgpu, shared device/queue with the 3D pipeline, compute shader path rasterization, hardware compositing |
 | `monkeybee-compose` | High-level authoring and composition: document/page builders, appearance synthesis, resource naming, font embedding planning |
 | `monkeybee-write` | Pure serializer: deterministic rewrite, incremental append, preservation-aware `WritePlan` execution, xref/trailer emission, structural validation, final compression/encryption |
 | `monkeybee-edit` | Transactional structural edits, resource GC/dedup, redaction application, content-stream rewrite pipeline |
-| `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, widget/signature bridge |
+| `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, FDF/XFDF interchange, flattening, widget/signature bridge, and static-XFA helpers |
 | `monkeybee-paint` | Shared page-independent paint and appearance primitives reused by render, compose, forms, and annotate |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
-| `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, layout graph, semantic anchors, typed query/selection helpers, diagnostics |
-| `monkeybee-forensics` | Hidden-content detection, redaction audits, post-signing modification analysis, exploit-pattern detection, producer/font fingerprinting |
-| `monkeybee-validate` | Arlington/profile validation, write preflight, signature byte-range checks |
+| `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, accessibility semantics, action/link inventories, rich-structure cataloging, semantic anchors, typed query/selection helpers, diagnostics |
+| `monkeybee-forensics` | Hidden-content detection, redaction audits, post-signing modification analysis, active-content analysis, print-risk analysis, exploit-pattern detection, producer/font fingerprinting |
+| `monkeybee-validate` | Arlington/profile validation, print preflight, PDF/UA-style audit, PAdES/LTV checks, write preflight, signature byte-range checks |
 | `monkeybee-diff` | Structural, text, render, save-impact, and revision-frame comparison engine reused by the facade, proof harness, and CLI |
-| `monkeybee-signature` | Signature parsing, byte-range preservation, DocMDP/FieldMDP policy, verification plumbing, and save-impact analysis |
+| `monkeybee-signature` | Signature parsing, byte-range preservation, PAdES/DSS/VRI modeling, OCSP/CRL/TSA handling, signature creation, DocMDP/FieldMDP policy, verification plumbing, and save-impact analysis |
 | `monkeybee-proof` | Pathological corpus harness, round-trip validation, render comparison, compatibility and hypothesis ledgers, certificate recomputation, regression gates |
 | `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, subprocess-friendly broker hooks |
-| `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, diffing, plan-save previews, diagnostics, proof execution |
+| `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, prepress/signature/accessibility reporting, diffing, plan-save previews, diagnostics, proof execution |
 
 Core library crates remain runtime-agnostic: they accept `&ExecutionContext` and do not import
 `asupersync` directly. The facade, bytes, proof, and CLI crates are `asupersync`-native. CPU-bound
@@ -269,10 +314,12 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 No feature ships without evidence. No release gate passes on rhetoric. No architectural promise is
 accepted until a proof surface exists for it.
 
-The current spec inventory names 104 algorithms and techniques across baseline, post-baseline, and
-experimental lanes (57 pre-existing plus 47 restored or added), including restored 3D rendering,
-GPU backends, PDF 2.0 supplements, forensics, subpixel text, advanced path geometry, compression,
-and hot-path optimizations.
+The current locked baseline inventory names 104 algorithms and techniques across baseline,
+post-baseline, and experimental lanes (57 pre-existing plus 47 restored or added), including
+restored 3D rendering, GPU backends, PDF 2.0 supplements, forensics, subpixel text, advanced path
+geometry, compression, and hot-path optimizations. The priority uplift captured in the current
+specification adds 39 more named capabilities for a forward-looking total of 143, or 155 when the
+document-structure and multimedia inventory lanes are counted separately.
 
 ## Specification philosophy
 

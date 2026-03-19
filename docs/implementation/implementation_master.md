@@ -17,6 +17,21 @@ query materialization, temporal lineage, bounded ambiguity tracking, and invaria
 Everything else remains distinct and domain-shaped, but those layers now project through one shared
 substrate instead of each reinventing versioning, diffing, and cache semantics in parallel.
 
+## Scope alignment
+
+This implementation master now carries the same explicit inventory expansion tracked in `SPEC.md`.
+The locked current inventory remains **104 named algorithms and techniques**. The priority uplift
+for print production, digital signatures, tagged-accessibility, advanced forms, action inventory,
+and rendering-quality upgrades adds **39** more named capabilities for a forward-looking total of
+**143**. Counting broader document-structure and multimedia cataloging lanes separately yields an
+inclusive planning total of **155**.
+
+Those counts are not marketing garnish. In implementation terms they mean the workspace topology,
+report structures, ledger code families, fixture manifests, and test obligations must all be able
+to represent enterprise prepress, PAdES/LTV, PDF/UA-style audit, FDF/XFDF interchange, full action
+cataloging, and rich-structure/multimedia inventory as first-class lanes rather than vague future
+ideas.
+
 ## Workspace topology
 
 ```
@@ -131,7 +146,11 @@ monkeybee-pdf/
 │   │   │   ├── name_trees.rs
 │   │   │   ├── viewer_prefs.rs
 │   │   │   ├── optional_content.rs
-│   │   │   └── attachments.rs
+│   │   │   ├── attachments.rs
+│   │   │   ├── collections.rs   # /Collection schema, navigators, and embedded-doc relationships
+│   │   │   ├── presentations.rs # /Trans, alternate presentations, slideshow metadata
+│   │   │   ├── threads.rs       # /Threads catalog roots and bead entry points
+│   │   │   └── piece_info.rs    # /PieceInfo and web-capture roots
 │   │   └── Cargo.toml
 │   ├── monkeybee-content/        # content-stream IR and event interpreter
 │   │   ├── src/
@@ -170,9 +189,12 @@ monkeybee-pdf/
 │   │   │   ├── font.rs
 │   │   │   ├── image.rs
 │   │   │   ├── color.rs
+│   │   │   ├── function.rs      # PDF function evaluation (Type 0/2/3/4, tint, transfer, spot)
 │   │   │   ├── path.rs
+│   │   │   ├── resample.rs      # Lanczos/Mitchell image resampling kernels
 │   │   │   ├── transparency.rs
 │   │   │   ├── pattern.rs
+│   │   │   ├── prepress.rs      # overprint sim, soft proof, separations, TAC hooks, trap render
 │   │   │   ├── page.rs
 │   │   │   ├── tile.rs
 │   │   │   ├── progressive.rs    # ProgressiveRenderState, placeholder tracking, refinement
@@ -241,6 +263,11 @@ monkeybee-pdf/
 │   │   │   ├── value.rs
 │   │   │   ├── appearance.rs
 │   │   │   ├── calc_order.rs
+│   │   │   ├── interop.rs        # FDF/XFDF import/export
+│   │   │   ├── flatten.rs        # form flattening
+│   │   │   ├── submit.rs         # submit/reset/script inventory + target classification
+│   │   │   ├── barcode.rs        # barcode field parse/render (Code 128, QR, DataMatrix, PDF417)
+│   │   │   ├── xfa.rs            # Tier 2 static XFA inspection/flatten helpers
 │   │   │   ├── widget.rs
 │   │   │   └── signature.rs
 │   │   └── Cargo.toml
@@ -266,6 +293,13 @@ monkeybee-pdf/
 │   │   │   ├── search.rs         # SearchIndex, SelectionQuads, HitTest primitives
 │   │   │   ├── metadata.rs
 │   │   │   ├── structure.rs
+│   │   │   ├── accessibility.rs  # tagged semantics, ActualText/Alt/Lang, PDF/UA audit feed
+│   │   │   ├── actions.rs        # action inventory + link map extraction
+│   │   │   ├── threads.rs        # article threads / beads
+│   │   │   ├── portfolio.rs      # collections, alternate presentations, piece info, web capture
+│   │   │   ├── thumbnail.rs      # embedded page thumbnails and lightweight page previews
+│   │   │   ├── transition.rs     # page-transition / presentation inventory
+│   │   │   ├── multimedia.rs     # screen/sound/movie/media-clip/rendition inventory
 │   │   │   ├── asset.rs
 │   │   │   └── diagnostic.rs
 │   │   └── Cargo.toml
@@ -275,6 +309,8 @@ monkeybee-pdf/
 │   │   │   ├── hidden.rs         # hidden content detection
 │   │   │   ├── redaction_audit.rs # redaction sufficiency verification
 │   │   │   ├── post_sign.rs      # post-signing modification forensics
+│   │   │   ├── active_content.rs # full action graph + sanitize planning
+│   │   │   ├── print_audit.rs    # TAC / output intent / resolution risk analysis
 │   │   │   ├── cve_patterns.rs   # known exploit pattern detection
 │   │   │   ├── producer_fp.rs    # producer fingerprinting
 │   │   │   └── font_fp.rs        # font fingerprinting
@@ -284,7 +320,10 @@ monkeybee-pdf/
 │   │   │   ├── lib.rs
 │   │   │   ├── arlington.rs
 │   │   │   ├── profile.rs
-│   │   │   ├── preflight.rs
+│   │   │   ├── preflight.rs      # write preflight and structural gatekeeping
+│   │   │   ├── print.rs          # print-production preflight, TAC, bleed, DPI, trap checks
+│   │   │   ├── accessibility.rs  # PDF/UA-style audit rules and tagged-structure validation
+│   │   │   ├── pades.rs          # PAdES profile and offline-LTV readiness checks
 │   │   │   └── signature.rs
 │   │   └── Cargo.toml
 │   ├── monkeybee-proof/          # validation and evidence harness
@@ -305,6 +344,17 @@ monkeybee-pdf/
 │   │   └── Cargo.toml
 │   ├── monkeybee-diff/           # structural/text/render/save-impact/revision diff engine
 │   ├── monkeybee-signature/      # signature dictionaries, byte-range maps, policy + verification
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── model.rs          # signature dictionaries, DSS, VRI
+│   │   │   ├── dss.rs            # DSS/VRI indexing, digest-keyed lookup, write-side assembly
+│   │   │   ├── verify.rs         # CMS/PAdES verification, chain building
+│   │   │   ├── revocation.rs     # OCSP / CRL handling
+│   │   │   ├── trust.rs          # trust-anchor policy, AIA/SKI/AKI path helpers
+│   │   │   ├── timestamp.rs      # RFC 3161 parsing and verification
+│   │   │   ├── create.rs         # CMS/PAdES creation
+│   │   │   └── ltv.rs            # offline long-term validation readiness
+│   │   └── Cargo.toml
 │   ├── monkeybee-native/         # all optional FFI/native bridges and broker adapters
 │   └── monkeybee-cli/            # command-line interface
 │       ├── src/
@@ -326,6 +376,10 @@ Key topology rules:
    substrate-backed.
 6. `monkeybee-write` owns plan execution and receipt emission, but preservation algebra inputs come
    from document semantics and substrate lineage together.
+7. Prepress, PAdES/LTV, accessibility audit, form interchange, and
+   action/portfolio/multimedia inventory are intentionally cross-cutting lanes. They must reuse
+   shared color, structure, content, and preservation machinery rather than spawning parallel
+   feature silos.
 
 ## Crate dependency graph
 
@@ -728,6 +782,59 @@ pub struct CapabilityReport {
     pub temporal_revision_depth: u32,
     pub hypothesis_summary: Option<HypothesisSetSummary>,
     pub semantic_surface: Option<SemanticSurfaceSummary>,
+    pub prepress_summary: Option<PrepressSummary>,
+    pub accessibility_summary: Option<AccessibilitySummary>,
+    pub forms_summary: Option<FormInterchangeSummary>,
+    pub action_inventory_summary: Option<ActionInventorySummary>,
+    pub rich_structure_summary: Option<RichStructureSummary>,
+}
+
+pub struct PrepressSummary {
+    pub output_intents: Vec<OutputIntentRef>,
+    pub page_output_intent_count: u32,
+    pub halftone_types: Vec<HalftoneType>,
+    pub has_transfer_functions: bool,
+    pub has_bg_ucr: bool,
+    pub tac_risk: Option<TacRiskClass>,
+    pub separation_names: Vec<String>,
+    pub trap_network_count: u32,
+}
+
+pub struct AccessibilitySummary {
+    pub standard_roles_seen: Vec<String>,
+    pub has_actual_text: bool,
+    pub has_alt_text: bool,
+    pub has_expansion_text: bool,
+    pub has_language_spans: bool,
+    pub has_pronunciation_metadata: bool,
+    pub artifact_span_count: u32,
+    pub pdfua_findings: Vec<PdfUaFinding>,
+}
+
+pub struct FormInterchangeSummary {
+    pub has_xfa: bool,
+    pub can_import_fdf: bool,
+    pub can_export_xfdf: bool,
+    pub javascript_hook_count: u32,
+    pub submit_target_count: u32,
+    pub barcode_field_count: u32,
+    pub signature_field_count: u32,
+}
+
+pub struct ActionInventorySummary {
+    pub total_actions: u32,
+    pub actions_by_kind: Vec<ActionKindCount>,
+    pub navigation_target_count: u32,
+    pub execute_deny_findings: u32,
+}
+
+pub struct RichStructureSummary {
+    pub article_thread_count: u32,
+    pub bead_count: u32,
+    pub page_transition_count: u32,
+    pub thumbnail_count: u32,
+    pub portfolio_item_count: u32,
+    pub multimedia_item_count: u32,
 }
 ```
 
@@ -1035,6 +1142,20 @@ pub struct LedgerSummary {
 }
 ```
 
+The ledger implementation MUST reserve stable code families for the expansion lanes:
+`print.*`, `signature.*`, `tagged.*`, `pdfua.*`, `forms.*`, `actions.*`, `catalog.*`, and
+`multimedia.*`. Stable subfamilies include `print.halftone`, `print.transfer`, `print.bg_ucr`,
+`print.overprint_sim`, `print.softproof`, `print.output_intent`, `print.separations`, `print.tac`,
+`signature.pades`, `signature.dss`, `signature.vri`, `signature.cert_path`, `signature.ocsp`,
+`signature.crl`, `signature.tsa`, `signature.creation`, `tagged.standard_role`,
+`tagged.actualtext`, `tagged.alt`, `tagged.expansion_text`, `tagged.lang`,
+`tagged.pronunciation`, `pdfua.heading_hierarchy`, `pdfua.table_headers`, `forms.fdf`,
+`forms.xfdf`, `forms.flatten`, `forms.submit_target`, `actions.goto_3d_view`, `actions.hide`,
+`actions.named`, `actions.rendition`, `catalog.beads`, `catalog.collection_schema`,
+`catalog.alternate_presentation`, `multimedia.media_clip`, and `multimedia.rendition_tree`. Even
+when handling is Tier 2/3, those features must be detected and categorized deterministically so
+proof dashboards and APR rounds can track them.
+
 ### PDF object model (`monkeybee-core::object`)
 
 ```rust
@@ -1167,6 +1288,10 @@ pub struct GraphicsState {
     pub overprint_stroke: bool,
     pub overprint_fill: bool,
     pub overprint_mode: i32,
+    pub transfer_function: Option<TransferTransformRef>,
+    pub black_generation: Option<TransferTransformRef>,
+    pub undercolor_removal: Option<TransferTransformRef>,
+    pub halftone: Option<HalftoneRef>,
     pub text_state: TextState,
 }
 
@@ -1844,6 +1969,9 @@ PdfSnapshot + extract profile
 - Render comparison tests: render corpus documents -> compare against reference renderers.
 - Visual regression tests: golden-image comparisons with perceptual diff thresholds.
 - Edge case tests: transparency stacking, pattern rendering, Type 3 fonts, unusual blend modes.
+- Prepress tests: RGB overprint simulation, soft-proof output-intent transforms, separation-preview plate images, TAC accumulation, halftone Types 1/5/6/10/16 inspection, and trap-annotation rendering where supported.
+- Function-evaluation tests: transfer functions, BG/UCR hooks, spot-function and threshold-screen inspection, and N-dimensional sampled-function interpolation fixtures.
+- Quality tests: Lanczos/Mitchell resampling behavior, shading-edge anti-aliasing, and matte un-premultiplication stability.
 - Cooperative cancellation tests: cancel mid-render at each checkpoint type.
 - Progressive rendering tests: missing resources produce correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles.
 - Query reuse tests: repeated renders on unchanged snapshot reuse page-plan/tile materializations.
@@ -1895,6 +2023,11 @@ PdfSnapshot + extract profile
 - Round-trip tests: fill form -> save -> reload -> verify field values and appearances preserved.
 - Signature-field tests: incremental-append after form fill preserves signed byte ranges.
 - Calculation order tests: detection and preservation of calculation order across round-trips.
+- Interchange tests: FDF/XFDF import/export preserves fully qualified field names and values.
+- Flattening tests: form flattening resolves inherited properties and matches pre-flatten appearances.
+- Active-form tests: calculate/format/validate/keystroke inventory plus submit/reset classification surface expected targets without execution.
+- Barcode tests: barcode-field parse/render behavior matches fixture expectations for common symbologies.
+- XFA tests: static-XFA inspection and flattening degrade explicitly when safe recovery is impossible.
 
 ### monkeybee-annotate
 - Unit tests: annotation creation, geometry calculations, appearance stream generation.
@@ -1907,6 +2040,9 @@ PdfSnapshot + extract profile
 - Profile tests: PDF/A-4, PDF/X-6 constraint checking on known-conforming documents.
 - Preflight tests: write preflight catches structural errors before serialization.
 - Signature tests: byte-range verification on signed documents.
+- Print-preflight tests: image DPI, bleed/TrimBox/BleedBox, output-intent presence, color-space suitability, TAC thresholds, font completeness, and trap-network checks.
+- Accessibility-audit tests: structure completeness, alt-text presence, heading hierarchy, table association, artifact-marking rules, and reading-order plausibility on tagged fixtures.
+- PAdES/LTV tests: DSS/VRI completeness, revocation-evidence availability, cert-path construction, and offline-validation readiness classification.
 - Receipt cross-check tests: validation findings match receipt-reported post-write validation.
 
 ### monkeybee-extract
@@ -1914,6 +2050,11 @@ PdfSnapshot + extract profile
 - Multi-surface tests: PhysicalText matches exact glyph geometry, LogicalText produces correct reading order with confidence, TaggedText uses structure tree when present.
 - Search/hit-test tests: SearchIndex finds known text, SelectionQuads returns correct regions, HitTest resolves correct characters.
 - Metadata tests: extraction accuracy on documents with known metadata.
+- Tagged-semantic tests: standard roles, role maps, attributes/class maps, ActualText, Alt, expansion text, Lang, pronunciation metadata, artifact handling, and structure destinations match expected outputs.
+- Action/link-map tests: full action inventory, including GoTo3DView/Hide/Named/Rendition/Transition families, and navigational link maps match curated fixtures.
+- Structure-inventory tests: article threads/beads, portfolios, thumbnails, transitions, alternate presentations, PieceInfo, and web-capture structures are exposed deterministically.
+- Multimedia-inventory tests: screen/sound/movie/media-clip/rendition structures are detected and reported without execution.
+- Print-inspection tests: output-intent inventory, separation-name extraction, TAC summaries, and placed-image resolution metadata match fixtures.
 - Semantic graph tests: graph node/edge construction is deterministic for fixed extract profile.
 - Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
@@ -1922,6 +2063,8 @@ PdfSnapshot + extract profile
 - Unit tests: hidden content detection on planted corpus fixtures including white-on-white text, off-page content, and image-obscured text.
 - Redaction audit tests: intentionally bad redactions (opaque overlay only) are detected while proper redactions pass.
 - Post-signing tests: classify modifications on signed-then-modified corpus files with permitted-vs-suspicious expectations.
+- Active-content tests: full action graphs, trigger sites, and sanitize-preserve-stub plans match expectations.
+- Print-risk tests: TAC overruns, missing output intents, suspicious overprint usage, low-resolution print assets, and trap/bleed risks are flagged correctly.
 - Fingerprinting tests: producer and font fingerprinting remain stable on curated fixtures with known provenance.
 
 ### monkeybee-diff
@@ -1933,6 +2076,11 @@ PdfSnapshot + extract profile
 - Unit tests: signature dictionary parsing, byte-range maps, DocMDP / FieldMDP policy evaluation.
 - Integration tests: signature impact reports agree with WritePlan and WriteReceipt outputs.
 - Provider tests: CryptoProvider-backed verification results are stably surfaced into reports and ledgers.
+- PAdES tests: B-B/B-T/B-LT/B-LTA classification matches fixture expectations.
+- DSS/VRI tests: embedded validation material round-trips and indexes correctly per signature digest.
+- Revocation tests: OCSP and CRL ingestion, trust-path construction via AIA/SKI/AKI metadata, and offline validation readiness behave deterministically.
+- Timestamp tests: RFC 3161 parsing/verification and creation-side TSA integration on signed fixtures.
+- Creation tests: CMS/PAdES signature creation interoperates with external validators and preserves incremental-append invariants.
 
 ### monkeybee-proof
 - Integration tests: full proof harness runs on subset of corpus.
@@ -1943,6 +2091,7 @@ PdfSnapshot + extract profile
 - Repair expectation tests: ambiguous recovery asserts chosen candidate id, semantic digest, and write-impact class unless explicitly waived.
 - Temporal tests: multi-revision fixtures produce stable historical frame outputs.
 - Anchor tests: semantic-anchor stability harness computes expected alias precision.
+- Expansion-lane corpus tests: prepress, PAdES/LTV, tagged-accessibility, form-interchange, action inventory, portfolio/thread, and multimedia fixtures remain represented and triaged.
 - Certificate tests: proof harness can recompute invariant-certificate digests independently.
 - Regression tests: unknown degradations, hypothesis drift, or scope-class violations fail unless triaged.
 
@@ -1961,7 +2110,12 @@ their respective subsystems:
 - `docs/implementation/security.md` — security profiles, budget broker, worker isolation, hostile-input policy
 - `docs/implementation/text.md` — font programs, CMaps, Unicode mapping, decode pipeline, authoring layout pipeline, subsetting, search/hit-test
 - `docs/implementation/rendering.md` — render pipeline via content sink adapters, output backends, tile/band surface, progressive render
+- `docs/implementation/prepress.md` — halftones, transfer/BG/UCR, overprint simulation, soft proofing, separations, TAC, trap handling, print preflight
 - `docs/implementation/forms.md` — AcroForm field tree, value model, appearance regeneration, widget bridge, signature helpers
+- `docs/implementation/signatures.md` — PAdES profiles, DSS/VRI, cert-path building, OCSP/CRL/TSA handling, signature creation, offline LTV
+- `docs/implementation/accessibility.md` — standard roles, ActualText/Alt/E/Lang/pronunciation/artifacts, PDF/UA audit, reading-order visualization
+- `docs/implementation/actions.md` — typed action inventory, link-map extraction, sanitize planning
+- `docs/implementation/catalog-rich-structures.md` — threads, beads, portfolios, alternate presentations, transitions, thumbnails, PieceInfo, web capture, multimedia inventory
 - `docs/implementation/annotation.md` — annotation model, placement, appearance, flattening
 - `docs/implementation/compose.md` — document/page builders, resource naming, appearance generation, font embedding planning
 - `docs/implementation/writeback.md` — serialization, save modes, WritePlan computation, receipt emission, structural validation
