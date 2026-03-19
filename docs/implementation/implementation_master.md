@@ -142,8 +142,9 @@ For the second hardening pass, the highest-signal additions to foreground are:
 4. **Certification-vs-approval signature classification with MDP-chain validation** because they
    make `monkeybee-signature` and `monkeybee-validate` tell a defensible trust-policy story.
 5. **DeviceN/ICC/output-intent/trapped hazard reporting** because they show that
-   `monkeybee-render`, `monkeybee-validate`, and `monkeybee-extract` understand real prepress
-   semantics rather than generic RGB conversion only.
+   `monkeybee-color` together with `monkeybee-render`, `monkeybee-validate`, and
+   `monkeybee-extract` understands real prepress semantics rather than generic RGB conversion
+   only.
 
 The 26-item hardening uplift is intentionally cross-cutting rather than isolated in a single crate:
 
@@ -155,8 +156,9 @@ The 26-item hardening uplift is intentionally cross-cutting rather than isolated
 - `monkeybee-parser`, `monkeybee-catalog`, and `monkeybee-render` own inline-image leakage
   tolerance, tree-limit repair, blend-mode preference lists, stream-extent validation, and
   optional-content configuration sequences.
-- `monkeybee-render`, `monkeybee-extract`, and `monkeybee-validate` own `/Trapped`, ICC-version,
-  alternate-image, spot-function, DeviceN-attribute, and output-intent-condition reporting.
+- `monkeybee-color`, `monkeybee-render`, `monkeybee-extract`, and `monkeybee-validate` own
+  `/Trapped`, ICC-version, alternate-image, spot-function, DeviceN-attribute,
+  output-intent-condition, and color-witness reporting.
 - `monkeybee-signature`, `monkeybee-extract`, and `monkeybee-forensics` own certification/
   approval classification, JavaScript timing graphs, structured destinations, and web-capture
   provenance.
@@ -303,6 +305,16 @@ monkeybee-pdf/
 │   │   │   ├── subset.rs
 │   │   │   └── search.rs
 │   │   └── Cargo.toml
+│   ├── monkeybee-color/          # shared color/prepress kernel
+│   │   ├── src/
+│   │   │   ├── lib.rs
+│   │   │   ├── profile.rs        # ICC parsing, profile linking, black-point compensation
+│   │   │   ├── transform.rs      # color transforms and rendering-intent execution
+│   │   │   ├── devicen.rs        # Separation/DeviceN/NChannel resolution
+│   │   │   ├── intent.rs         # document/page output-intent cascade selection
+│   │   │   ├── proof.rs          # soft proof, TAC accounting, color witnesses
+│   │   │   └── receipt.rs        # color/materialization receipts
+│   │   └── Cargo.toml
 │   ├── monkeybee-paint/          # shared paint/appearance primitives (non-raster, page-independent)
 │   │   ├── src/
 │   │   │   ├── lib.rs
@@ -317,7 +329,6 @@ monkeybee-pdf/
 │   │   │   ├── text.rs
 │   │   │   ├── font.rs
 │   │   │   ├── image.rs
-│   │   │   ├── color.rs
 │   │   │   ├── function.rs      # PDF function evaluation (Type 0/2/3/4, tint, transfer, spot)
 │   │   │   ├── path.rs
 │   │   │   ├── resample.rs      # Lanczos/Mitchell image resampling kernels
@@ -505,7 +516,10 @@ Key topology rules:
    substrate-backed.
 6. `monkeybee-write` owns plan execution and receipt emission, but preservation algebra inputs come
    from document semantics and substrate lineage together.
-7. Prepress, PAdES/LTV, accessibility audit, form interchange, and
+7. `monkeybee-color` is a first-class shared kernel rather than a render helper module. Color
+   math, output-intent selection, DeviceN/Separation resolution, proof/prepress witnesses, and
+   TAC accounting flow through it so render/extract/validate/forms/compose do not fork color logic.
+8. Prepress, PAdES/LTV, accessibility audit, form interchange, and
    action/portfolio/multimedia inventory are intentionally cross-cutting lanes. They must reuse
    shared color, structure, content, and preservation machinery rather than spawning parallel
    feature silos.
@@ -535,22 +549,23 @@ monkeybee-document      (depends on: core, bytes, substrate, syntax)    ← sema
 monkeybee-catalog       (depends on: core, syntax, substrate, document)
 monkeybee-content       (depends on: core, substrate, document)
 monkeybee-text          (depends on: core, substrate, document, codec)
+monkeybee-color         (depends on: core, substrate, document, codec)
     ↑
-monkeybee-paint         (depends on: core, text)
-monkeybee-render        (depends on: core, substrate, content, document, text, codec, paint)
+monkeybee-paint         (depends on: core, text, color)
+monkeybee-render        (depends on: core, substrate, content, document, text, color, codec, paint)
 monkeybee-3d            (depends on: core, substrate, document, content, codec)
 monkeybee-gpu           (depends on: core, render, paint)
-monkeybee-compose       (depends on: core, substrate, document, text, content, paint)
+monkeybee-compose       (depends on: core, substrate, document, text, color, content, paint)
 monkeybee-write         (depends on: core, bytes, substrate, document, catalog, codec, validate)
 monkeybee-edit          (depends on: core, substrate, document, content, compose, write)
-monkeybee-forms         (depends on: core, substrate, document, text, compose, paint)
+monkeybee-forms         (depends on: core, substrate, document, text, color, compose, paint)
 monkeybee-annotate      (depends on: core, substrate, document, content, compose, forms, paint)
-monkeybee-extract       (depends on: core, substrate, content, document, text)
+monkeybee-extract       (depends on: core, substrate, content, document, text, color)
 monkeybee-forensics     (depends on: core, substrate, document, content, extract, signature)
-monkeybee-validate      (depends on: core, substrate, document, catalog)
+monkeybee-validate      (depends on: core, substrate, document, catalog, color)
 monkeybee-diff          (depends on: core, substrate, document, content, extract, render, write)
 monkeybee-signature     (depends on: core, substrate, syntax, document, write, validate)
-monkeybee-proof         (depends on: core, bytes, substrate, codec, security, parser, syntax, document, content, text, render, compose, write, edit, forms, annotate, extract, validate, diff, signature)
+monkeybee-proof         (depends on: core, bytes, substrate, codec, security, parser, syntax, document, content, text, color, render, compose, write, edit, forms, annotate, extract, validate, diff, signature)
 monkeybee               (depends on: core, bytes, substrate, document, render, extract, edit, write, validate, diff, signature)
 monkeybee-cli           (depends on: all above)
 ```
@@ -593,6 +608,7 @@ members = [
     "crates/monkeybee-catalog",
     "crates/monkeybee-content",
     "crates/monkeybee-text",
+    "crates/monkeybee-color",
     "crates/monkeybee-paint",
     "crates/monkeybee-render",
     "crates/monkeybee-3d",
@@ -640,10 +656,10 @@ preview surfaces that are intentionally non-gating.
 |---|---|---|
 | `freetype` | monkeybee-text | Enable FreeType backend for font rasterization (default: off) |
 | `openjpeg` | monkeybee-codec | Enable OpenJPEG for JPEG 2000 decode (default: on in Compatible) |
-| `lcms2` | monkeybee-render | Enable lcms2 for ICC profile evaluation (default: on) |
+| `lcms2` | monkeybee-color | Enable lcms2-backed ICC/profile evaluation (default: on) |
 | `tiny-skia` | monkeybee-render | Enable tiny-skia rasterizer (default: on, baseline) |
 | `experimental-raster` | monkeybee-render | Enable exact analytic area coverage rasterizer |
-| `experimental-color` | monkeybee-render | Enable spectral-aware color pipeline |
+| `experimental-color` | monkeybee-color | Enable experimental spectral-aware color pipeline |
 | `experimental-sdf` | monkeybee-render | Enable SDF glyph rendering path |
 | `wgpu-3d` | monkeybee-3d | Enable 3D PDF rendering via wgpu (default: on in native) |
 | `wgpu-gpu2d` | monkeybee-gpu | Enable GPU 2D rendering backend (experimental, default: off) |
@@ -1650,6 +1666,19 @@ pub struct RedactionVerificationSummary {
     pub verdict: String,
 }
 
+pub struct BytePatchAtom {
+    pub target_span: ByteSpanRef,
+    pub original_digest: [u8; 32],
+    pub replacement_digest: [u8; 32],
+    pub constant_length: bool,
+}
+
+pub struct BytePatchReceipt {
+    pub patch_plan_digest: [u8; 32],
+    pub applied_atoms: Vec<BytePatchAtom>,
+    pub preserved_signed_ranges: Vec<(u64, u64)>,
+}
+
 pub struct WriteReceipt {
     pub schema_version: String,
     pub snapshot_id: SnapshotId,
@@ -1670,6 +1699,8 @@ pub struct WriteReceipt {
     pub transport_continuity: Option<TransportContinuityReceipt>,
     pub emission_journal: Option<EmissionJournal>,
     pub feasibility_witness: Option<FeasibilityWitness>,
+    pub frontier_witness: Option<FrontierWitness>,
+    pub byte_patch_receipt: Option<BytePatchReceipt>,
     pub post_write_validation: Vec<ValidationFinding>,
     pub redaction_verification: Option<RedactionVerificationSummary>,
 }
@@ -1947,17 +1978,40 @@ pub struct BlindSpotLedger {
     pub entries: Vec<BlindSpotLedgerEntry>,
 }
 
-pub enum CoverageAxis {
-    FeatureCode,
-    ProducerFamily,
-    OperationChain,
-    SupportClass,
-    SecurityProfile,
-    WriteMode,
+pub struct ProducerPhenotypeId(pub [u8; 32]);
+
+pub struct ProducerPhenotype {
+    pub phenotype_id: ProducerPhenotypeId,
+    pub declared_producer: Option<String>,
+    pub structural_markers: Vec<String>,
+    pub typical_repairs: Vec<String>,
+    pub quirk_modules: Vec<String>,
 }
 
-pub struct CoverageLatticeCell {
-    pub axis_values: Vec<String>,
+pub struct PhenotypeEvidence {
+    pub matched_markers: Vec<String>,
+    pub confidence: f32,
+}
+
+pub struct QuirkActivationReceipt {
+    pub phenotype_id: Option<ProducerPhenotypeId>,
+    pub activated_quirks: Vec<String>,
+    pub suppressed_quirks: Vec<String>,
+    pub reason: String,
+}
+
+pub struct CoverageCell {
+    pub feature_code: FeatureCode,
+    pub producer_phenotype: Option<ProducerPhenotypeId>,
+    pub operation_chain: String,
+    pub support_class: SupportClass,
+    pub security_profile: String,
+    pub write_mode: Option<WriteMode>,
+    pub determinism_class: Option<RenderDeterminismClass>,
+}
+
+pub struct CoverageObservation {
+    pub cell: CoverageCell,
     pub exercised_fixture_count: u32,
     pub passing_fixture_count: u32,
     pub disagreement_fixture_count: u32,
@@ -1965,7 +2019,13 @@ pub struct CoverageLatticeCell {
 }
 
 pub struct CoverageLattice {
-    pub cells: Vec<CoverageLatticeCell>,
+    pub cells: Vec<CoverageObservation>,
+}
+
+pub struct AcquisitionRecommendation {
+    pub target_cells: Vec<CoverageCell>,
+    pub reason: String,
+    pub expected_signal_gain: f32,
 }
 
 pub struct SynthesisWitness {
@@ -2075,7 +2135,10 @@ Implementation notes:
 - environment locks and evidence bundles are content-addressed proof artifacts rather than ad hoc CI attachments
 - oracle consensus and blind-spot artifacts are first-class proof outputs, not report garnish
 - region-level disagreement explainability receipts are first-class proof outputs, not screenshots plus prose
-- blind-spot suppression should be derivable from `CoverageLattice`, and synthesized fixtures must retain lineage through `SynthesisWitness`
+- blind-spot suppression should be derivable from `CoverageLattice`, synthesized fixtures must retain lineage through `SynthesisWitness`, and proof planning should be able to emit `AcquisitionRecommendation`s for under-covered typed cells
+- tolerant-open and repair paths should emit `QuirkActivationReceipt` whenever producer-specific
+  shims materially influence interpretation, so proof aggregation can cluster outcomes by
+  phenotype instead of only by free-form producer string
 - oracle disagreements are typed artifacts, not free-form comments in CI logs
 - strategy promotion stays blocked while any manifest-qualified disagreement remains unresolved
 - canonical benchmark classes emit schema-versioned `BenchmarkWitness` artifacts tied to the same
@@ -2327,6 +2390,8 @@ pub enum PreservationConstraintKind {
     SignedByteRangeIntegrity,
     ForeignBytePreservation,
     IncrementalAppendClosure,
+    InPlacePatchClosure,
+    StableOffsetWindow,
     ProfileConformance,
     ActiveContentSanitization,
     OutputIntentRetention,
@@ -2368,12 +2433,31 @@ pub struct FeasibilityWitness {
     pub trace_digest: [u8; 32],
 }
 
+pub struct FrontierPointId(pub [u8; 32]);
+
+pub struct PreservationFrontierPoint {
+    pub point_id: FrontierPointId,
+    pub write_mode: WriteMode,
+    pub preserved: Vec<PreservedProperty>,
+    pub sacrificed: Vec<PreservedProperty>,
+    pub cost: CostEnvelope,
+    pub feasibility: FeasibilityVerdict,
+}
+
+pub struct FrontierWitness {
+    pub policy_digest: [u8; 32],
+    pub minimal_unsat_cores: Vec<Vec<String>>,
+    pub pareto_points: Vec<PreservationFrontierPoint>,
+    pub chosen_point: Option<FrontierPointId>,
+}
+
 pub struct WritePlan {
     pub classifications: Vec<ObjectClassification>,
     pub preservation_claims: Vec<PreservationClaim>,
     pub signature_impact: SignatureImpact,
     pub constraint_graph: PreservationConstraintGraph,
     pub feasibility_witness: FeasibilityWitness,
+    pub frontier_witness: Option<FrontierWitness>,
     pub plan_digest: [u8; 32],
     pub policy_digest: [u8; 32],
     pub plan_selection_digest: Option<[u8; 32]>,
@@ -2704,6 +2788,49 @@ Implementation notes:
   aggregate counters in cache stats
 - canonical benchmarks attach peak-memory witnesses alongside timing/topology evidence
 
+### Segmented artifact store
+
+```rust
+pub struct SegmentId(pub [u8; 32]);
+
+pub enum SegmentKind {
+    PageClosure,
+    ObjectNeighborhood,
+    RenderChunkRegion,
+    SemanticRegion,
+    RevisionFrame,
+}
+
+pub struct ArtifactSegment {
+    pub segment_id: SegmentId,
+    pub kind: SegmentKind,
+    pub source_nodes: Vec<NodeDigest>,
+    pub estimated_working_set_bytes: u64,
+}
+
+pub struct WorkingSetForecast {
+    pub hot_segments: Vec<SegmentId>,
+    pub cold_segments: Vec<SegmentId>,
+    pub predicted_peak_bytes: u64,
+}
+
+pub struct SpillReceipt {
+    pub segment_id: SegmentId,
+    pub reason: String,
+    pub persisted: bool,
+    pub policy_digest: [u8; 32],
+}
+```
+
+Implementation notes:
+- huge-document paths should materialize page-closure, object-neighborhood,
+  render-chunk-region, semantic-region, and revision-frame segments instead of
+  monolithic blobs whenever the same correctness class can be preserved
+- `WorkingSetForecast` is the explainability surface for peak-memory claims on
+  huge fixtures and should flow into benchmark witnesses
+- spill/persist decisions for segmented artifacts should emit `SpillReceipt`s
+  so memory-hierarchy behavior remains auditable
+
 ### Content stream rewriter (`monkeybee-edit::rewriter`)
 
 ```rust
@@ -2871,11 +2998,30 @@ pub struct SparseDigestMap {
     pub verified: Vec<RangeDigestRecord>,
 }
 
+pub enum TransportContinuityClass {
+    SingleEntityVerified,
+    MultiRangeVerified,
+    WeakValidatorOnly,
+    ContinuityBroken,
+}
+
+pub struct RangeWitness {
+    pub range: (u64, u64),
+    pub fetch_epoch: FetchEpoch,
+    pub etag: Option<String>,
+    pub content_length: Option<u64>,
+    pub validator_strength: String,
+}
+
 pub struct TransportContinuityReceipt {
+    pub continuity_class: TransportContinuityClass,
     pub transport_identity: TransportIdentity,
     pub epochs_seen: Vec<FetchEpoch>,
+    pub fetched_ranges: Vec<RangeWitness>,
     pub digest_map: SparseDigestMap,
     pub continuity_failures: Vec<RangeConsistencyError>,
+    pub invalidated_queries: Vec<QueryKey>,
+    pub trace_digest: [u8; 32],
 }
 ```
 
@@ -2885,7 +3031,8 @@ Implementation notes:
   weak validator identity alone is not enough for the strongest correctness
   claims
 - continuity failures must flow into caller-visible diagnostics and receipts,
-  not remain buried in fetcher telemetry
+  invalidate all affected materializations tied to the prior fetch epoch, and
+  block preserve-sensitive workflows until continuity is re-established
 
 ```rust
 pub struct RangeMerkleLeaf {
@@ -3040,6 +3187,7 @@ pub enum AnchorFragilityClass {
 pub struct AnchorStabilityEnvelope {
     pub anchor_id: SemanticAnchorId,
     pub fragility: AnchorFragilityClass,
+    pub volatility: Option<AnchorVolatilityScore>,
     pub survives_transforms: Vec<MetamorphicTransformKind>,
     pub requires_alias_map_on: Vec<MetamorphicTransformKind>,
     pub invalidated_by: Vec<String>,
@@ -3052,6 +3200,54 @@ pub struct AnchorDriftWitness {
     pub geometry_drift: Option<f64>,
     pub logical_drift: Option<f64>,
     pub resolved_via_alias_map: bool,
+}
+
+pub struct GlyphInstanceId(pub [u8; 32]);
+
+pub struct PaintedGlyphWitness {
+    pub glyph_instance_id: GlyphInstanceId,
+    pub font_fingerprint: ResourceFingerprint,
+    pub charcode: u32,
+    pub unicode: Option<char>,
+    pub bbox: Rectangle,
+    pub render_chunk_id: RenderChunkId,
+    pub provenance: ProvenanceAtom,
+}
+
+pub struct TextPaintLink {
+    pub span_id: SpanId,
+    pub glyph_instances: Vec<GlyphInstanceId>,
+    pub continuity_class: TextTruthClass,
+}
+
+pub struct TextPaintReceipt {
+    pub page_index: u32,
+    pub links: Vec<TextPaintLink>,
+    pub orphan_paint_glyphs: Vec<GlyphInstanceId>,
+    pub orphan_extract_spans: Vec<SpanId>,
+}
+
+pub enum AnchorFragilityCause {
+    GlyphDecodeWeak,
+    ReadingOrderHeuristic,
+    TableHypothesisDependent,
+    PageReflowLikeEdit,
+    ResourceSubstitution,
+    AmbiguousRepairLineage,
+}
+
+pub struct AnchorVolatilityScore {
+    pub anchor_id: SemanticAnchorId,
+    pub score_0_to_1: f32,
+    pub causes: Vec<AnchorFragilityCause>,
+}
+
+pub struct AnchorRepairReceipt {
+    pub prior_anchor: SemanticAnchorId,
+    pub current_anchor: Option<SemanticAnchorId>,
+    pub continuity: AnchorContinuityClass,
+    pub volatility: AnchorVolatilityScore,
+    pub neighborhood_fingerprint: [u8; 32],
 }
 
 pub struct EditProposal {
@@ -3068,11 +3264,17 @@ Implementation notes:
 - semantic nodes that surface text or layout meaning should carry provenance and
   truth-class detail whenever those surfaces are exposed externally; absence of
   that detail is itself an extraction-quality limit, not permission to guess
+- text-paint correspondence is the bridge between extract truth and render
+  truth; highlight, selection, redaction, and disagreement-localization flows
+  should be able to request a `TextPaintReceipt`
 - anchor-stability witnesses must distinguish exact continuity, alias-map
   continuity, heuristic re-identification, and loss so agent-safe edit flows
   can tell stability from best-effort recovery
 - query APIs should be able to return an `AnchorStabilityEnvelope` for callers
   that need transform-survival/fragility information before proposing edits
+- agent-facing edit proposals should be able to cap accepted anchor volatility,
+  and safe-rewrite/incremental-append proof fixtures should compare
+  `AnchorRepairReceipt`s rather than only continuity classes
 
 ### WritePlan classification (`monkeybee-write::plan`)
 
@@ -3097,6 +3299,14 @@ pub struct SignatureStatus {
     pub reason: Option<String>,
 }
 ```
+
+Implementation notes:
+- the experimental byte-patch lane sits between incremental append and full
+  rewrite as a proof-heavy strategy for bounded `Owned` regions only
+- any candidate byte patch must satisfy `InPlacePatchClosure` and
+  `StableOffsetWindow`; otherwise planning escalates back to append or rewrite
+- successful experimental byte-patch execution emits both a `BytePatchReceipt`
+  and the usual `WriteReceipt`
 
 ### Provider traits (`monkeybee-core::traits`)
 
@@ -3257,7 +3467,7 @@ PdfSnapshot + extract profile
 - **`image`** — image decoding (JPEG, PNG, TIFF baseline)
 - **`jpeg-decoder`** — DCTDecode
 - **`openjpeg-sys` or `jpeg2k`** — JPXDecode, isolated behind `monkeybee-native`
-- **`lcms2`** — ICC evaluation, isolated behind `monkeybee-native`
+- **`lcms2`** — ICC evaluation for `monkeybee-color`, isolated behind `monkeybee-native`
 - **`freetype-rs`** — optional hinted rasterization, isolated behind `monkeybee-native`
 - **`wgpu`** — GPU abstraction for 3D rendering and optional 2D GPU backend
 - **`naga`** — shader translation/validation support for wgpu pipelines
@@ -3328,6 +3538,9 @@ PdfSnapshot + extract profile
 - Repair tests: known malformed inputs -> verify repair produces usable output, including
   non-standard Type 1 encryption keys, `/Identity` crypt-filter no-op streams, and broken
   name/number-tree `/Limits`.
+- Producer-phenotype tests: structural markers map to stable `ProducerPhenotype` classifications,
+  and producer-specific shims emit deterministic `QuirkActivationReceipt`s when they materially
+  affect recovery or interpretation.
 - Ambiguity tests: ambiguous fixtures produce multiple candidates or an explicit unresolved classification; no silent collapse.
 
 ### monkeybee-substrate
@@ -3393,6 +3606,16 @@ PdfSnapshot + extract profile
   CID vertical metrics from `/W2` / `/DW2` drive expected vertical layout.
 - Search/hit-test tests: known text at known positions -> verify search finds it, hit-test returns correct quads.
 
+### monkeybee-color
+- Unit tests: ICC profile parsing, rendering-intent selection, black-point compensation, and
+  output-intent cascade resolution.
+- Transform tests: DeviceGray/RGB/CMYK, Cal*, Lab, ICCBased, Indexed, Separation, and DeviceN
+  resolve through the same kernel with deterministic `ColorWitness` emission.
+- Proof/prepress tests: soft-proof transforms, separation preview math, TAC accounting, and
+  hazard reporting remain stable on pinned fixtures.
+- Cache/receipt tests: `ColorTransformCache` keys and receipts remain stable across equivalent
+  transforms and distinguish kernel class plus chosen output intent.
+
 ### monkeybee-render
 - Unit tests: backend drawing operations, color space conversions, tile/band scheduling.
 - Render comparison tests: render corpus documents -> compare against reference renderers.
@@ -3449,12 +3672,15 @@ PdfSnapshot + extract profile
 - WritePlan tests: classification correctness (PreserveBytes/AppendOnly/RewriteOwned/etc.) on known document states.
 - Preservation algebra tests: composed transform claims yield expected preserved / invalidated properties.
 - WriteReceipt tests: receipt digests remain stable under deterministic mode and include correct
-  signature-coverage entries, provenance summaries, transport continuity references, and
-  redaction-verification summaries when redactions are applied.
+  signature-coverage entries, provenance summaries, transport continuity references,
+  frontier witnesses, byte-patch receipts, and redaction-verification summaries when
+  redactions are applied.
 - Emission-journal tests: deterministic saves emit replayable object order, decision logs, and byte-address maps.
 - Feasibility tests: save-plan constraint graphs emit minimal unsat cores and stable escalation witnesses for preserve/incremental/full-rewrite boundary cases.
 - Counterfactual-frontier tests: infeasible save/import/open planning emits
   nearest-feasible alternative plans with deterministic property-loss frontiers.
+- Experimental byte-patch tests: bounded owned-region patches reject signed or unstable windows
+  and emit deterministic `BytePatchReceipt`s on legal fixtures.
 - Round-trip tests: parse -> write -> re-parse -> compare object graphs.
 - Self-consistency tests: write output -> parse with monkeybee-parser -> verify structural validity.
 - Reference validation: write output -> open in PDFium/MuPDF -> verify renders correctly.
@@ -3527,6 +3753,10 @@ PdfSnapshot + extract profile
 - Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps and anchor-stability witnesses with the correct continuity class.
 - Fragility tests: anchors emit stable fragility classes and transform-survival
   envelopes on canonical metamorphic fixtures.
+- Volatility tests: anchor repair receipts emit stable volatility scores and
+  cause sets on canonical rewrite and incremental-append fixtures.
+- Text-paint tests: extracted spans, painted glyphs, and render chunks produce
+  deterministic `TextPaintReceipt`s on mixed text fixtures.
 - Coverage-cell tests: shared coverage indexes expose signed overlap, hidden-content flags, resource closure, and TAC estimates consistently across extraction and forensics consumers.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
 
@@ -3561,6 +3791,10 @@ PdfSnapshot + extract profile
 - Reproducibility tests: canonical runs emit a manifest and every ledger/capsule/disagreement/plan-selection artifact links back to it.
 - Topology-policy tests: proof/oracle work cannot silently starve viewport-critical
   render lanes under canonical topology policies.
+- Coverage-lattice tests: typed coverage observations and
+  `AcquisitionRecommendation`s are derived deterministically from the fixture set.
+- Decoder-equivalence tests: risky native and experimental candidates emit
+  `DecoderEquivalenceRecord`s before any promotion path is allowed to pass.
 - Benchmark-witness tests: canonical benchmarks emit schema-valid witness records with support
   class, render determinism class, numeric profile, topology/runtime fields,
   work receipts, peak-memory witnesses, threshold verdicts, and reproducibility linkage.
@@ -3641,7 +3875,8 @@ their respective subsystems:
    the baseline under the proof harness.
 
 4. **Color management:** ICC profile support is v1-gating for ICCBased color spaces. Use `lcms2`
-   (C binding) for v1 ICC profile evaluation behind a `ColorProfileProvider` trait.
+   (C binding) in `monkeybee-color`, brokered through `monkeybee-native` and exposed behind a
+   `ColorProfileProvider` trait.
 
 5. **Incremental save granularity:** Byte-range preservation for signature-safe workflows is
    v1-gating. The preserve-mode write path, preservation claims, and signature impact analysis are

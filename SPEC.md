@@ -202,6 +202,10 @@ pub struct RepairDecision {
 
 - **Deterministic write:** Full document rewrite with canonical formatting, rebuilt cross-references, and normalized structure. Produces the smallest, cleanest output. Breaks existing signatures.
 - **Incremental append:** Append-only update section. Adds a new cross-reference section and trailer without rewriting existing bytes. Preserves existing signatures on unmodified content. Required for signature-safe preserve workflows.
+- **Byte patch (experimental):** Apply a length-safe or explicitly re-offsetted
+  patch to a bounded `Owned` region only when the engine can prove that all
+  affected xref, stream-extent, signature, and preservation constraints remain
+  satisfied. This mode is non-gating until proof-backed.
 - **Downlevel output:** Emit output constrained to an older PDF version or a specific profile (e.g., PDF/A-4, PDF/X-6). The writer validates output against the target profile's constraints and rejects or downgrades features that violate them.
 
 The mode is not a global singleton. A single session can parse in tolerant mode, inspect the result, and then write in incremental-append mode. The modes compose.
@@ -1180,6 +1184,44 @@ Different PDF producers generate files with consistent, predictable deviations f
 - Generates PDFs with unusual UserUnit values (the page is defined in a non-standard unit). The engine must scale correctly based on the `/UserUnit` page attribute (default is 1/72 inch per unit).
 - Sometimes uses `/Filter` arrays with a single filter (e.g., `[/FlateDecode]` instead of `/FlateDecode`). Both forms are legal per spec, but some parsers only handle the name form. The engine must accept both.
 
+### Producer phenotype registry
+
+The prose quirk catalog remains valuable, but Monkeybee also needs an
+engine-visible registry of structural producer phenotypes and quirk
+activations.
+
+```rust
+pub struct ProducerPhenotypeId(pub [u8; 32]);
+
+pub struct ProducerPhenotype {
+    pub phenotype_id: ProducerPhenotypeId,
+    pub declared_producer: Option<String>,
+    pub structural_markers: Vec<String>,
+    pub typical_repairs: Vec<String>,
+    pub quirk_modules: Vec<String>,
+}
+
+pub struct PhenotypeEvidence {
+    pub matched_markers: Vec<String>,
+    pub confidence: f32,
+}
+
+pub struct QuirkActivationReceipt {
+    pub phenotype_id: Option<ProducerPhenotypeId>,
+    pub activated_quirks: Vec<String>,
+    pub suppressed_quirks: Vec<String>,
+    pub reason: String,
+}
+```
+
+Rules:
+- tolerant open SHOULD emit a `QuirkActivationReceipt` whenever
+  producer-specific shims materially influence recovery or interpretation
+- proof aggregation SHOULD report repair frequency by phenotype, not only by
+  free-form producer string
+- corpus tooling MAY propose new phenotype clusters from observed structure, but
+  those proposals MUST remain reviewable artifacts before becoming default
+
 #### XFA safe-contained handling (Tier 2)
 
 XFA (XML Forms Architecture) is deprecated as of PDF 2.0 but persists in millions of existing government and enterprise forms. Full XFA support requires a complete XML layout engine — that is not a v1 goal. However, the engine must not simply blank-page on XFA documents.
@@ -1489,8 +1531,9 @@ All other workspace crates are implementation crates unless explicitly re-export
 The workspace layout is not itself the public API contract.
 
 The high-value expansion lanes are intentionally cross-cutting rather than siloed into one
-"enterprise" crate. Prepress support spans `monkeybee-render`, `monkeybee-validate`, and
-`monkeybee-extract` on top of shared color/page-state machinery. PAdES/DSS/VRI/signing spans
+"enterprise" crate. Prepress support spans `monkeybee-color`, `monkeybee-render`,
+`monkeybee-validate`, and `monkeybee-extract` on top of shared color/page-state/witness
+machinery. PAdES/DSS/VRI/signing spans
 `monkeybee-signature`, `monkeybee-write`, and `monkeybee-forms`. Accessibility auditing spans
 `monkeybee-extract` and `monkeybee-validate`. Action, portfolio, article-thread, and multimedia
 inventory spans `monkeybee-catalog`, `monkeybee-extract`, and `monkeybee-forensics`. This is
@@ -1630,6 +1673,53 @@ Rules:
 - crash recovery ignores or quarantines blobs that were not linked by a durable
   manifest/root-set publication; partially written persistence state may not be
   reused opportunistically
+
+### Segmented artifact-store doctrine
+
+Large documents SHOULD prefer segmented artifact materialization over monolithic
+page- or document-wide blobs whenever the same correctness class can be
+preserved.
+
+```rust
+pub struct SegmentId(pub [u8; 32]);
+
+pub enum SegmentKind {
+    PageClosure,
+    ObjectNeighborhood,
+    RenderChunkRegion,
+    SemanticRegion,
+    RevisionFrame,
+}
+
+pub struct ArtifactSegment {
+    pub segment_id: SegmentId,
+    pub kind: SegmentKind,
+    pub source_nodes: Vec<NodeDigest>,
+    pub estimated_working_set_bytes: u64,
+}
+
+pub struct WorkingSetForecast {
+    pub hot_segments: Vec<SegmentId>,
+    pub cold_segments: Vec<SegmentId>,
+    pub predicted_peak_bytes: u64,
+}
+
+pub struct SpillReceipt {
+    pub segment_id: SegmentId,
+    pub reason: String,
+    pub persisted: bool,
+    pub policy_digest: [u8; 32],
+}
+```
+
+Rules:
+- huge-document paths SHOULD materialize page closures, object neighborhoods,
+  render-chunk regions, semantic regions, and revision-frame segments rather
+  than one monolithic artifact whenever the same support class can be preserved
+- benchmark witnesses for huge fixtures SHOULD include `WorkingSetForecast`
+  evidence so peak-memory claims remain explainable
+- spill and persist decisions for segmented artifacts SHOULD emit
+  `SpillReceipt`s rather than disappearing into aggregate cache statistics
 
 ### Engine / session / snapshot model
 
@@ -2408,7 +2498,7 @@ Canonical caches:
 - `ParsedFontCache`        key=(font_fingerprint)
 - `PagePlanCache`          key=(cache_namespace, page_index, dependency_fingerprint, pageplan_mode_hash)
 - `RasterTileCache`        key=(cache_namespace, page_index, tile_id, dpi, completeness, render_profile_hash)
-- `ColorTransformCache`    key=(icc_fingerprint, intent, target_space)
+- `ColorTransformCache`    key=(icc_fingerprint, intent, target_space, color_kernel_class, output_intent_digest)
 
 - `ResolvedResourceCache`  key=(snapshot_id, page_index, inheritance_fingerprint)
 - `SemanticGraphCache`     key=(cache_namespace, page_index, extract_profile_hash)
@@ -2659,6 +2749,21 @@ pub struct ByteAvailabilityMap {
 
 pub struct FetchEpoch(pub u64);
 
+pub enum TransportContinuityClass {
+    SingleEntityVerified,
+    MultiRangeVerified,
+    WeakValidatorOnly,
+    ContinuityBroken,
+}
+
+pub struct RangeWitness {
+    pub range: (u64, u64),
+    pub fetch_epoch: FetchEpoch,
+    pub etag: Option<String>,
+    pub content_length: Option<u64>,
+    pub validator_strength: String,
+}
+
 pub enum RangeConsistencyError {
     ValidatorChanged,
     ContentLengthChanged,
@@ -2670,7 +2775,9 @@ pub enum RangeConsistencyError {
 
 Rules:
 - all range responses within a session MUST agree on validator identity
-- validator drift freezes the session into explicit degraded mode
+- validator drift classifies continuity as broken, freezes the session into
+  explicit degraded mode, and invalidates all affected derived artifacts tied to
+  the prior fetch epoch
 - previously verified ranges remain trusted only within the same `FetchEpoch`
 - `OpenProbe`, `CapabilityReport`, and `WriteReceipt` MUST surface transport
   integrity failures when they influence correctness
@@ -2687,10 +2794,14 @@ pub struct SparseDigestMap {
 }
 
 pub struct TransportContinuityReceipt {
+    pub continuity_class: TransportContinuityClass,
     pub transport_identity: TransportIdentity,
     pub epochs_seen: Vec<FetchEpoch>,
+    pub fetched_ranges: Vec<RangeWitness>,
     pub digest_map: SparseDigestMap,
     pub continuity_failures: Vec<RangeConsistencyError>,
+    pub invalidated_queries: Vec<QueryKey>,
+    pub trace_digest: [u8; 32],
 }
 ```
 
@@ -2700,6 +2811,12 @@ Additional rules:
   `TransportContinuityReceipt` rather than relying only on weak validators
 - canonical remote fixtures SHOULD prefer digest-backed transport identities so
   mixed-object or mixed-epoch feeds cannot silently masquerade as one document
+- page plans, placeholder refinements, access plans, and other materialized
+  artifacts derived from remote bytes MUST record the `FetchEpoch` they
+  observed and become invalid when continuity breaks across epochs
+- preserve-sensitive workflows MUST refuse to rely on stale mixed-epoch remote
+  state until continuity is re-established under one declared
+  `TransportContinuityClass`
 - write receipts for range-backed sessions MAY reference the continuity receipt
   when transport trust materially influenced correctness, preserve, or signature
   claims
@@ -3200,6 +3317,64 @@ All crates that need font resolution, text decoding, subsetting, layout, or sear
 `monkeybee-text`, but they do so through explicit decode-vs-layout APIs so existing PDF text is not
 accidentally "re-shaped" during rendering or extraction.
 
+#### `monkeybee-color`
+
+Shared color and prepress kernel used by render, extract, validate, forms,
+compose, and proof.
+
+Key responsibilities:
+- ICC profile parsing, linking, and transform evaluation
+- Rendering-intent resolution, including black-point compensation
+- DeviceGray/DeviceRGB/DeviceCMYK/Cal*/Lab/ICCBased/Indexed/Separation/DeviceN/Pattern handling
+- Tint-transform execution, alternate-space fallback, and DeviceN process/spot decomposition
+- Document-level and page-level output-intent cascade resolution
+- Separation preview math, TAC accounting, soft-proof primitives, and color hazard reporting
+- Color witnesses and receipts reused by prepress inspection, proof, validation, and diff
+
+### Color kernel doctrine
+
+```rust
+pub enum ColorKernelClass {
+    ProofCanonical,
+    DeterministicCpu,
+    SimdAccelerated,
+    ExperimentalGpu,
+}
+
+pub struct OutputIntentCascade {
+    pub document_intents: Vec<OutputIntentRef>,
+    pub page_intents: Vec<(u32, OutputIntentRef)>,
+    pub chosen_per_page: Vec<(u32, OutputIntentRef)>,
+}
+
+pub struct DeviceNResolutionPlan {
+    pub colorant_names: Vec<String>,
+    pub alternate_space: String,
+    pub tint_transform_digest: [u8; 32],
+    pub proof_mode: Option<String>,
+}
+
+pub struct ColorWitness {
+    pub kernel_class: ColorKernelClass,
+    pub source_space: String,
+    pub target_space: String,
+    pub output_intent_digest: Option<[u8; 32]>,
+    pub bpc_enabled: bool,
+    pub device_n_plan: Option<DeviceNResolutionPlan>,
+    pub hazard_codes: Vec<String>,
+}
+```
+
+Rules:
+- all ICC interpolation, output-intent resolution, Separation/DeviceN math,
+  soft-proof primitives, and TAC accounting MUST route through
+  `monkeybee-color`
+- `ColorTransformCache` receipts MUST identify the active `ColorKernelClass`
+  and chosen output-intent cascade
+- render, extract, validate, forms, compose, and proof SHOULD be able to cite a
+  `ColorWitness` digest whenever color policy materially influenced output or
+  diagnostics
+
 #### `monkeybee-render`
 
 Produces visual output from the document model.
@@ -3209,9 +3384,12 @@ Key responsibilities:
 - Reuse of `monkeybee-paint` primitives where page rendering and appearance composition overlap
 - Text rendering via `monkeybee-text`: font lookup, encoding/CMap resolution, glyph dispatch,
   positioned-glyph realization, and Unicode-aware diagnostics
-- Image rendering: inline and XObject images, color space conversion, interpolation
+- Image rendering: inline and XObject images, color application via `monkeybee-color`,
+  interpolation
 - Vector graphics: path construction, stroking, filling, clipping, winding rules
-- Color management: DeviceRGB, DeviceCMYK, DeviceGray, CalRGB, CalGray, Lab, ICCBased, Indexed, Separation, DeviceN, Pattern
+- Color management and prepress policy delegation via `monkeybee-color` for
+  DeviceRGB, DeviceCMYK, DeviceGray, CalRGB, CalGray, Lab, ICCBased, Indexed,
+  Separation, DeviceN, Pattern
 - Transparency: groups, soft masks, blend modes, isolated/knockout, alpha compositing
 - Patterns: tiling patterns plus function/axial/radial shadings in the baseline;
   mesh shadings are target-qualified and may degrade explicitly until promoted by
@@ -3219,11 +3397,13 @@ Key responsibilities:
 - Graphics state: CTM, clipping, line properties, rendering intent, and overprint
   state tracking; full OPM=1 semantics follow the support-class/scope-registry table.
 - Prepress-oriented render modes: RGB-display overprint simulation, soft proof against
-  output intents or caller-supplied ICC profiles, process/spot separation preview, and
-  TAC accumulation hooks shared with validation and diagnostics.
+  output intents or caller-supplied ICC profiles, process/spot separation
+  preview, color-witness emission, and TAC accumulation hooks shared with
+  validation and diagnostics.
 - Print-oriented color hooks: transfer-function application, halftone/spot-function
-  evaluation hooks, black-generation/undercolor-removal evaluation hooks, and explicit
-  diagnostics when the active backend cannot realize the full print pipeline natively.
+  evaluation hooks, black-generation/undercolor-removal evaluation hooks,
+  output-intent-cascade selection, and explicit diagnostics when the active
+  backend cannot realize the full print pipeline natively.
 - Rendering-quality uplift points: higher-quality resampling kernels (Lanczos /
   Mitchell-Netravali), N-dimensional sampled-function interpolation, shading-edge
   anti-aliasing, and robust matte un-premultiplication.
@@ -4141,6 +4321,48 @@ Rules:
   valuable, but their truth surface and provenance MUST remain attached to the
   anchor-facing API and proof artifacts
 
+### Text-paint correspondence doctrine
+
+Monkeybee MUST be able to relate extracted spans, painted glyph instances, and
+render chunks through stable witnesses rather than treating render truth and
+extract truth as unrelated surfaces.
+
+```rust
+pub struct GlyphInstanceId(pub [u8; 32]);
+
+pub struct PaintedGlyphWitness {
+    pub glyph_instance_id: GlyphInstanceId,
+    pub font_fingerprint: ResourceFingerprint,
+    pub charcode: u32,
+    pub unicode: Option<char>,
+    pub bbox: Rectangle,
+    pub render_chunk_id: RenderChunkId,
+    pub provenance: ProvenanceAtom,
+}
+
+pub struct TextPaintLink {
+    pub span_id: SpanId,
+    pub glyph_instances: Vec<GlyphInstanceId>,
+    pub continuity_class: TextTruthClass,
+}
+
+pub struct TextPaintReceipt {
+    pub page_index: u32,
+    pub links: Vec<TextPaintLink>,
+    pub orphan_paint_glyphs: Vec<GlyphInstanceId>,
+    pub orphan_extract_spans: Vec<SpanId>,
+}
+```
+
+Rules:
+- selection, search hit-testing, highlight, redaction, and diff explainability
+  SHOULD be able to request a `TextPaintReceipt`
+- proof fixtures for extraction, highlight, and redaction SHOULD compare
+  text-to-paint linkage when the underlying fixture contains both painted and
+  extractable text
+- text/paint disagreements MUST be surfaced explicitly rather than silently
+  normalized away
+
 **Object graph inspection:**
 
 The inspection API provides programmatic access to the document's internal structure:
@@ -4612,6 +4834,7 @@ pub enum AnchorFragilityClass {
 pub struct AnchorStabilityEnvelope {
     pub anchor_id: SemanticAnchorId,
     pub fragility: AnchorFragilityClass,
+    pub volatility: Option<AnchorVolatilityScore>,
     pub survives_transforms: Vec<MetamorphicTransformKind>,
     pub requires_alias_map_on: Vec<MetamorphicTransformKind>,
     pub invalidated_by: Vec<String>,
@@ -4625,6 +4848,29 @@ pub struct AnchorDriftWitness {
     pub logical_drift: Option<f64>,
     pub resolved_via_alias_map: bool,
 }
+
+pub enum AnchorFragilityCause {
+    GlyphDecodeWeak,
+    ReadingOrderHeuristic,
+    TableHypothesisDependent,
+    PageReflowLikeEdit,
+    ResourceSubstitution,
+    AmbiguousRepairLineage,
+}
+
+pub struct AnchorVolatilityScore {
+    pub anchor_id: SemanticAnchorId,
+    pub score_0_to_1: f32,
+    pub causes: Vec<AnchorFragilityCause>,
+}
+
+pub struct AnchorRepairReceipt {
+    pub prior_anchor: SemanticAnchorId,
+    pub current_anchor: Option<SemanticAnchorId>,
+    pub continuity: AnchorContinuityClass,
+    pub volatility: AnchorVolatilityScore,
+    pub neighborhood_fingerprint: [u8; 32],
+}
 ```
 
 Rules:
@@ -4634,6 +4880,13 @@ Rules:
   incompatible with the proposed transform unless the caller explicitly opts in
 - anchor-drift witnesses complement `AnchorStabilityWitness` by explaining how
   far a surviving anchor moved even when continuity was preserved
+- agent-facing edit proposals SHOULD be able to demand a maximum allowed anchor
+  volatility threshold rather than treating all non-exact anchors as equally
+  risky
+- safe rewrite and incremental-append proof fixtures SHOULD compare
+  `AnchorRepairReceipt`s, not only pass/fail continuity classes
+- capability and query surfaces MAY summarize high-volatility regions for
+  caller guidance
 
 ### CLI output discipline
 
@@ -5288,6 +5541,8 @@ pub enum PreservationConstraintKind {
     SignedByteRangeIntegrity,
     ForeignBytePreservation,
     IncrementalAppendClosure,
+    InPlacePatchClosure,
+    StableOffsetWindow,
     ProfileConformance,
     ActiveContentSanitization,
     OutputIntentRetention,
@@ -5377,6 +5632,38 @@ Rules:
   alternatives
 - deterministic mode MUST stabilize frontier ordering and tie-break behavior so
   the same infeasible request yields the same nearest-feasible alternatives
+
+### Preservation frontier solver doctrine
+
+`PreservationConstraintGraph` SHOULD have an explicit deterministic solver layer
+for minimal-unsat-core extraction and bounded Pareto-frontier enumeration.
+
+```rust
+pub struct FrontierPointId(pub [u8; 32]);
+
+pub struct PreservationFrontierPoint {
+    pub point_id: FrontierPointId,
+    pub write_mode: WriteMode,
+    pub preserved: Vec<PreservedProperty>,
+    pub sacrificed: Vec<PreservedProperty>,
+    pub cost: CostEnvelope,
+    pub feasibility: FeasibilityVerdict,
+}
+
+pub struct FrontierWitness {
+    pub policy_digest: [u8; 32],
+    pub minimal_unsat_cores: Vec<Vec<String>>,
+    pub pareto_points: Vec<PreservationFrontierPoint>,
+    pub chosen_point: Option<FrontierPointId>,
+}
+```
+
+Rules:
+- deterministic mode MUST fix minimal-core enumeration order and frontier
+  tie-break behavior
+- save-plan explanations SHOULD prefer the smallest materially distinct unsat
+  cores and the nearest Pareto-optimal legal plans
+- proof capsules for save-plan failures SHOULD include the `FrontierWitness`
 
 ### Save planning invariant
 
@@ -5562,6 +5849,21 @@ before any bytes are written.
 - `plan_selection_digest`
 - `byte_patch_plan`
 
+```
+pub struct BytePatchAtom {
+    pub target_span: ByteSpanRef,
+    pub original_digest: [u8; 32],
+    pub replacement_digest: [u8; 32],
+    pub constant_length: bool,
+}
+
+pub struct BytePatchReceipt {
+    pub patch_plan_digest: [u8; 32],
+    pub applied_atoms: Vec<BytePatchAtom>,
+    pub preserved_signed_ranges: Vec<(u64, u64)>,
+}
+```
+
 After `WritePlan`, the writer must compile a concrete `BytePatchPlan`:
 
 ```
@@ -5569,7 +5871,11 @@ BytePatchPlan {
   immutable_prefix_end: u64,
   preserved_spans: Vec<ByteSpan>,
   appended_segments: Vec<AppendedSegment>,
+  patch_atoms: Vec<BytePatchAtom>,
+  affected_xref_entries: Vec<ObjRef>,
   signed_range_audit: Vec<SignedRangeCheck>,
+  signed_range_intersections: Vec<(u64, u64)>,
+  safety_class: String,
   planned_startxref: u64,
   patch_sha256: [u8; 32],
 }
@@ -5579,6 +5885,14 @@ BytePatchPlan {
 be computable in dry-run mode.
 Preserve-mode and signature-safe guarantees are made against `BytePatchPlan`, not only against
 object-level classifications.
+
+Additional rules:
+- experimental byte-patch runs are allowed only for `Owned` regions that
+  satisfy `InPlacePatchClosure`
+- any overlap with signed ranges, unknown foreign spans, or unstable stream
+  extents MUST force rejection or escalation to another write mode
+- experimental byte-patch runs MUST emit both `BytePatchPlan` and
+  `BytePatchReceipt`
 
 ### Error taxonomy
 
@@ -6584,17 +6898,18 @@ and synthesis lineage so release-facing claims are tied to exercised
 intersections rather than anecdotal wins.
 
 ```
-pub enum CoverageAxis {
-    FeatureCode,
-    ProducerFamily,
-    OperationChain,
-    SupportClass,
-    SecurityProfile,
-    WriteMode,
+pub struct CoverageCell {
+    pub feature_code: FeatureCode,
+    pub producer_phenotype: Option<ProducerPhenotypeId>,
+    pub operation_chain: String,
+    pub support_class: SupportClass,
+    pub security_profile: String,
+    pub write_mode: Option<WriteMode>,
+    pub determinism_class: Option<RenderDeterminismClass>,
 }
 
-pub struct CoverageLatticeCell {
-    pub axis_values: Vec<String>,
+pub struct CoverageObservation {
+    pub cell: CoverageCell,
     pub exercised_fixture_count: u32,
     pub passing_fixture_count: u32,
     pub disagreement_fixture_count: u32,
@@ -6602,7 +6917,13 @@ pub struct CoverageLatticeCell {
 }
 
 pub struct CoverageLattice {
-    pub cells: Vec<CoverageLatticeCell>,
+    pub cells: Vec<CoverageObservation>,
+}
+
+pub struct AcquisitionRecommendation {
+    pub target_cells: Vec<CoverageCell>,
+    pub reason: String,
+    pub expected_signal_gain: f32,
 }
 
 pub struct SynthesisWitness {
@@ -6617,8 +6938,11 @@ pub struct SynthesisWitness {
 Rules:
 - blind-spot reporting SHOULD be derivable from a coverage lattice rather than
   only free-form gap descriptions
-- release-facing claims for complex feature intersections SHOULD require lattice
-  coverage thresholds, not only isolated fixture passes
+- release-facing claims for complex feature intersections SHOULD require typed
+  lattice coverage thresholds, not only isolated fixture passes
+- proof planning SHOULD be able to emit `AcquisitionRecommendation`s for
+  under-covered cells rather than discovering blind spots only after a release
+  claim fails review
 - synthesized fixtures MUST carry witness lineage into reducers, disagreement
   artifacts, and failure capsules
 
@@ -7180,6 +7504,39 @@ Rules:
 
 This captures the best part of the "self-evolving harness" idea while staying faithful to the
 spec's auditable baseline-first doctrine.
+
+### Decoder equivalence laboratory
+
+Risky native or experimental decode and render paths SHOULD support shadow
+execution against a baseline path on representative fixtures.
+
+```rust
+pub enum EquivalenceSurface {
+    DecodedPixels,
+    DecodedMask,
+    DecodedText,
+    ICCTransform,
+    StreamBytes,
+}
+
+pub struct DecoderEquivalenceRecord {
+    pub module_id: String,
+    pub baseline_algorithm_id: String,
+    pub candidate_algorithm_id: String,
+    pub surface: EquivalenceSurface,
+    pub verdict: String,
+    pub metric_summary: Vec<(String, f64)>,
+    pub fixture_digest: [u8; 32],
+}
+```
+
+Rules:
+- feature modules such as `jpx_native`, `jbig2_isolated`, `lcms2`, and GPU
+  render paths SHOULD participate in equivalence tournaments before promotion
+- promotion requires both safety attestations and typed equivalence evidence,
+  not only speed wins or crash-free execution
+- disagreement records SHOULD be able to cite `DecoderEquivalenceRecord`s when
+  a divergence originates below the page-render level
 
 ### Failure capsule doctrine
 
@@ -7989,6 +8346,7 @@ The following table consolidates the baseline/experimental classification from a
 | Classic xref tables | Baseline | Simpler to audit, required for all PDFs |
 | Cross-reference streams | Baseline (read), Post-baseline (write) | Must read; write deferred unless forced by compact mode |
 | Object stream packing | Post-baseline | Requires xref streams, adds complexity |
+| Byte patch write mode | Experimental | Proof-heavy bounded owned-region patch lane between incremental append and full rewrite |
 
 | Content-addressed persistent snapshots | Baseline | Grounds structural sharing, undo, diff, and exact invalidation |
 | Incremental query engine | Baseline | Required for large-document edit performance and exact reuse semantics |
@@ -8103,6 +8461,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-BYTES-002: Revision chain tracking
 - B-BYTES-003: Raw span ownership for preserve-mode
 - B-BYTES-004: Fetch scheduler and prefetch planning for range-backed sources
+- B-BYTES-005: Transport continuity classification, fetch-epoch invalidation, and sparse-blob resumption receipts
 
 
 ### Substrate beads
@@ -8114,6 +8473,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-SUBSTRATE-006: Hypothesis-set storage and candidate-collapse records
 - B-SUBSTRATE-007: Store lifecycle, root pinning, spill policy, and maintenance reporting
 - B-SUBSTRATE-008: Materialized acceleration indexes and freshness/invalidation tracking
+- B-SUBSTRATE-009: Segmented artifact store, working-set forecasts, and spill receipts
 
 ### Document layer beads
 - B-DOC-001: Document model and ObjectStore
@@ -8161,6 +8521,12 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-TEXT-006: Search, hit-testing, and selection primitives
 - B-TEXT-007: Final subset materialization for composed output
 
+### Color beads
+- B-COLOR-001: ICC/profile parsing, linking, and transform evaluation
+- B-COLOR-002: Output-intent cascade resolution, rendering intents, and black-point compensation
+- B-COLOR-003: Separation/DeviceN resolution, tint transforms, and TAC accounting
+- B-COLOR-004: Color witnesses, transform receipts, and proof/prepress hazard reporting
+
 ### Syntax beads
 - B-SYNTAX-001: Immutable parsed COS object representation
 - B-SYNTAX-002: Token/span provenance and raw formatting retention
@@ -8179,6 +8545,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-PARSE-008: Strict mode and conformance validation
 - B-PARSE-009: Preserve mode and raw byte span retention
 - B-PARSE-010: Producer quirk detection and shim layer
+- B-PARSE-011: Producer phenotype registry and quirk-activation receipts
 
 ### Render beads
 B-PAINT-001: Shared appearance/painter primitives
@@ -8240,6 +8607,8 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-WRITE-010: Output encryption (AES-256) [non-gating / post-baseline]
 - B-WRITE-011: WritePlan computation and classification
 - B-WRITE-012: Signature impact analysis for save planning
+- B-WRITE-013: Preservation-frontier solver, minimal unsat cores, and Pareto witness emission
+- B-WRITE-014: Experimental byte-patch planning and receipt emission
 
 ### Edit beads
 - B-EDIT-001: EditTransaction framework
@@ -8278,6 +8647,8 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-EXTRACT-005: Diagnostic report generation
 - B-EXTRACT-006: Spatial-semantic graph and stable anchor generation
 - B-EXTRACT-007: Anchor aliasing and agent-facing proposal validation hooks
+- B-EXTRACT-008: Text-paint correspondence receipts and painted-glyph witnesses
+- B-EXTRACT-009: Anchor volatility scoring and repair receipts
 
 ### Forensics beads
 - B-FORENSICS-001: Hidden content detection (white-on-white, off-page, behind-image, invisible text)
@@ -8304,6 +8675,7 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-PROOF-014: Semantic-anchor stability harness
 - B-PROOF-015: Reproducibility manifest generation and artifact linkage
 - B-PROOF-016: Oracle disagreement records and plan-selection evidence
+- B-PROOF-017: Coverage-lattice acquisition planning and decoder-equivalence laboratory
 
 ### CLI beads
 - B-CLI-001: Render command

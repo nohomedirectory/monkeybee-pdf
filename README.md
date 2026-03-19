@@ -44,9 +44,9 @@ At minimum, the substrate must unify:
 - parsed COS syntax with provenance
 - semantic object graphs and ownership classes
 - content interpretation and graphics-state transitions
-- derived surfaces such as page plans, render-chunk graphs, coverage-cell indexes, extraction outputs, semantic anchors, geometry witnesses, scene receipts, truth/provenance surfaces, and diffs
+- derived surfaces such as page plans, render-chunk graphs, coverage-cell indexes, extraction outputs, text-paint correspondence receipts, semantic anchors, geometry witnesses, scene receipts, truth/provenance surfaces, and diffs
 - cross-document import provenance, alias maps, import-closure certificates, and semantic-normal-form evidence
-- edit deltas, invalidation witnesses, write plans, feasibility witnesses, emission journals, materialization receipts, and temporal lineage
+- edit deltas, invalidation witnesses, write plans, feasibility witnesses, solver-backed frontier witnesses, emission journals, materialization receipts, and temporal lineage
 - proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, and invariant certificates
 
 This matters because several promises that are easy to state and hard to make real — cheap
@@ -64,7 +64,7 @@ Monkeybee now has three explicit lanes:
 - **Baseline v1 (release-gating):** the smallest coherent engine that proves the closed loop on ugly
   PDFs with simple, auditable implementations and a locked substrate.
 - **Experimental backends (non-gating):** advanced render, color, encode, or decode paths that
-  remain optional until they beat the baseline under proof.
+  remain optional until they beat the baseline under proof and typed equivalence evidence.
 - **Post-v1 intelligence/collaboration surfaces:** richer semantic graph queries,
   anchor-driven automation, and stronger provenance layers that are architected now without being
   allowed to destabilize the baseline.
@@ -93,7 +93,7 @@ Baseline v1 must prove all of the following:
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, surfaced in a generated capability surface matrix, and never silently swallowed.
 - **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, environment locks, typed oracle-consensus and oracle-disagreement records with region-level explainability, blind-spot ledgers, coverage lattices, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers, evidence bundles, and failure capsules.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
-- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, work-class receipts, and peak-memory witnesses, not ad hoc timing logs.
+- **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, work-class receipts, segmented working-set forecasts, and peak-memory witnesses, not ad hoc timing logs.
 - **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, anchor fragility, invalidation causes, and transport continuity in a way users can act on.
 
 Baseline anti-goals remain narrow: Monkeybee is not adding OCR, document understanding,
@@ -254,9 +254,9 @@ edge cases, scanned documents, CJK and RTL text, producer-specific quirks, XFA a
 
 Monkeybee is a Rust workspace organized around six explicit strata:
 
-1. **Byte/revision layer** — immutable source bytes, appended revisions, and range-backed access.
+1. **Byte/revision layer** — immutable source bytes, fetch-epoch continuity, appended revisions, and range-backed access.
 2. **Persistent substrate/query layer** — content-addressed roots, temporal lineage, structural
-   sharing, exact invalidation, store lifecycle, acceleration indexes, materialization receipts, hypothesis tracking, and invariant certificates.
+   sharing, exact invalidation, store lifecycle, segmented out-of-core materialization, acceleration indexes, materialization receipts, hypothesis tracking, and invariant certificates.
 3. **Syntax/COS layer** — immutable parsed objects, provenance, repair records, raw formatting, and
    the preservation boundary.
 4. **Semantic document layer** — resolved page/resource/object meaning, ownership classes, cross-document import provenance, and semantic normal forms.
@@ -279,6 +279,7 @@ Workspace crates:
 | `monkeybee-catalog` | Catalog semantics: outlines, named destinations, page labels, name/number trees, viewer preferences, optional-content configs, embedded-file inventory, collections, presentation metadata, and document-level rich-structure roots |
 | `monkeybee-content` | Content-stream IR + interpreter shared by render/extract/inspect/edit; graphics-state algebra and sink adapters |
 | `monkeybee-text` | Font programs, CMaps, Unicode mapping, decode pipeline for existing PDF text, authoring pipeline for generated text, subsetting, search/hit-test primitives |
+| `monkeybee-color` | Shared color/prepress kernel: ICC evaluation, output-intent cascade, DeviceN/Separation resolution, soft-proofing, TAC accounting, and color witness emission |
 | `monkeybee-render` | Page rendering via shared content interpretation: text, images, vector graphics, masks, blending, prepress proof modes, tile/band surfaces, render-chunk graphs, cooperative cancellation, and progressive rendering |
 | `monkeybee-3d` | PRC/U3D parsing, unified scene graph, wgpu rendering (Vulkan/Metal/DX12/WebGPU), named views, cross-sections, illustration modes |
 | `monkeybee-gpu` | Optional GPU-accelerated 2D rendering backend via wgpu, shared device/queue with the 3D pipeline, compute shader path rasterization, hardware compositing |
@@ -288,7 +289,7 @@ Workspace crates:
 | `monkeybee-forms` | AcroForm field tree, value model, appearance regeneration, FDF/XFDF interchange, flattening, widget/signature bridge, and static-XFA helpers |
 | `monkeybee-paint` | Shared page-independent paint and appearance primitives reused by render, compose, forms, and annotate |
 | `monkeybee-annotate` | Non-form annotations: creation, modification, flattening, geometry-aware placement |
-| `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, accessibility semantics, text-truth/provenance surfaces, action/link inventories, rich-structure cataloging, semantic anchors, typed query/selection helpers, diagnostics |
+| `monkeybee-extract` | Multi-surface extraction, metadata, structure inspection, accessibility semantics, text-truth/provenance surfaces, text-paint correspondence, action/link inventories, rich-structure cataloging, semantic anchors, typed query/selection helpers, diagnostics |
 | `monkeybee-forensics` | Hidden-content detection, redaction audits, post-signing modification analysis, active-content analysis, print-risk analysis, exploit-pattern detection, producer/font fingerprinting |
 | `monkeybee-validate` | Arlington/profile validation, print preflight, PDF/UA-style audit, PAdES/LTV checks, write preflight, signature byte-range checks |
 | `monkeybee-diff` | Structural, text, render, save-impact, and revision-frame comparison engine reused by the facade, proof harness, and CLI |
@@ -356,6 +357,7 @@ monkeybee-pdf/
 │   ├── monkeybee-catalog/
 │   ├── monkeybee-content/
 │   ├── monkeybee-text/
+│   ├── monkeybee-color/
 │   ├── monkeybee-render/
 │   ├── monkeybee-3d/
 │   ├── monkeybee-gpu/
@@ -413,6 +415,8 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 - **Oracle-consensus records and blind-spot ledgers** so release-facing claims reflect both how
   disputed expectations were chosen, where fixture coverage is still thin, and which feature ×
   producer × operation intersections remain under-covered.
+- **Coverage-lattice acquisition recommendations** so corpus growth is driven by typed
+  under-covered cells rather than only by ad hoc fixture hunting.
 - A **metamorphic proof lane with deterministic reducers and fixture genealogy** so
   representation-changing transforms, crash minimization, and repair drift stay auditable.
 - **Write receipts and invariant certificates** for save-impact, preserve-mode, and redaction workflows.
