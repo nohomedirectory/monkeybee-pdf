@@ -42,6 +42,31 @@ template: |
   surfaces, new edge-case coverage. Make it deeper, wider, more precise.
   Never shallower, narrower, or more concise.
 
+  NON-NEGOTIABLE SCOPE LOCK:
+  You are NOT allowed to reduce the total scope size, ambition, named
+  capability count, subsystem surface area, or long-term breadth of the
+  project. Do not reinterpret contradictions, sequencing, implementation risk,
+  or v1 gating pressure as permission to delete, demote, shrink, or dissolve
+  existing scope. If something feels too broad, the correct response is to make
+  its staging, proof obligations, implementation boundaries, or scope-class
+  labeling more explicit while preserving or expanding the total ambition.
+  Clarify sequencing if needed, but never reduce project scope.
+
+  EXTREME OPTIMIZATION DOCTRINE:
+  Because this project aims to become an alien artifact, you should actively
+  look for places where the last 50 years of mathematics, algorithms, numerical
+  methods, data structures, compiler knowledge, graphics research, font
+  engineering, compression theory, indexing strategy, and systems optimization
+  can be brought to bear when doing so is actually useful. Do not assume that
+  "simple," "standard," or "good enough" is the target if a materially better
+  approach is defensible. When appropriate, propose optimization strategies that
+  pursue extreme speed, efficiency, and world-best performance characteristics
+  across parsing, rendering, extraction, caching, save planning, proof, and
+  validation. The goal is not ordinary competence; it is performance and
+  technical depth that would be extremely difficult for any single human or
+  conventional team to exhaust within a lifetime. Keep the optimization
+  proposals disciplined and reality-grounded, but do not cap ambition.
+
   For each proposed change, give me your detailed analysis and
   rationale/justification for why it would make the project better along
   with the git-diff style change versus the original plan shown below:
@@ -87,6 +112,31 @@ template_with_impl: |
   Propose new structs, new enums, new contracts, new subsystems, new proof
   surfaces, new edge-case coverage. Make it deeper, wider, more precise.
   Never shallower, narrower, or more concise.
+
+  NON-NEGOTIABLE SCOPE LOCK:
+  You are NOT allowed to reduce the total scope size, ambition, named
+  capability count, subsystem surface area, or long-term breadth of the
+  project. Do not reinterpret contradictions, sequencing, implementation risk,
+  or v1 gating pressure as permission to delete, demote, shrink, or dissolve
+  existing scope. If something feels too broad, the correct response is to make
+  its staging, proof obligations, implementation boundaries, or scope-class
+  labeling more explicit while preserving or expanding the total ambition.
+  Clarify sequencing if needed, but never reduce project scope.
+
+  EXTREME OPTIMIZATION DOCTRINE:
+  Because this project aims to become an alien artifact, you should actively
+  look for places where the last 50 years of mathematics, algorithms, numerical
+  methods, data structures, compiler knowledge, graphics research, font
+  engineering, compression theory, indexing strategy, and systems optimization
+  can be brought to bear when doing so is actually useful. Do not assume that
+  "simple," "standard," or "good enough" is the target if a materially better
+  approach is defensible. When appropriate, propose optimization strategies that
+  pursue extreme speed, efficiency, and world-best performance characteristics
+  across parsing, rendering, extraction, caching, save planning, proof, and
+  validation. The goal is not ordinary competence; it is performance and
+  technical depth that would be extremely difficult for any single human or
+  conventional team to exhaust within a lifetime. Keep the optimization
+  proposals disciplined and reality-grounded, but do not cap ambition.
 
   For each proposed change, give me your detailed analysis and
   rationale/justification for why it would make the project better along
