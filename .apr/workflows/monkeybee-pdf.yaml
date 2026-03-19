@@ -8,7 +8,7 @@ documents:
 
 oracle:
   model: "gpt-5.4-pro"
-  thinking_time: extended
+  browser_model_strategy: current
 
 rounds:
   output_dir: .apr/rounds/monkeybee-pdf
