@@ -1,0 +1,1 @@
+I’m now in the gap-finding pass, concentrating on additive contracts the spec still leaves implicit: cross-document import, policy-composition validity, semantic-equivalence normal forms, reproducibility manifests, substrate-store lifecycle, query/index acceleration, and formal oracle-disagreement/plan-selection machinery.

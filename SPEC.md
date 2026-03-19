@@ -517,6 +517,62 @@ pub struct SanitizationReceipt {
 `CapabilityReport` MUST grow an `active_content_inventory_digest` field, and
 the CLI MUST support `inspect --active-content` and `sanitize --receipt-json`.
 
+### Policy composition validity contract
+
+Security profile, active-content policy, provider policy, determinism settings,
+write/open mode constraints, and optional feature-module availability compose
+into a single resolved policy contract before any externally visible operation
+begins. Monkeybee MUST not discover an invalid policy combination halfway
+through open, import, save, or proof execution.
+
+```
+pub enum ProviderPolicy {
+    PinnedOnly,
+    PinnedThenAmbient,
+    AmbientAllowed,
+}
+
+pub struct ResolvedPolicySet {
+    pub operation_profile: OperationProfile,
+    pub security_profile: SecurityProfile,
+    pub active_content_policy: ActiveContentPolicy,
+    pub provider_policy: ProviderPolicy,
+    pub determinism: DeterminismSettings,
+    pub allowed_write_modes: Vec<WriteMode>,
+    pub active_feature_modules: Vec<String>,
+    pub policy_digest: [u8; 32],
+}
+
+pub enum PolicyConflictKind {
+    SecurityVsFeature,
+    ActiveContentVsWorkflow,
+    ProviderPolicyVsDeterminism,
+    PreserveConstraintVsWriteMode,
+    ProfileVsFeatureModule,
+    RemoteModeVsPersistence,
+}
+
+pub struct PolicyConflict {
+    pub kind: PolicyConflictKind,
+    pub summary: String,
+    pub blocking_fields: Vec<String>,
+}
+```
+
+Rules:
+- a top-level operation resolves policy exactly once from engine defaults,
+  `OperationProfile`, `ExecutionContext`, and explicit call arguments
+- child spans may tighten the resolved policy for safety or budget reasons, but
+  may never silently relax it
+- invalid policy combinations fail before expensive work begins and emit a
+  typed `PolicyConflict`, not a late generic error
+- `AdmissionDecision`, `WritePlan`, `CrossDocumentImportPlan`, materialized
+  acceleration indexes, and proof artifacts refer to the same `policy_digest`
+  so downstream evidence can explain exactly which contract was in force
+- proof/canonical CI runs require pinned provider/oracle/module manifests
+  consistent with the resolved policy; otherwise the run is non-canonical by
+  definition
+
 ---
 
 ## Part 1 — User workflows and visible proof
@@ -541,7 +597,7 @@ Proof surfaces: extraction correctness tests on representative docs, position ac
 
 ### Workflow 4: Edit and mutate documents
 
-A user loads a PDF, performs structural edits (add/remove/reorder pages, update metadata, modify resources), saves, and reopens. The modified document is structurally valid and renders correctly.
+A user loads a PDF, performs structural edits (add/remove/reorder pages, copy pages between documents, merge/split documents, update metadata, modify resources), saves, and reopens. The modified document is structurally valid, preserves cross-document provenance where relevant, and renders correctly.
 
 Proof surfaces: mutation round-trip harness, structural validity checks, render comparison pre/post edit.
 
@@ -1336,6 +1392,64 @@ This design makes several core properties natural rather than bespoke:
 - zero-copy preserve workflows for untouched spans
 - digest-backed write receipts, semantic anchors, and temporal replay
 
+### Substrate-store lifecycle doctrine
+
+The substrate store is not an immortal heap and not a vague cache. Root
+pinning, spill policy, persistence eligibility, and reclamation are explicit
+contracts.
+
+```
+pub enum StoreResidency {
+    MemoryOnly,
+    Spillable,
+    Persisted,
+}
+
+pub enum RootPinReason {
+    LiveSnapshot,
+    QueryMaterialization,
+    WriteEvidence,
+    FailureCapsule,
+    ImportClosure,
+}
+
+pub enum PersistentEligibility {
+    Eligible,
+    SessionOnly,
+    RequiresEncryptedStore,
+    ForbiddenByPolicy,
+}
+
+pub struct SubstrateRootHandle {
+    pub digest: NodeDigest,
+    pub residency: StoreResidency,
+    pub pin_reason: RootPinReason,
+    pub reachable_snapshots: Vec<SnapshotId>,
+    pub persistent_eligibility: PersistentEligibility,
+}
+
+pub struct StoreLifecycleStats {
+    pub live_nodes: u64,
+    pub pinned_nodes: u64,
+    pub reclaimed_nodes: u64,
+    pub spilled_nodes: u64,
+    pub protected_nodes: u64,
+}
+```
+
+Rules:
+- live snapshots, active query materializations, write receipts/certificates,
+  failure capsules, and cross-document import closures pin all reachable nodes
+- reclamation is reachability-based from pinned roots and retained history, not
+  best-effort eviction of still-referenced digests
+- derived indexes may spill, but preserve roots and any raw spans needed for
+  in-flight signature evidence or preserve-mode write planning may not be
+  dropped early
+- encrypted, permission-restricted, or otherwise sensitive substrate material
+  may only persist beyond the session boundary if the resolved policy allows it
+- store maintenance emits diagnostics and trace events, and deterministic mode
+  fixes sweep/spill ordering so proof artifacts remain reproducible
+
 ### Engine / session / snapshot model
 
 - `MonkeybeeEngine` owns global policy: providers, caches, worker pools, oracle manifests, and security defaults.
@@ -1653,6 +1767,67 @@ pub enum AdmissionReason {
     UnsupportedCriticalFeature,
 }
 ```
+
+### Policy-aware plan selection contract
+
+Admission is not execution. Whenever Monkeybee has multiple legal strategies
+for the same operation, it computes a bounded candidate set, filters it through
+the resolved policy, and records why one plan was selected.
+
+```
+pub enum PlanKind {
+    OpenStrategy,
+    RenderBackend,
+    SaveStrategy,
+    CrossDocumentImport,
+    QueryAcceleration,
+    RecoveryCollapse,
+}
+
+pub struct CostEnvelope {
+    pub estimated_bytes_read: u64,
+    pub estimated_peak_memory: u64,
+    pub estimated_cpu_units: u64,
+    pub estimated_latency_ms: u64,
+    pub expected_degradations: Vec<FeatureCode>,
+}
+
+pub struct RejectedPlan {
+    pub label: String,
+    pub reason: String,
+}
+
+pub struct PlanCandidate {
+    pub kind: PlanKind,
+    pub label: String,
+    pub policy_digest: [u8; 32],
+    pub required_capabilities: Vec<FeatureCode>,
+    pub predicted_preservation: Vec<PreservedProperty>,
+    pub cost: CostEnvelope,
+}
+
+pub struct PlanSelectionRecord {
+    pub plan_kind: PlanKind,
+    pub chosen: String,
+    pub rejected: Vec<RejectedPlan>,
+    pub policy_digest: [u8; 32],
+    pub reason: String,
+    pub trace_digest: [u8; 32],
+}
+```
+
+Rules:
+- only policy-valid candidates are allowed to enter scoring; candidates rejected
+  by composition rules are recorded but never half-executed
+- correctness and preservation obligations outrank cost; cost breaks ties only
+  among candidates that satisfy the same safety and fidelity class
+- deterministic mode fixes candidate ordering and tie-break behavior so the same
+  inputs yield the same `PlanSelectionRecord`
+- `AdmissionDecision`, `WritePlan`, cross-document import, backend selection,
+  and acceleration-index materialization may cite the selected plan record by
+  digest in receipts, ledgers, and failure capsules
+- if no candidate survives policy filtering, the operation fails explicitly
+  before mutation or byte emission
 
 **API surface:**
 
@@ -2260,6 +2435,52 @@ let history = session
 The query API is not ornamental sugar. It is the stable, typed boundary that lets viewers,
 forensics tools, automation, and future agent adapters ask meaningful questions without duplicating
 internal traversal logic.
+
+### Acceleration index doctrine
+
+The query surface is backed by explicit materialized acceleration indexes, not
+incidental caches with undocumented semantics.
+
+```
+pub enum IndexKind {
+    ObjectRefLookup,
+    PageDependencyClosure,
+    NameTreeLookup,
+    TextSearch,
+    AnchorSpatial,
+    ActionGraph,
+    ImportClosure,
+    RevisionFrameLookup,
+}
+
+pub enum IndexFreshness {
+    Fresh { snapshot_id: SnapshotId },
+    StaleButUsable { reason: String },
+    PartialRemote { missing_ranges: Vec<(u64, u64)> },
+}
+
+pub struct MaterializedIndexRef {
+    pub kind: IndexKind,
+    pub snapshot_id: SnapshotId,
+    pub root_digest: NodeDigest,
+    pub materialization_digest: [u8; 32],
+    pub policy_digest: [u8; 32],
+    pub freshness: IndexFreshness,
+}
+```
+
+Required behavior:
+- canonical index families include object lookup, page-dependency closure, name
+  tree lookup, full-text search, spatial-anchor lookup, action topology,
+  cross-document import closure, and revision-frame lookup
+- indexes are keyed by snapshot root, query family, and `policy_digest`; they
+  may not be reused across incompatible policies or provider manifests
+- lazy/remote sessions may expose partial indexes, but partiality and freshness
+  MUST be surfaced to the API, trace stream, and proof artifacts
+- if a fresh index is unavailable, the engine may fall back to a bounded scan
+  only with an explicit diagnostic and traceable reason
+- invalidation remains exact: changed digests dirty only dependent indexes and
+  queries, while clean indexes remain reusable
 
 #### `monkeybee-catalog`
 
@@ -3412,6 +3633,37 @@ The proof harness does not trust any single external renderer as ground truth. I
 4. Where renderers disagree: record the disagreement with per-renderer output, investigate the cause (spec ambiguity, renderer bug, or genuine implementation choice), and document the resolution.
 5. Where Monkeybee matches consensus but one renderer disagrees, that is evidence of the other renderer's bug — useful for the project's credibility narrative.
 
+```
+pub enum OracleResolutionKind {
+    Consensus,
+    MajorityWithOutlier,
+    FixtureOverride,
+    SpecAmbiguity,
+    ExternalOracleBug,
+    MonkeybeeBug,
+    NeedsHumanTriage,
+}
+
+pub struct OracleDisagreementRecord {
+    pub disagreement_id: String,
+    pub page_index: u32,
+    pub oracle_manifest_id: String,
+    pub monkeybee_digest: [u8; 32],
+    pub oracle_digests: Vec<(String, [u8; 32])>,
+    pub metric_summary: Vec<(String, f64)>,
+    pub resolution: OracleResolutionKind,
+    pub blocking: bool,
+}
+```
+
+Rules:
+- any disagreement above the pinned proof threshold emits a typed
+  `OracleDisagreementRecord`, even if Monkeybee ultimately wins consensus
+- the record includes manifest-qualified oracle identities, metrics, and the
+  exact resolution class used for gating
+- unresolved disagreements remain blocking for promotion until they are resolved
+  or triaged with a manifest-qualified waiver
+
 **Conformance infrastructure (Arlington model):**
 
 The Arlington PDF Model is a machine-readable description of every dictionary, array, and value constraint in the PDF specification. The engine should use it for:
@@ -3715,6 +3967,59 @@ Transaction flow:
 3. Run validation preflight
 4. Either commit atomically as a delta or roll back
 
+### Cross-document import invariant
+
+Copy-page, merge, split, and resource-import workflows are first-class document
+mutations over a source snapshot and a target snapshot. They are not treated as
+an ad hoc serializer trick.
+
+```
+pub struct CrossDocumentImportPlan {
+    pub source_snapshot: SnapshotId,
+    pub target_snapshot: SnapshotId,
+    pub source_objects: Vec<ObjRef>,
+    pub imported_object_map: Vec<(ObjRef, ObjRef)>,
+    pub collision_kinds: Vec<ImportCollisionKind>,
+    pub policy_digest: [u8; 32],
+    pub plan_selection_digest: Option<[u8; 32]>,
+}
+
+pub struct ImportedObjectProvenance {
+    pub source_document_id: DocumentId,
+    pub source_snapshot: SnapshotId,
+    pub source_object: ObjRef,
+    pub source_digest: NodeDigest,
+    pub target_object: ObjRef,
+    pub imported_closure_root: NodeDigest,
+}
+
+pub enum ImportCollisionKind {
+    ResourceNameCollision,
+    NamedDestinationCollision,
+    FormFieldCollision,
+    AnnotationNameCollision,
+    EmbeddedFileCollision,
+    SignatureFieldCollision,
+    ActiveContentConflict,
+}
+```
+
+Rules:
+- imported objects receive fresh target-side `ObjRef`s; source object numbers are
+  provenance, never identity inside the target document
+- import closure analysis includes every dependent page-tree node, resource,
+  annotation, form field, named destination, and catalog edge required for
+  semantic validity in the target document
+- the committed delta retains an auditable provenance map from source document
+  state to target document state and exposes it through the compatibility ledger
+- byte-preservation and object-identity claims do not cross document boundaries;
+  only semantic/provenance claims may survive import
+- collision handling is explicit and policy-aware; resource/name/field conflicts
+  may be renamed, rejected, or caller-resolved, but never silently merged
+- imported signatures, execute-capable actions, and restricted content do not
+  silently gain authority in the target document; they are reclassified under
+  the target policy and may be degraded or rejected explicitly
+
 ### Edit intent contract
 
 Every `EditTransaction` declares an `EditIntent`:
@@ -3910,6 +4215,52 @@ Composition rules:
 
 Baseline v1 implements this with an auditable rule engine and receipts. Stronger external proof
 mechanisms may be layered later, but the preservation algebra itself is baseline architecture.
+
+### Semantic-equivalence normal form contract
+
+`SemanticEquivalence` is only meaningful relative to a declared normal form and
+explicit tolerance budget. Monkeybee MUST not claim semantic equivalence based on
+intuition or raw object traversal.
+
+```
+pub enum SemanticNormalFormKind {
+    DocumentStructure,
+    PageVisualSemantics,
+    TextExtraction,
+    TaggedStructure,
+    FormState,
+    ImportProvenance,
+}
+
+pub struct NormalFormTolerance {
+    pub geometry_epsilon_pt: f32,
+    pub color_delta_e00: Option<f32>,
+    pub allow_order_insensitive_sets: bool,
+    pub allow_alias_map: bool,
+}
+
+pub struct SemanticNormalForm {
+    pub kind: SemanticNormalFormKind,
+    pub canonical_digest: [u8; 32],
+    pub relevant_pages: Vec<u32>,
+    pub tolerance: NormalFormTolerance,
+    pub omitted_surfaces: Vec<String>,
+}
+```
+
+Rules:
+- every preservation claim that cites `SemanticEquivalence` MUST cite a
+  `SemanticNormalForm` in its evidence or degrade to a narrower property claim
+- normal forms intentionally ignore object numbers, xref layout, stream packing,
+  serialization order, compression choices, and other byte-level artifacts that
+  do not change meaning
+- normal forms may include alias maps when safe rewrites or cross-document
+  imports legitimately remap identities; such aliasing must be explicit
+- proof mode pins tolerance defaults; looser tolerances must be visible in
+  receipts, ledgers, and test expectations
+- if a relevant semantic surface is unavailable or materially degraded, the
+  engine must not claim semantic equivalence for that surface
+
 ### Save planning invariant
 
 Before any write, Monkeybee computes a `WritePlan` that classifies each touched object as one of:
@@ -3954,6 +4305,8 @@ pub struct WriteReceipt {
     pub snapshot_id: SnapshotId,
     pub write_mode: WriteMode,
     pub write_plan_digest: [u8; 32],
+    pub policy_digest: [u8; 32],
+    pub plan_selection_digest: Option<[u8; 32]>,
     pub pre_snapshot_digest: [u8; 32],
     pub post_snapshot_digest: [u8; 32],
     pub delta_digest: [u8; 32],
@@ -4042,6 +4395,8 @@ before any bytes are written.
 - `structure_impact`
 - `accessibility_impact`
 - `permission_impact`
+- `policy_digest`
+- `plan_selection_digest`
 - `byte_patch_plan`
 
 After `WritePlan`, the writer must compile a concrete `BytePatchPlan`:
@@ -5091,6 +5446,7 @@ The following round-trip chains must pass on representative documents from the p
 8. **Load → enumerate revision frames → materialize historical snapshot → render/extract/diff** (temporal replay fidelity)
 9. **Load → extract semantic anchors → safe rewrite/incremental append → reload → verify stable anchors or alias map** (anchor stability)
 10. **Load ambiguous file → inspect hypothesis set → force candidate or auto-collapse → compare receipts** (hypothesis truthfulness)
+11. **Load source + target → import/copy pages/resources between documents → save → reload → verify provenance/remap/render** (cross-document import fidelity)
 
 **Specific failure modes each chain is designed to catch:**
 
@@ -5114,6 +5470,8 @@ The following round-trip chains must pass on representative documents from the p
 
 *Chain 10 (hypothesis truthfulness):* Detects: silent candidate collapse, missing hypothesis lineage in receipts/ledgers, and repair policies that return materially different semantics without user-visible evidence.
 
+*Chain 11 (cross-document import fidelity):* Detects: source-to-target `ObjRef` collisions, incomplete import-closure remapping, lost named destinations or form-field identity, silent active-content/signature escalation across documents, and provenance gaps that make imported pages impossible to audit later.
+
 ### Compatibility ledger schema
 
 The compatibility ledger is a structured, machine-readable record produced for every document processed. It is the backbone of the proof infrastructure and the primary mechanism for tracking what the engine can and cannot handle.
@@ -5126,6 +5484,7 @@ CompatibilityLedger {
   document_id: string,          // hash of input file
   oracle_manifest_id: string,   // identifies the oracle version set used for this run
   expectation_manifest_id: Option<string>, // identifies the fixture expectation manifest, if present
+  reproducibility_manifest_id: string, // identifies the pinned run/build/environment manifest
   file_name: string,
   file_size: u64,
   pdf_version: string,          // e.g., "1.7", "2.0"
@@ -5138,6 +5497,8 @@ CompatibilityLedger {
   repairs: [RepairEntry],       // one per repair action taken
   diagnostics: [DiagnosticEntry], // warnings, notes, errors
   ambiguities: [AmbiguityEntry],  // competing recovery candidates and why they differed
+  plan_selection_refs: [ArtifactRef], // write/import/open/backend selections relevant to this run
+  oracle_disagreement_refs: [ArtifactRef], // typed disagreement records, if any
   pages: [PageLedger],           // per-page feature/diagnostic breakdown
   summary: LedgerSummary,
 }
@@ -5196,6 +5557,11 @@ RegionRef {
   bbox: [f32; 4],
   reason: string,
 }
+
+ArtifactRef {
+  kind: string,
+  digest: string,
+}
 ```
 
 ### Compatibility ledger JSON schema
@@ -5208,6 +5574,7 @@ downstream tools (dashboards, CI gates, regression detectors) can consume progra
   "schema_version": "1.0",
   "engine_version": "0.1.0",
   "timestamp": "2026-03-15T12:00:00Z",
+  "reproducibility_manifest_id": "repro-2026-03-15-linux-x86_64-canonical",
   "input": {
     "filename": "example.pdf",
     "sha256": "abc123...",
@@ -5247,6 +5614,18 @@ downstream tools (dashboards, CI gates, regression detectors) can consume progra
       "description": "Dynamic XFA form with no AcroForm fallback; pages render as blank"
     }
   ],
+  "plan_selection_refs": [
+    {
+      "kind": "write_plan",
+      "digest": "plan123..."
+    }
+  ],
+  "oracle_disagreement_refs": [
+    {
+      "kind": "render_arbitration",
+      "digest": "oracle456..."
+    }
+  ],
   "summary": {
     "total_features": 156,
     "tier1_count": 142,
@@ -5280,7 +5659,7 @@ Tier assignment for these families is not optional. Even before Tier 1 implement
 engine must detect, classify, and ledger them.
 
 
-### Ledger extensions for roots, hypotheses, and certificates
+### Ledger extensions for roots, hypotheses, certificates, and reproducibility
 
 The compatibility ledger MUST grow to record substrate-aware evidence, not only human-readable
 feature summaries. Concretely, the schema family should include:
@@ -5289,6 +5668,9 @@ feature summaries. Concretely, the schema family should include:
 - hypothesis-set summaries for ambiguous files
 - invariant-certificate references for writes, diffs, redactions, and replay exports
 - semantic-surface summaries (layout graph present, semantic anchors present, anchor policy)
+- reproducibility manifest IDs for the enclosing proof run
+- plan-selection references for open/save/import/backend decisions that materially affected outcome
+- typed oracle-disagreement references when consensus arbitration was required
 
 This does **not** mean the ledger becomes a dumping ground for giant internal graphs. Large artifacts
 remain externalized and content-addressed; the ledger stores digests, summaries, and references.
@@ -5304,9 +5686,47 @@ The following outputs are schema-versioned external interfaces:
 - CLI JSON envelope
 - `ExpectationManifest`
 - `OracleManifest`
+- `ReproducibilityManifest`
+- `PlanSelectionRecord`
+- `OracleDisagreementRecord`
 
 Backward compatibility is guaranteed within a major version for all of the above.
 Breaking changes require a schema major-version bump and fixture updates in CI.
+
+### Reproducibility manifest contract
+
+Canonical proof needs a pinned description of the exact run environment, not
+just pinned renderers. Monkeybee therefore emits a `ReproducibilityManifest`
+for every proof/CI invocation.
+
+```
+pub struct ReproducibilityManifest {
+    pub schema_version: String,
+    pub run_id: String,
+    pub canonical: bool,
+    pub engine_version: String,
+    pub engine_commit: String,
+    pub target_triple: String,
+    pub rustc_version: String,
+    pub oracle_manifest_id: String,
+    pub feature_module_manifest_id: String,
+    pub expectation_manifest_id: Option<String>,
+    pub policy_digest: [u8; 32],
+    pub fixture_set_digest: [u8; 32],
+    pub environment_digest: [u8; 32],
+}
+```
+
+Rules:
+- canonical proof/CI runs emit exactly one schema-versioned
+  `ReproducibilityManifest` and every ledger, plan-selection record,
+  oracle-disagreement record, and failure capsule links back to it
+- canonical runs require pinned oracle/module manifests, deterministic settings,
+  stable locale/timezone/seed policy, and a resolved `policy_digest`
+- ad hoc developer runs may emit non-canonical manifests, but they must set
+  `canonical=false` rather than pretending to be release evidence
+- reproducibility manifests are content-addressed artifacts and participate in
+  the same backward-compatibility rules as other external schemas
 
 **Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
 
@@ -5328,6 +5748,9 @@ renderer binaries).
 7. `history/` — temporal replay artifacts for revision-backed fixtures
 8. `queries/` — semantic-anchor and typed-query expectation results
 9. `capsules/` — self-contained failure capsules for every material proof failure
+10. `reproducibility.json` — canonical or ad hoc run manifest for the entire CI/proof invocation
+11. `plan-selections/` — typed plan-selection records for save/import/backend/open decisions
+12. `oracle-disagreements/` — typed disagreement records with resolution status and gating class
 
 
 
@@ -5341,6 +5764,10 @@ Rules:
 - every experimental strategy declares the baseline it competes with
 - tournaments compare correctness first, cost second
 - promotion requires corpus-level wins under pinned manifests and documented thresholds
+- every promoted or rejected strategy emits plan-selection records tied to the
+  reproducibility manifest for the tournament run
+- unresolved blocking oracle disagreements freeze promotion even if raw scores
+  otherwise favor the candidate
 - automatic exploration (mutation search, candidate generation, offline tuning) is allowed, but no
   strategy self-promotes without human-readable evidence and ordinary review
 
@@ -5366,9 +5793,12 @@ pub struct FailureCapsule {
     pub input_sha256: String,
     pub minimized_fixture: Option<String>,
     pub oracle_manifest: OracleManifest,
+    pub reproducibility_manifest_id: String,
     pub compatibility_ledger: CompatibilityLedger,
     pub trace_stream_ref: Option<String>,
     pub write_receipt_ref: Option<String>,
+    pub plan_selection_ref: Option<String>,
+    pub oracle_disagreement_ref: Option<String>,
     pub decoder_attestations: Vec<DecoderAttestation>,
     pub repro_command: String,
     pub failure_kind: String,
@@ -5868,6 +6298,7 @@ Recommended initial classification: `v1_advisory`.
 - [ ] Security forensics surfaces detect hidden content, bad redactions, and suspicious post-signing edits on representative fixtures.
 - [ ] Document generation produces valid, renderable output.
 - [ ] Page-level editing (add, remove, reorder) works with structural validity.
+- [ ] Cross-document page import, document merge/split, and provenance-aware remap work without silent collisions.
 - [ ] Metadata inspection and modification work.
 - [ ] CLI exposes baseline workflows: render, extract, inspect, annotate, edit-pages, validate, diagnose.
 - [ ] All three parse modes (Strict/Tolerant/Preserve) are functional.
@@ -5875,6 +6306,7 @@ Recommended initial classification: `v1_advisory`.
 - [ ] Incremental-append save preserves existing digital signatures on representative signed documents.
 
 - [ ] Content-addressed snapshots, deltas, and structural sharing are operational and externally inspectable.
+- [ ] Policy composition and plan selection are inspectable and reject invalid combinations before execution.
 - [ ] Historical revision inspection works on representative incremental-update documents.
 - [ ] Write receipts carry preservation claims and invariant-certificate references when requested.
 
@@ -5882,8 +6314,8 @@ Recommended initial classification: `v1_advisory`.
 
 - [ ] Pathological corpus is curated, indexed, and CI-exercised.
 - [ ] Render comparison harness runs against at least PDFium and MuPDF.
-- [ ] Multi-oracle rendering arbitration is operational (disagreements recorded and triaged).
-- [ ] Round-trip harness covers all seven chain types on representative documents.
+- [ ] Multi-oracle rendering arbitration is operational (typed disagreements recorded, resolved, or explicitly triaged).
+- [ ] Round-trip harness covers all eleven chain types on representative documents.
 - [ ] Annotation round-trip harness passes on representative documents.
 - [ ] Compatibility ledger is complete and machine-readable per the schema in Part 6.
 - [ ] Baseline parser/render/write paths pass the v1 proof gates without experimental backends.
@@ -5897,6 +6329,7 @@ Recommended initial classification: `v1_advisory`.
 - [ ] Invariant certificates are emitted, schema-validated, and independently recomputable in proof mode.
 - [ ] Ambiguous-repair fixtures produce hypothesis-set evidence rather than silent collapse.
 - [ ] Temporal replay and semantic-anchor stability harnesses run on representative fixtures.
+- [ ] Canonical proof runs emit reproducibility manifests, plan-selection records, and typed oracle-disagreement artifacts linked from ledgers and capsules.
 
 ### Test obligation matrix
 
@@ -5922,6 +6355,11 @@ Each gated test class has a defined pass threshold and responsible crate:
 | substrate-delta | substrate + document | 100% of edit fixtures | Changed-subgraph reuse + digest stability |
 | historical-replay | bytes + substrate + document | 100% of multi-revision fixtures | Frame-local render/extract/diff consistency |
 | hypothesis-recovery | parser + proof | ≥99% candidate-selection stability on ambiguous corpus or explicit unresolved classification | Candidate digests + evidence |
+| cross-document-import | document + edit + write | 100% of copy/merge/split fixtures | Provenance map completeness + render/structure validity |
+| policy-composition | core + security + write | 100% invalid combinations rejected, 100% canonical combinations stable | Conflict classification + policy digest stability |
+| query-acceleration | substrate + extract | ≥95% of large-query fixtures use fresh indexes or explicit scan fallback | Index freshness + fallback accounting |
+| reproducibility-manifest | proof | 100% of canonical proof runs | Schema-valid manifest + artifact linkage completeness |
+| oracle-disagreement | proof | 100% of above-threshold oracle splits emit typed records | Resolution completeness + blocking-state correctness |
 | semantic-anchor-stability | extract | ≥95% stable anchors on semantically unchanged regions | Anchor/alias precision |
 | hidden-content-forensics | forensics + extract | ≥95% planted-fixture detection | Precision/recall on known hidden content |
 | redaction-audit | forensics + edit | ≥95% intentionally bad redactions detected | Audit precision/recall |
@@ -5980,7 +6418,11 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 
 - [ ] Architectural gate: persistent substrate root/digest semantics are finalized before document/edit/diff work begins.
 - [ ] Architectural gate: incremental query engine dependency semantics are finalized before cache fan-out and performance work begins.
+- [ ] Architectural gate: policy-composition rules and plan-selection evidence are finalized before open/save/import API stabilization.
+- [ ] Architectural gate: substrate-store lifecycle (root pinning, spill, persistence eligibility, sweep rules) is finalized before large-fixture cache fan-out.
 - [ ] Architectural gate: preservation algebra and certificate schema are finalized before save-planning API stabilization.
+- [ ] Architectural gate: semantic-equivalence normal forms and alias-map tolerances are finalized before `SemanticEquivalence` becomes proof-gating.
+- [ ] Architectural gate: cross-document import/remap/collision semantics are finalized before merge/split/copy-page API stabilization.
 - [ ] Architectural gate: dependency graph semantics (raw graph vs condensed DAG) are finalized
   before edit/invalidation/writeback work begins.
 - [ ] Architectural gate: session policy and per-operation `ExecutionContext` precedence rules are
@@ -6110,6 +6552,7 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-CORE-005: Trait definitions (ByteSource, FontProvider, ColorProfileProvider, CryptoProvider)
 - B-CORE-006: DiagnosticSink trait and implementations (VecSink, CallbackSink, FilteringSink, CountingSink)
 - B-CORE-007: PDF version tracking (input/feature/output versions)
+- B-CORE-008: Policy composition, conflict taxonomy, and plan-selection records
 
 ### Byte layer beads
 - B-BYTES-001: ByteSource trait and implementations (mmap, in-memory, range-backed)
@@ -6125,6 +6568,8 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-SUBSTRATE-004: Temporal revision graph and historical snapshot materialization
 - B-SUBSTRATE-005: Invariant certificates and Merkle-backed provenance receipts
 - B-SUBSTRATE-006: Hypothesis-set storage and candidate-collapse records
+- B-SUBSTRATE-007: Store lifecycle, root pinning, spill policy, and maintenance reporting
+- B-SUBSTRATE-008: Materialized acceleration indexes and freshness/invalidation tracking
 
 ### Document layer beads
 - B-DOC-001: Document model and ObjectStore
@@ -6138,6 +6583,8 @@ When this spec stabilizes through APR refinement, it should be decomposed into b
 - B-DOC-009: Dependency graph computation, storage, and query
 - B-DOC-010: Cache management integration (bounded budgets, eviction, pinning)
 - B-DOC-011: Snapshot query interface and semantic-graph federation
+- B-DOC-012: Cross-document import, provenance remap, and collision policy
+- B-DOC-013: Semantic normal forms and alias-map generation
 
 ### Content layer beads
 - B-CONTENT-001: Content stream parsing and operator dispatch
@@ -6299,7 +6746,7 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 ### Proof beads
 - B-PROOF-001: Pathological corpus acquisition and indexing
 - B-PROOF-002: Render comparison harness
-- B-PROOF-003: Round-trip validation harness (all ten chains)
+- B-PROOF-003: Round-trip validation harness (all eleven chains)
 - B-PROOF-004: Compatibility ledger system (per schema in Part 6)
 - B-PROOF-005: Performance benchmark harness
 - B-PROOF-006: Fuzz testing harness
@@ -6311,6 +6758,8 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-PROOF-012: Strategy tournament framework for competing backends
 - B-PROOF-013: Historical replay harness
 - B-PROOF-014: Semantic-anchor stability harness
+- B-PROOF-015: Reproducibility manifest generation and artifact linkage
+- B-PROOF-016: Oracle disagreement records and plan-selection evidence
 
 ### CLI beads
 - B-CLI-001: Render command

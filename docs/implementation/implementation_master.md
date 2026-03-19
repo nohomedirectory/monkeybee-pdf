@@ -1049,6 +1049,62 @@ pub struct QueryPolicy {
 }
 ```
 
+### Policy composition and plan selection (`monkeybee-core::policy` / facade)
+
+```rust
+pub enum ProviderPolicy {
+    PinnedOnly,
+    PinnedThenAmbient,
+    AmbientAllowed,
+}
+
+pub struct ResolvedPolicySet {
+    pub operation_profile: OperationProfile,
+    pub security_profile: SecurityProfile,
+    pub active_content_policy: ActiveContentPolicy,
+    pub provider_policy: ProviderPolicy,
+    pub determinism: DeterminismSettings,
+    pub allowed_write_modes: Vec<WriteMode>,
+    pub policy_digest: [u8; 32],
+}
+
+pub enum PolicyConflictKind {
+    SecurityVsFeature,
+    ActiveContentVsWorkflow,
+    ProviderPolicyVsDeterminism,
+    PreserveConstraintVsWriteMode,
+    ProfileVsFeatureModule,
+    RemoteModeVsPersistence,
+}
+
+pub enum PlanKind {
+    OpenStrategy,
+    RenderBackend,
+    SaveStrategy,
+    CrossDocumentImport,
+    QueryAcceleration,
+    RecoveryCollapse,
+}
+
+pub struct RejectedPlan {
+    pub label: String,
+    pub reason: String,
+}
+
+pub struct PlanSelectionRecord {
+    pub plan_kind: PlanKind,
+    pub chosen: String,
+    pub rejected: Vec<RejectedPlan>,
+    pub policy_digest: [u8; 32],
+    pub trace_digest: [u8; 32],
+}
+```
+
+Implementation notes:
+- resolve policy once per top-level operation, then pass the digest through open/save/import/query evidence
+- child tasks may tighten policy but never silently relax it
+- save/import/backend strategy selection emits `PlanSelectionRecord` so proof and CLI surfaces can explain why a legal candidate won
+
 ### Security profiles (`monkeybee-security::profile`)
 
 ```rust
@@ -1122,6 +1178,43 @@ pub struct SubstrateStore {
 }
 ```
 
+### Substrate store lifecycle (`monkeybee-substrate::lifecycle`)
+
+```rust
+pub enum StoreResidency {
+    MemoryOnly,
+    Spillable,
+    Persisted,
+}
+
+pub enum RootPinReason {
+    LiveSnapshot,
+    QueryMaterialization,
+    WriteEvidence,
+    FailureCapsule,
+    ImportClosure,
+}
+
+pub enum PersistentEligibility {
+    Eligible,
+    SessionOnly,
+    RequiresEncryptedStore,
+    ForbiddenByPolicy,
+}
+
+pub struct SubstrateRootHandle {
+    pub digest: NodeDigest,
+    pub residency: StoreResidency,
+    pub pin_reason: RootPinReason,
+    pub persistent_eligibility: PersistentEligibility,
+}
+```
+
+Implementation notes:
+- sweep is reachability-based from pinned roots, not opportunistic eviction of still-referenced digests
+- preserve-mode raw spans and write/signature evidence stay pinned until their enclosing operation or artifact is released
+- spill/persist decisions are policy-qualified so remote, encrypted, or restricted content cannot silently outlive its allowed boundary
+
 ### Incremental query engine (`monkeybee-substrate::query`)
 
 ```rust
@@ -1161,6 +1254,40 @@ pub enum QueryStatus {
     Materializing,
 }
 ```
+
+### Acceleration indexes (`monkeybee-substrate::index`)
+
+```rust
+pub enum IndexKind {
+    ObjectRefLookup,
+    PageDependencyClosure,
+    NameTreeLookup,
+    TextSearch,
+    AnchorSpatial,
+    ActionGraph,
+    ImportClosure,
+    RevisionFrameLookup,
+}
+
+pub enum IndexFreshness {
+    Fresh { snapshot_id: SnapshotId },
+    StaleButUsable { reason: String },
+    PartialRemote { missing_ranges: Vec<(u64, u64)> },
+}
+
+pub struct MaterializedIndexRef {
+    pub kind: IndexKind,
+    pub snapshot_id: SnapshotId,
+    pub materialization_digest: [u8; 32],
+    pub policy_digest: [u8; 32],
+    pub freshness: IndexFreshness,
+}
+```
+
+Implementation notes:
+- materialized indexes are explicit substrate nodes with the same invalidation discipline as any other derived artifact
+- partial remote indexes are allowed, but freshness and missing-range state must stay visible to callers and proof artifacts
+- query fallback to scan is legal only with a receipt/trace entry explaining why a fresh index was unavailable
 
 ### Hypothesis sets and ambiguity tracking (`monkeybee-substrate::hypothesis`)
 
@@ -1238,6 +1365,8 @@ pub struct WriteReceipt {
     pub snapshot_id: SnapshotId,
     pub write_mode: WriteMode,
     pub write_plan_digest: [u8; 32],
+    pub policy_digest: [u8; 32],
+    pub plan_selection_digest: Option<[u8; 32]>,
     pub pre_snapshot_digest: [u8; 32],
     pub post_snapshot_digest: [u8; 32],
     pub delta_digest: [u8; 32],
@@ -1279,11 +1408,14 @@ pub struct CompatibilityLedger {
     pub engine_version: String,
     pub timestamp: String,
     pub input: InputInfo,
+    pub reproducibility_manifest_id: String,
     pub features: Vec<FeatureEntry>,
     pub repairs: Vec<RepairEntry>,
     pub degradations: Vec<DegradationEntry>,
     pub hypotheses: Vec<HypothesisLedgerEntry>,
     pub receipts: Vec<ReceiptDigestRef>,
+    pub plan_selection_refs: Vec<ArtifactDigestRef>,
+    pub oracle_disagreement_refs: Vec<ArtifactDigestRef>,
     pub pages: Vec<PageLedger>,
     pub summary: LedgerSummary,
 }
@@ -1299,6 +1431,12 @@ pub struct HypothesisLedgerEntry {
 #[derive(Serialize, Deserialize)]
 pub struct ReceiptDigestRef {
     pub kind: String,     // "write_receipt", "invariant_certificate", "diff_receipt"
+    pub digest: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ArtifactDigestRef {
+    pub kind: String,
     pub digest: String,
 }
 
@@ -1342,6 +1480,45 @@ subfamilies include `print.halftone`, `print.transfer`, `print.bg_ucr`,
 `color.blend_preference`, `color.icc_version`, `crypt.identity_filter`, `ocg.configs`, and
 `ocg.membership`. Even when handling is Tier 2/3, those features must be detected and categorized
 deterministically so proof dashboards and APR rounds can track them.
+
+### Proof reproducibility and oracle resolution (`monkeybee-proof::repro` / `monkeybee-proof::oracle_resolution`)
+
+```rust
+pub struct ReproducibilityManifest {
+    pub schema_version: String,
+    pub run_id: String,
+    pub canonical: bool,
+    pub engine_commit: String,
+    pub oracle_manifest_id: String,
+    pub feature_module_manifest_id: String,
+    pub policy_digest: [u8; 32],
+    pub fixture_set_digest: [u8; 32],
+    pub environment_digest: [u8; 32],
+}
+
+pub enum OracleResolutionKind {
+    Consensus,
+    MajorityWithOutlier,
+    FixtureOverride,
+    SpecAmbiguity,
+    ExternalOracleBug,
+    MonkeybeeBug,
+    NeedsHumanTriage,
+}
+
+pub struct OracleDisagreementRecord {
+    pub disagreement_id: String,
+    pub page_index: u32,
+    pub oracle_manifest_id: String,
+    pub resolution: OracleResolutionKind,
+    pub blocking: bool,
+}
+```
+
+Implementation notes:
+- every canonical proof run emits one `ReproducibilityManifest` and links it from ledgers, capsules, and disagreement records
+- oracle disagreements are typed artifacts, not free-form comments in CI logs
+- strategy promotion stays blocked while any manifest-qualified disagreement remains unresolved
 
 ### PDF object model (`monkeybee-core::object`)
 
@@ -1529,6 +1706,8 @@ pub struct WritePlan {
     pub preservation_claims: Vec<PreservationClaim>,
     pub signature_impact: SignatureImpact,
     pub plan_digest: [u8; 32],
+    pub policy_digest: [u8; 32],
+    pub plan_selection_digest: Option<[u8; 32]>,
 }
 
 pub enum ObjectAction {
@@ -1546,6 +1725,47 @@ pub enum OwnershipClass {
     OpaqueUnsupported,
 }
 ```
+
+### Cross-document import and semantic normal forms (`monkeybee-document::import` / `monkeybee-document::normal_form`)
+
+```rust
+pub struct CrossDocumentImportPlan {
+    pub source_snapshot: SnapshotId,
+    pub target_snapshot: SnapshotId,
+    pub source_objects: Vec<ObjRef>,
+    pub imported_object_map: Vec<(ObjRef, ObjRef)>,
+    pub policy_digest: [u8; 32],
+    pub plan_selection_digest: Option<[u8; 32]>,
+}
+
+pub struct ImportedObjectProvenance {
+    pub source_document_id: DocumentId,
+    pub source_snapshot: SnapshotId,
+    pub source_object: ObjRef,
+    pub target_object: ObjRef,
+    pub source_digest: NodeDigest,
+}
+
+pub enum SemanticNormalFormKind {
+    DocumentStructure,
+    PageVisualSemantics,
+    TextExtraction,
+    TaggedStructure,
+    FormState,
+    ImportProvenance,
+}
+
+pub struct SemanticNormalForm {
+    pub kind: SemanticNormalFormKind,
+    pub canonical_digest: [u8; 32],
+    pub allow_alias_map: bool,
+}
+```
+
+Implementation notes:
+- cross-document import allocates fresh target-side `ObjRef`s and records a durable provenance map from source state to target state
+- copy/merge/split operations reuse the same transaction/change-journal machinery as intra-document edits rather than bypassing it
+- semantic-equivalence claims are backed by explicit normal-form digests so proof can distinguish byte drift from real semantic drift
 
 ### PagePlan IR (`monkeybee-content::pageplan`)
 
@@ -2114,6 +2334,8 @@ PdfSnapshot + extract profile
 - Property tests: identical normalized payload + identical child digests -> identical NodeDigest; changed child digest -> changed parent digest.
 - Query tests: materialization records capture all observed digests and dependent query keys.
 - Invalidation tests: changed digests dirty exactly the expected query set and no more.
+- Lifecycle tests: root pinning, spill eligibility, and reachability-based sweep preserve live evidence and reclaim only unreachable nodes.
+- Acceleration-index tests: freshness, partial-remote state, and explicit scan fallback remain deterministic and auditable.
 - Receipt tests: invariant certificates are deterministic under deterministic mode and recomputable by proof harness.
 - Hypothesis tests: chosen candidate and alternative summaries remain stable across identical opens.
 - Temporal tests: historical frame materialization preserves frame-local roots and does not mutate later frames.
@@ -2131,6 +2353,8 @@ PdfSnapshot + extract profile
 - Unit tests: document model construction from syntax snapshots, page tree inheritance, resource resolution, reference integrity.
 - Property tests: ownership classification consistency, EditTransaction commit/rollback semantics.
 - Invariant tests: change journal consistency, reverse reference index accuracy.
+- Cross-document import tests: page/resource import allocates fresh target ids, remaps closure dependencies, records provenance, and rejects silent collisions.
+- Normal-form tests: semantic-normal-form digests remain stable across byte-only rewrites and diverge when true semantic meaning changes.
 - Dependency graph tests: edit an object, verify only dependents invalidated.
 - Snapshot tests: PdfSnapshot immutability, snapshot_id uniqueness, root-digest lineage correctness, structural sharing (new snapshot does not clone full object store).
 - Preservation tests: change journal entries emit preservation-effect deltas expected by WritePlan.
@@ -2307,10 +2531,13 @@ PdfSnapshot + extract profile
 - Ledger tests: compatibility and hypothesis ledgers correctly categorize known encounters.
 - Evidence tests: artifact generation produces valid, parseable output.
 - Ledger JSON schema tests: ledger output validates against schema, version tracking fields populate correctly, schema versioning remains backward-compatible within majors.
+- Reproducibility tests: canonical runs emit a manifest and every ledger/capsule/disagreement/plan-selection artifact links back to it.
+- Oracle-resolution tests: above-threshold renderer splits emit typed disagreement records with correct blocking state and resolution class.
 - Corpus manifest tests: every fixture has an `ExpectationManifest`.
 - Repair expectation tests: ambiguous recovery asserts chosen candidate id, semantic digest, and write-impact class unless explicitly waived.
 - Temporal tests: multi-revision fixtures produce stable historical frame outputs.
 - Anchor tests: semantic-anchor stability harness computes expected alias precision.
+- Cross-document import harness tests: copy/merge/split fixtures validate provenance-map completeness and imported render stability.
 - Expansion-lane corpus tests: prepress, PAdES/LTV, tagged-accessibility, form-interchange, action inventory, portfolio/thread, and multimedia fixtures remain represented and triaged.
 - Certificate tests: proof harness can recompute invariant-certificate digests independently.
 - Regression tests: unknown degradations, hypothesis drift, or scope-class violations fail unless triaged.
@@ -2321,9 +2548,14 @@ Each of the following should be authored as the spec matures. They are design-to
 their respective subsystems:
 
 - `docs/implementation/substrate.md` — node digests, content-addressed store, root construction, lineage, query runtime
+- `docs/implementation/policy-composition.md` — resolved policy sets, conflict taxonomy, plan-selection evidence, operation-profile precedence
+- `docs/implementation/store-lifecycle.md` — substrate root pinning, spill policy, persistence eligibility, reachability sweep
 - `docs/implementation/query-engine.md` — QuerySpec model, materialization records, invalidation, cache namespaces
+- `docs/implementation/acceleration-indexes.md` — materialized index families, freshness/partiality semantics, scan fallback receipts
 - `docs/implementation/preservation-algebra.md` — preserved properties, transform composition, WritePlan derivation, receipts
 - `docs/implementation/document-model.md` — semantic object index, reference resolution, dependency graph, snapshots, transactions
+- `docs/implementation/cross-document-import.md` — import closure computation, collision handling, provenance remap, target id allocation
+- `docs/implementation/normal-forms.md` — semantic-normal-form digests, alias maps, proof tolerances, equivalence claims
 - `docs/implementation/syntax-layer.md` — COS object representation, provenance model, preservation boundary contract, repair record schema
 - `docs/implementation/parser-and-repair.md` — parser architecture, repair strategies, tolerant mode, ambiguity handling
 - `docs/implementation/codec.md` — filter chains, image decode/encode, bounded pipelines, decode telemetry
@@ -2342,6 +2574,8 @@ their respective subsystems:
 - `docs/implementation/extraction.md` — multi-surface text extraction, semantic graph, anchors, search primitives, metadata, diagnostics
 - `docs/implementation/temporal-replay.md` — revision frames, historical snapshot materialization, replay semantics
 - `docs/implementation/proof-manifests.md` — expectation manifest schema, triage workflow, CI semantics, certificate audit workflow
+- `docs/implementation/reproducibility.md` — canonical-run manifests, environment pinning, artifact linkage rules
+- `docs/implementation/oracle-resolution.md` — disagreement record schema, arbitration workflow, waiver rules
 
 ## Resolved design decisions
 
