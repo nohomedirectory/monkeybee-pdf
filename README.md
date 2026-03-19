@@ -44,9 +44,9 @@ At minimum, the substrate must unify:
 - parsed COS syntax with provenance
 - semantic object graphs and ownership classes
 - content interpretation and graphics-state transitions
-- derived surfaces such as page plans, render-chunk graphs, extraction outputs, semantic anchors, truth/provenance surfaces, and diffs
+- derived surfaces such as page plans, render-chunk graphs, coverage-cell indexes, extraction outputs, semantic anchors, geometry witnesses, scene receipts, truth/provenance surfaces, and diffs
 - cross-document import provenance, alias maps, import-closure certificates, and semantic-normal-form evidence
-- edit deltas, invalidation witnesses, write plans, emission journals, receipts, and temporal lineage
+- edit deltas, invalidation witnesses, write plans, feasibility witnesses, emission journals, materialization receipts, and temporal lineage
 - proof artifacts, reproducibility manifests, oracle-consensus records, blind-spot ledgers, compatibility ledgers, and invariant certificates
 
 This matters because several promises that are easy to state and hard to make real — cheap
@@ -79,18 +79,19 @@ Baseline v1 must prove all of the following:
 - **Interactive 3D PDF rendering on PRC and U3D content** — the first open-source implementation and a native baseline capability rather than a post-v1 escape hatch.
 - **Persistent immutable snapshots** backed by a content-addressed substrate rather than whole-document cloning.
 - **Exact dependency-tracked invalidation** so small edits only recompute affected pages, resources, and derived artifacts, with witnessable reuse/recompute causality.
+- **A first-class numeric/geometry kernel** so rendering, annotation placement, redaction, hit-testing, prepress region analysis, and 3D cross-sections all consume one auditable tolerance and degeneracy doctrine.
 - **Round-trip integrity**: load → render → modify → save → reload → render again, without corruption or silent semantic drift.
 - **Cross-document import integrity**: copy/merge/split workflows remap resources and identities explicitly, preserve provenance, emit import-closure evidence, and never silently collide.
 - **Annotation and form round trips** on ugly files, including appearance regeneration and preserve-mode save planning.
-- **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated, and canonical writes can be replayed from emission evidence.
+- **Preservation-aware save planning**: before bytes are emitted, the engine can explain what will be preserved, rewritten, appended, or invalidated, compute save feasibility from an explicit constraint graph, and cite minimal blocking sets when preserve-mode goals are unsatisfiable.
 - **Policy-complete operation planning**: open/import/save decisions compose security, active-content, provider, and determinism policy up front and reject invalid combinations before execution.
-- **Write receipts and invariant certificates** for save, diff, and redaction workflows.
+- **Receiptable derived artifacts, write receipts, and invariant certificates** for save, diff, redaction, render, extraction, and cache-reuse workflows.
 - **Durable persisted artifacts**: file-backed saves and persisted proof artifacts publish atomically and never leave ledgers, receipts, or manifests pointing at partial blobs.
 - **Ambiguity truthfulness**: materially different repair candidates stay visible as a bounded hypothesis set rather than being silently collapsed.
 - **Extraction usefulness**: text with positions, metadata, structure inspection, asset inspection, diagnostics, explicit truth surfaces, and the early semantic layers needed for anchor stability.
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
-- **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, and surfaced — never silently swallowed.
-- **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, typed oracle-consensus and oracle-disagreement records, blind-spot ledgers, and plan-selection evidence linked back to ledgers and failure capsules.
+- **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, surfaced in a generated capability surface matrix, and never silently swallowed.
+- **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, typed oracle-consensus and oracle-disagreement records, blind-spot ledgers, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers and failure capsules.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
 - **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, not ad hoc timing logs.
 - **Operational explainability**: the engine can explain edit safety, signature impact, revision-to-revision deltas, invalidation causes, and transport continuity in a way users can act on.
@@ -255,11 +256,11 @@ Monkeybee is a Rust workspace organized around six explicit strata:
 
 1. **Byte/revision layer** — immutable source bytes, appended revisions, and range-backed access.
 2. **Persistent substrate/query layer** — content-addressed roots, temporal lineage, structural
-   sharing, exact invalidation, store lifecycle, acceleration indexes, hypothesis tracking, and invariant certificates.
+   sharing, exact invalidation, store lifecycle, acceleration indexes, materialization receipts, hypothesis tracking, and invariant certificates.
 3. **Syntax/COS layer** — immutable parsed objects, provenance, repair records, raw formatting, and
    the preservation boundary.
 4. **Semantic document layer** — resolved page/resource/object meaning, ownership classes, cross-document import provenance, and semantic normal forms.
-5. **Content layer** — graphics-state interpretation and shared IR for render/extract/inspect/edit.
+5. **Content layer** — graphics-state interpretation, shared IR for render/extract/inspect/edit, and page-space evidence indexes.
 6. **Facade/report layer** — stable public API, diff/signature/report surfaces, proof harness, and CLI.
 
 Workspace crates:
@@ -267,7 +268,7 @@ Workspace crates:
 | Crate | Responsibility |
 |---|---|
 | `monkeybee` | Stable public facade: semver-governed `Engine`, `OpenProbe`, `Session`, `Snapshot`, `EditTransaction`, `CapabilityReport`, `WritePlan`, `WriteReceipt`, `DiffReport`, and high-level open/render/extract/edit/save APIs |
-| `monkeybee-core` | Shared primitives: object IDs, geometry, errors, diagnostics, execution context, version tracking, scope bindings, provider traits, operation-profile and policy-composition primitives |
+| `monkeybee-core` | Shared primitives: object IDs, the first-class geometry/numeric-robustness kernel, errors, diagnostics, execution context, version tracking, scope bindings, provider traits, and operation-profile/policy-composition primitives |
 | `monkeybee-bytes` | Byte sources, mmap/in-memory/range-backed access, fetch scheduling, access plans, revision chains, raw-span ownership |
 | `monkeybee-security` | Security profiles, worker isolation, budget broker, hostile-input policy |
 | `monkeybee-codec` | Filter chains, image decode/encode, predictor logic, bounded decode pipelines |
@@ -313,7 +314,9 @@ before subsystem fan-out.
 - identity model (`DocumentId`, `SnapshotId`, `NodeDigest`, `ResourceFingerprint`, `SemanticAnchorId`)
 - content-addressed snapshot roots and lineage schema
 - incremental query engine and exact invalidation semantics
+- geometry-kernel tolerance policy and geometry-witness schema
 - preservation algebra, `WritePlan`, `WriteReceipt`, and `InvariantCertificate` schema
+- capability-surface-matrix derivation rules from scope + proof artifacts
 - policy-composition validity and plan-selection evidence
 - hypothesis-set and ambiguity-reporting contract
 - temporal revision model and semantic-anchor stability rules
@@ -409,12 +412,16 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 - A **hypothesis ledger** for ambiguous repairs so materially different candidates remain visible.
 - **Oracle-consensus records and blind-spot ledgers** so release-facing claims reflect both how
   disputed expectations were chosen and where fixture coverage is still thin.
+- A **metamorphic proof lane with deterministic reducers and fixture genealogy** so
+  representation-changing transforms, crash minimization, and repair drift stay auditable.
 - **Write receipts and invariant certificates** for save-impact, preserve-mode, and redaction workflows.
 - **Anchor-stability and temporal-replay harnesses** on representative fixtures so post-v1 surfaces
   are forced to grow from stable primitives instead of hand-waving.
 - **Performance baselines** on representative hard workloads.
 - **Schema-versioned benchmark witnesses** that bind support class, render determinism class,
   runtime-topology evidence, and threshold verdicts to reproducibility manifests.
+- A **generated capability surface matrix** derived from the scope registry plus proof outputs so
+  README, website, CLI, and CI capability claims cannot drift apart.
 - **Durable artifact publication rules** so saved outputs, ledgers, capsules, and witnesses are
   published atomically and never reference partial child artifacts.
 

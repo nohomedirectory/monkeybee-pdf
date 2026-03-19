@@ -23,6 +23,17 @@ import-closure certificates, extraction truth surfaces, anchor-stability
 witnesses, oracle-consensus records, blind-spot ledgers, and richer
 benchmark-topology evidence.
 
+This revision also hardens several formerly implied shared concerns into
+explicit implementation contracts: `monkeybee-core::geometry` is now the
+first-class numeric/geometry kernel rather than a thin math helper; durable
+derived artifacts emit generalized `MaterializationReceipt`s; page-space
+coverage-cell indexes become shared evidence rather than private walkers;
+save-plan feasibility emits constraint-graph witnesses and unsat cores; remote
+sessions may resume from verified sparse blobs; 3D parsing/rendering emits
+scene receipts; proof grows a metamorphic lane with fixture genealogy; and
+public capability claims flow through a generated capability surface matrix
+instead of prose-only tables.
+
 The most important architectural refinement since the prior revision is simple to state and
 consequential in practice: Monkeybee is no longer described merely as a layered
 parser/document/render/write stack. It now has a baseline computational kernel —
@@ -650,6 +661,45 @@ Baseline v1 builds with `tiny-skia`, `lcms2`, `openjpeg` (Compatible profile), `
 Canonical proof additionally pins the baseline CPU render path as the
 `ProofCanonical` render determinism class; GPU/subpixel/view-adaptive paths emit
 their own witness class and never masquerade as canonical evidence.
+
+### Capability surface matrix
+
+The scope registry remains the canonical declaration of intended support. The
+implementation surface that public tooling consumes is a generated capability
+matrix derived from the scope registry, support-class doctrine, determinism
+class, proof outputs, and required provider/module manifests.
+
+```rust
+pub enum SupportClass {
+    ProofCanonical,
+    NativeCompatible,
+    NativeHardened,
+    NativeStrict,
+    WasmStrict,
+    ExperimentalOnly,
+}
+
+pub struct CapabilitySurfaceMatrixEntry {
+    pub feature_code: FeatureCode,
+    pub support_class: SupportClass,
+    pub compatibility_tier: u8,
+    pub determinism_class: Option<RenderDeterminismClass>,
+    pub required_modules: Vec<String>,
+    pub required_providers: Vec<String>,
+    pub proof_gating: bool,
+    pub witness_surfaces: Vec<String>,
+    pub expected_degradations: Vec<FeatureCode>,
+}
+```
+
+Implementation notes:
+- README capability tables, website matrices, CLI capability output, and CI
+  gates consume this generated matrix rather than maintaining parallel support
+  claims
+- the matrix is generated from `docs/scope_registry.yaml` plus proof/capability
+  artifacts; it is not a second manual registry
+- `monkeybee-cli` needs a `capability-matrix --json` command that emits the
+  same surface consumed by documentation and dashboards
 
 ## Runtime and concurrency model
 
@@ -1321,14 +1371,33 @@ pub struct QueryRecord {
     pub status: QueryStatus,
 }
 
+pub enum ArtifactKind {
+    PagePlan,
+    RenderChunkGraph,
+    CoverageCellIndex,
+    ResolvedResources,
+    RasterTile,
+    ExtractSurface,
+    SemanticGraph,
+    AccessPlan,
+    ColorTransform,
+    SceneReceipt,
+    WritePlan,
+    DiffArtifact,
+}
+
 pub struct MaterializationReceipt {
-    pub key: QueryKey,
-    pub input_digests: Vec<NodeDigest>,
-    pub dependent_queries: Vec<QueryKey>,
-    pub materialization_digest: [u8; 32],
-    pub reused: bool,
-    pub reuse_verdict: ReuseVerdict,
+    pub schema_version: String,
+    pub artifact_kind: ArtifactKind,
+    pub artifact_digest: [u8; 32],
+    pub snapshot_id: SnapshotId,
+    pub source_node_digests: Vec<NodeDigest>,
+    pub policy_digest: [u8; 32],
+    pub determinism_class: Option<RenderDeterminismClass>,
+    pub geometry_witness_digest: Option<[u8; 32]>,
     pub invalidation_witness: Option<InvalidationWitness>,
+    pub build_algorithm_id: String,
+    pub trace_digest: [u8; 32],
 }
 
 pub enum QueryStatus {
@@ -1369,6 +1438,7 @@ pub enum IndexKind {
     NameTreeLookup,
     TextSearch,
     AnchorSpatial,
+    CoverageCells,
     ActionGraph,
     ImportClosure,
     RevisionFrameLookup,
@@ -1486,6 +1556,7 @@ pub struct WriteReceipt {
     pub provenance_summary: Option<SurfaceProvenanceSummary>,
     pub transport_continuity: Option<TransportContinuityReceipt>,
     pub emission_journal: Option<EmissionJournal>,
+    pub feasibility_witness: Option<FeasibilityWitness>,
     pub post_write_validation: Vec<ValidationFinding>,
     pub redaction_verification: Option<RedactionVerificationSummary>,
 }
@@ -1742,6 +1813,41 @@ pub struct ThresholdVerdict {
     pub actual: String,
     pub verdict: String,
 }
+
+pub enum MetamorphicTransformKind {
+    ObjectRenumbering,
+    XrefTableToStreamReencoding,
+    XrefStreamToTableReencoding,
+    WhitespaceAndCommentPerturbation,
+    DictionaryKeyOrderPermutation,
+    StreamFilterRecomposition,
+    IncrementalChainSquash,
+    PageTreeRebalance,
+    FontSubsetPrefixRename,
+    OptionalContentConfigReorder,
+}
+
+pub struct MetamorphicExpectation {
+    pub preserved_surfaces: Vec<String>,
+    pub allowed_drift_surfaces: Vec<String>,
+    pub forbidden_drift_surfaces: Vec<String>,
+}
+
+pub struct MetamorphicWitness {
+    pub transform_kind: MetamorphicTransformKind,
+    pub before_digest: [u8; 32],
+    pub after_digest: [u8; 32],
+    pub expectation: MetamorphicExpectation,
+    pub observed_deltas: Vec<String>,
+    pub verdict: String,
+}
+
+pub struct FixtureGenealogy {
+    pub fixture_digest: [u8; 32],
+    pub parent_fixture: Option<[u8; 32]>,
+    pub derived_by: Option<MetamorphicTransformKind>,
+    pub reducer_chain: Vec<String>,
+}
 ```
 
 Implementation notes:
@@ -1754,6 +1860,9 @@ Implementation notes:
   topology/runtime fields, and threshold verdicts
 - benchmark witnesses follow the same manifest-last durable publication rules as ledgers,
   receipts, and failure capsules
+- metamorphic proof runs emit deterministic `MetamorphicWitness` artifacts and
+  `FixtureGenealogy` so representation-changing transforms and reducer outputs
+  remain attributable to their parent fixtures
 
 ### PDF object model (`monkeybee-core::object`)
 
@@ -1861,7 +1970,45 @@ pub struct Rectangle {
 pub struct Point {
     pub x: f64, pub y: f64,
 }
+
+pub enum NumericRobustnessClass {
+    ProofCanonical,
+    IntervalGuarded,
+    FastApproximate,
+    Experimental,
+}
+
+pub enum DegeneracyClass {
+    ZeroAreaPath,
+    NearlySingularTransform,
+    CoincidentEdges,
+    SelfIntersection,
+    CatastrophicCancellationRisk,
+}
+
+pub struct AffineConditionWitness {
+    pub matrix_digest: [u8; 32],
+    pub condition_estimate: f64,
+    pub degeneracies: Vec<DegeneracyClass>,
+}
+
+pub struct GeometryWitness {
+    pub page_index: Option<u32>,
+    pub robustness_class: NumericRobustnessClass,
+    pub transforms: Vec<AffineConditionWitness>,
+    pub clipped_regions: Vec<RegionRef>,
+    pub degraded_due_to_numeric_risk: Vec<RegionRef>,
+    pub trace_digest: [u8; 32],
+}
 ```
+
+Implementation notes:
+- `monkeybee-core::geometry` is now the shared numeric/geometry kernel, not
+  merely a matrix helper module
+- render, extract, annotate, edit, forensics, prepress, and 3D section-plane
+  operations consume the same tolerance and predicate doctrine
+- geometry-sensitive materializations and reports carry a `GeometryWitness`
+  digest instead of relying on implied epsilon behavior
 
 ### Graphics state (`monkeybee-content::state`)
 
@@ -1953,10 +2100,57 @@ pub struct RebaseReceipt {
     pub applied_rewrites: Vec<String>,
 }
 
+pub enum PreservationConstraintKind {
+    SignedByteRangeIntegrity,
+    ForeignBytePreservation,
+    IncrementalAppendClosure,
+    ProfileConformance,
+    ActiveContentSanitization,
+    OutputIntentRetention,
+    CrossDocumentAliasUniqueness,
+    TransportContinuityDependency,
+    EncryptionHandlerConstraint,
+}
+
+pub struct PreservationConstraintNode {
+    pub node_id: String,
+    pub kind: PreservationConstraintKind,
+    pub subject_objects: Vec<ObjRef>,
+    pub summary: String,
+}
+
+pub struct PreservationConstraintEdge {
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
+pub struct PreservationConstraintGraph {
+    pub nodes: Vec<PreservationConstraintNode>,
+    pub edges: Vec<PreservationConstraintEdge>,
+}
+
+pub enum FeasibilityVerdict {
+    Feasible,
+    FeasibleWithEscalation,
+    Unsat,
+}
+
+pub struct FeasibilityWitness {
+    pub verdict: FeasibilityVerdict,
+    pub chosen_write_mode: WriteMode,
+    pub escalations: Vec<String>,
+    pub unsat_core: Vec<String>,
+    pub policy_digest: [u8; 32],
+    pub trace_digest: [u8; 32],
+}
+
 pub struct WritePlan {
     pub classifications: Vec<ObjectClassification>,
     pub preservation_claims: Vec<PreservationClaim>,
     pub signature_impact: SignatureImpact,
+    pub constraint_graph: PreservationConstraintGraph,
+    pub feasibility_witness: FeasibilityWitness,
     pub plan_digest: [u8; 32],
     pub policy_digest: [u8; 32],
     pub plan_selection_digest: Option<[u8; 32]>,
@@ -2302,7 +2496,39 @@ pub struct CrossSectionPlane {
     pub distance: f32,
     pub cap_color: Option<[f32; 4]>,
 }
+
+pub enum SceneFormat {
+    PRC,
+    U3D,
+    Mixed,
+}
+
+pub struct ViewStateDigest {
+    pub camera_digest: [u8; 32],
+    pub section_plane_digest: Option<[u8; 32]>,
+    pub render_mode: String,
+    pub visibility_mask_digest: [u8; 32],
+}
+
+pub struct SceneReceipt {
+    pub scene_format: SceneFormat,
+    pub scene_digest: [u8; 32],
+    pub mesh_count: u64,
+    pub part_count: u64,
+    pub material_count: u64,
+    pub pmi_item_count: u64,
+    pub named_view_digests: Vec<[u8; 32]>,
+    pub topology_witness_digest: Option<[u8; 32]>,
+    pub budget_class: String,
+}
 ```
+
+Implementation notes:
+- 3D fixtures compare `SceneReceipt`s in addition to screenshots so parser and
+  named-view regressions stay explainable even when pixels are similar
+- section-plane, named-view, and PMI inventory surfaces should attach
+  `ViewStateDigest`/scene-receipt evidence rather than emitting screenshot-only
+  proof
 
 ### Dependency graph (`monkeybee-document::depgraph`)
 
@@ -2370,6 +2596,75 @@ Implementation notes:
   claims
 - continuity failures must flow into caller-visible diagnostics and receipts,
   not remain buried in fetcher telemetry
+
+```rust
+pub struct RangeMerkleLeaf {
+    pub range: (u64, u64),
+    pub digest: [u8; 32],
+}
+
+pub struct RangeMerkleManifest {
+    pub chunk_size: u64,
+    pub root_digest: [u8; 32],
+    pub leaves: Vec<RangeMerkleLeaf>,
+}
+
+pub struct VerifiedSparseBlob {
+    pub transport_identity: TransportIdentity,
+    pub merkle_manifest: Option<RangeMerkleManifest>,
+    pub verified_ranges: Vec<(u64, u64)>,
+    pub suspect_ranges: Vec<(u64, u64)>,
+    pub fetch_epoch: FetchEpoch,
+}
+
+pub struct ResumptionReceipt {
+    pub prior_blob_digest: [u8; 32],
+    pub reused_verified_ranges: Vec<(u64, u64)>,
+    pub revalidated_ranges: Vec<(u64, u64)>,
+    pub continuity_result: TransportContinuityReceipt,
+}
+```
+
+Implementation notes:
+- cross-session remote reuse is allowed only through `VerifiedSparseBlob`
+  material with matching transport identity
+- weak validators, range digests, and Merkle manifests remain distinct trust
+  surfaces and must not be collapsed in preserve/signature-sensitive reporting
+
+### Coverage-cell evidence index
+
+```rust
+pub struct CoverageAtom {
+    pub bbox: Rectangle,
+    pub object_ref: Option<ObjRef>,
+    pub operator_span: Option<ContentOpRef>,
+    pub text_span: Option<SpanId>,
+    pub resource_refs: Vec<ObjRef>,
+    pub ocg_membership: Vec<String>,
+    pub signed_overlap: bool,
+    pub hidden_content_flags: Vec<String>,
+    pub ink_coverage_estimate: Option<f32>,
+}
+
+pub struct CoverageCell {
+    pub cell_id: u64,
+    pub bbox: Rectangle,
+    pub atoms: Vec<CoverageAtom>,
+}
+
+pub struct CoverageCellIndex {
+    pub page_index: u32,
+    pub grid_policy: String,
+    pub cells: Vec<CoverageCell>,
+}
+```
+
+Implementation notes:
+- `CoverageCellIndex` is a substrate-backed derived index consumed by
+  hit-testing, redaction audit, semantic anchoring, exact invalidation, and
+  prepress region accounting
+- the same coverage cells must be reused across render/extract/forensics rather
+  than rebuilt by crate-local walkers
 
 ### Semantic graph and anchors (`monkeybee-extract::semantic_graph` / `anchors`)
 
@@ -2691,6 +2986,7 @@ PdfSnapshot + extract profile
 - Property tests: span ownership invariants preserved across revision appends.
 - Access-plan tests: first-paint byte planning on linearized vs non-linearized fixtures.
 - Remote tests: fetch statistics, transport continuity receipts, digest-ladder verification, and cancellation are stable under concurrent range requests.
+- Sparse-blob tests: verified-range reuse, Merkle-manifest preference, and resumption receipts stay deterministic across same-identity restarts and are rejected on transport drift.
 
 ### monkeybee-codec
 - Unit tests: each filter implementation on known input/output pairs.
@@ -2725,6 +3021,7 @@ PdfSnapshot + extract profile
 - Durability tests: manifest-last publication never exposes partially written persisted roots or
   artifact-store blobs across simulated crashes.
 - Acceleration-index tests: freshness, partial-remote state, explicit scan fallback, and witness linkage remain deterministic and auditable.
+- Materialization-receipt tests: durable/reusable artifacts emit schema-valid receipts with stable algorithm ids, determinism class, and geometry-witness linkage where applicable.
 - Receipt tests: invariant certificates are deterministic under deterministic mode and recomputable by proof harness.
 - Hypothesis tests: chosen candidate and alternative summaries remain stable across identical opens.
 - Temporal tests: historical frame materialization preserves frame-local roots and does not mutate later frames.
@@ -2788,6 +3085,8 @@ PdfSnapshot + extract profile
 - Cooperative cancellation tests: cancel mid-render at each checkpoint type.
 - Progressive rendering tests: missing resources produce correct placeholders, placeholder metadata carries correct byte ranges, incremental refinement replaces only affected tiles or chunks.
 - Query reuse tests: repeated renders on unchanged snapshot reuse page-plan/tile materializations and preserve invalidation-witness precision.
+- Geometry-kernel tests: geometry witnesses, degeneracy classifications, and numeric-robustness/doctrine pinning stay stable across proof-canonical render fixtures.
+- Coverage-cell tests: render-side region accounting agrees with shared coverage-cell indexes used by hit-testing, redaction audit, and prepress summaries.
 
 ### monkeybee-3d
 - Unit tests: PRC parser on known PRC files, U3D parser on known U3D files, scene graph construction from both formats.
@@ -2795,6 +3094,7 @@ PdfSnapshot + extract profile
 - Named view tests: camera interpolation produces smooth transitions, all named views are reachable.
 - Cross-section tests: cross-section planes produce geometrically correct cut surfaces.
 - Round-trip tests: 3D annotation dictionaries survive load-save-reload without data loss.
+- Scene-receipt tests: scene digests, named-view digests, topology witness linkage, PMI counts, and section-plane view-state provenance remain deterministic for fixed fixtures.
 - WASM tests: 3D renders in WebGPU-capable browsers.
 
 ### monkeybee-gpu
@@ -2822,6 +3122,7 @@ PdfSnapshot + extract profile
   signature-coverage entries, provenance summaries, transport continuity references, and
   redaction-verification summaries when redactions are applied.
 - Emission-journal tests: deterministic saves emit replayable object order, decision logs, and byte-address maps.
+- Feasibility tests: save-plan constraint graphs emit minimal unsat cores and stable escalation witnesses for preserve/incremental/full-rewrite boundary cases.
 - Round-trip tests: parse -> write -> re-parse -> compare object graphs.
 - Self-consistency tests: write output -> parse with monkeybee-parser -> verify structural validity.
 - Reference validation: write output -> open in PDFium/MuPDF -> verify renders correctly.
@@ -2892,6 +3193,7 @@ PdfSnapshot + extract profile
   summaries, and placed-image resolution metadata match fixtures.
 - Semantic graph tests: graph node/edge construction is deterministic for fixed extract profile.
 - Anchor tests: semantically unchanged rewrites preserve anchors or emit explicit alias maps and anchor-stability witnesses with the correct continuity class.
+- Coverage-cell tests: shared coverage indexes expose signed overlap, hidden-content flags, resource closure, and TAC estimates consistently across extraction and forensics consumers.
 - Proposal tests: invalid EditProposal preconditions are rejected before mutation.
 
 ### monkeybee-forensics
@@ -2928,12 +3230,14 @@ PdfSnapshot + extract profile
 - Oracle-resolution tests: above-threshold renderer splits emit typed disagreement records with correct blocking state and resolution class.
 - Oracle-consensus tests: canonical arbitration emits typed consensus records when expectations are resolved without a blocking disagreement.
 - Blind-spot tests: release-facing capability summaries are suppressed or qualified when coverage thresholds are not met.
+- Metamorphic tests: representation-changing transforms emit schema-valid witnesses, preserve declared surfaces, and retain fixture genealogy through reducers.
 - Corpus manifest tests: every fixture has an `ExpectationManifest`.
 - Repair expectation tests: ambiguous recovery asserts chosen candidate id, semantic digest, and write-impact class unless explicitly waived.
 - Temporal tests: multi-revision fixtures produce stable historical frame outputs.
 - Anchor tests: semantic-anchor stability harness computes expected alias precision.
 - Cross-document import harness tests: copy/merge/split fixtures validate provenance-map completeness, import-closure certificates, and imported render stability.
 - Expansion-lane corpus tests: prepress, PAdES/LTV, tagged-accessibility, form-interchange, action inventory, portfolio/thread, and multimedia fixtures remain represented and triaged.
+- Capability-matrix tests: generated capability surface matrix stays in sync with scope registry, support-class doctrine, proof status, and README/CLI consumers.
 - Certificate tests: proof harness can recompute invariant-certificate digests independently.
 - Regression tests: unknown degradations, hypothesis drift, or scope-class violations fail unless triaged.
 
@@ -2947,7 +3251,9 @@ their respective subsystems:
 - `docs/implementation/store-lifecycle.md` — substrate root pinning, spill policy, persistence eligibility, reachability sweep
 - `docs/implementation/query-engine.md` — QuerySpec model, materialization records, invalidation, cache namespaces
 - `docs/implementation/acceleration-indexes.md` — materialized index families, freshness/partiality semantics, scan fallback receipts
+- `docs/implementation/geometry-kernel.md` — numeric robustness doctrine, tolerance policy, degeneracy classes, and geometry witnesses
 - `docs/implementation/preservation-algebra.md` — preserved properties, transform composition, WritePlan derivation, receipts
+- `docs/implementation/save-feasibility.md` — preservation constraint graphs, escalation policy, unsat-core reporting
 - `docs/implementation/document-model.md` — semantic object index, reference resolution, dependency graph, snapshots, transactions
 - `docs/implementation/cross-document-import.md` — import closure computation, collision handling, provenance remap, target id allocation
 - `docs/implementation/normal-forms.md` — semantic-normal-form digests, alias maps, proof tolerances, equivalence claims
@@ -2971,6 +3277,8 @@ their respective subsystems:
 - `docs/implementation/proof-manifests.md` — expectation manifest schema, triage workflow, CI semantics, certificate audit workflow
 - `docs/implementation/reproducibility.md` — canonical-run manifests, environment pinning, artifact linkage rules
 - `docs/implementation/oracle-resolution.md` — disagreement record schema, arbitration workflow, waiver rules
+- `docs/implementation/metamorphic-proof.md` — transform catalog, bounded-drift expectations, reducer workflow, fixture genealogy
+- `docs/implementation/capability-matrix.md` — generated capability surface matrix, scope-registry derivation, README/CLI/site consumers
 
 ## Resolved design decisions
 

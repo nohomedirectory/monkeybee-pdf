@@ -744,8 +744,8 @@ and navigate the product structure tree. This works natively on desktop (Vulkan/
 in the browser (WebGPU).
 
 Proof surfaces: 3D content detection and parsing on corpus, scene graph construction validation,
-render comparison against Adobe Acrobat screenshots, named view interpolation tests, cross-section
-geometry verification.
+scene-receipt comparison against corpus expectations, render comparison against Adobe Acrobat
+screenshots, named view interpolation tests, and cross-section geometry verification.
 
 ### Workflow 14: Document security forensics
 
@@ -2042,7 +2042,9 @@ pub struct RenderReport {
     pub missing_resources: Vec<ResourceKey>,
     pub substituted_fonts: Vec<FontSubstitution>,
     pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub geometry_witness_digest: Option<[u8; 32]>,
     pub provenance_summary: Option<SurfaceProvenanceSummary>,
+    pub materialization_receipts: Vec<MaterializationReceipt>,
     pub budget_events: Vec<BudgetEvent>,
 }
 
@@ -2057,7 +2059,9 @@ pub struct ExtractReport {
     pub degraded_regions: Vec<RegionRef>,
     pub truth_summaries: Vec<PageTruthSummary>,
     pub numeric_robustness_profile: Option<NumericRobustnessProfile>,
+    pub geometry_witness_digest: Option<[u8; 32]>,
     pub provenance_summary: Option<SurfaceProvenanceSummary>,
+    pub materialization_receipts: Vec<MaterializationReceipt>,
 }
 ```
 
@@ -2191,6 +2195,57 @@ Rules:
 - `MaterializationReceipt`, `TraceEventStream`, and cache statistics MAY
   summarize witness outcomes, but the underlying witness remains the canonical
   causal artifact
+
+### Materialization receipt doctrine
+
+Exact invalidation is only half of the artifact story. Every durable or reusable
+derived artifact MUST be able to emit a schema-versioned
+`MaterializationReceipt`, not only save/write outputs.
+
+```
+pub enum ArtifactKind {
+    PagePlan,
+    RenderChunkGraph,
+    CoverageCellIndex,
+    ResolvedResources,
+    RasterTile,
+    ExtractSurface,
+    SemanticGraph,
+    AccessPlan,
+    ColorTransform,
+    SceneReceipt,
+    WritePlan,
+    DiffArtifact,
+}
+
+pub struct MaterializationReceipt {
+    pub schema_version: String,
+    pub artifact_kind: ArtifactKind,
+    pub artifact_digest: [u8; 32],
+    pub snapshot_id: SnapshotId,
+    pub source_node_digests: Vec<NodeDigest>,
+    pub policy_digest: [u8; 32],
+    pub determinism_class: Option<RenderDeterminismClass>,
+    pub geometry_witness_digest: Option<[u8; 32]>,
+    pub invalidation_witness: Option<InvalidationWitness>,
+    pub build_algorithm_id: String,
+    pub trace_digest: [u8; 32],
+}
+```
+
+Rules:
+- any cache entry eligible for cross-snapshot reuse or persistent storage MUST
+  be able to produce a `MaterializationReceipt`
+- receipt production applies to `PagePlan`, render-chunk graphs, coverage-cell
+  indexes, resolved resources, raster tiles, extraction surfaces, semantic
+  graphs, access plans, color transforms, scene receipts, write plans, and diff
+  artifacts
+- experimental backends may materialize artifacts, but their receipts MUST
+  clearly identify non-canonical algorithm ids and determinism classes
+- proof artifacts SHOULD compare receipts first and bytes/pixels second so
+  backend changes stay explainable instead of becoming opaque cache churn
+- geometry-sensitive artifacts SHOULD link to a `GeometryWitness` digest rather
+  than forcing downstream tools to infer which numeric path was active
 
 ### Cache management doctrine
 
@@ -2471,6 +2526,50 @@ Additional rules:
   when transport trust materially influenced correctness, preserve, or signature
   claims
 
+### Verified sparse blob doctrine
+
+Range-backed sessions MAY materialize a `VerifiedSparseBlob` so previously
+validated byte ranges can be reused across sessions without pretending the full
+file is locally complete.
+
+```
+pub struct RangeMerkleLeaf {
+    pub range: (u64, u64),
+    pub digest: [u8; 32],
+}
+
+pub struct RangeMerkleManifest {
+    pub chunk_size: u64,
+    pub root_digest: [u8; 32],
+    pub leaves: Vec<RangeMerkleLeaf>,
+}
+
+pub struct VerifiedSparseBlob {
+    pub transport_identity: TransportIdentity,
+    pub merkle_manifest: Option<RangeMerkleManifest>,
+    pub verified_ranges: Vec<(u64, u64)>,
+    pub suspect_ranges: Vec<(u64, u64)>,
+    pub fetch_epoch: FetchEpoch,
+}
+
+pub struct ResumptionReceipt {
+    pub prior_blob_digest: [u8; 32],
+    pub reused_verified_ranges: Vec<(u64, u64)>,
+    pub revalidated_ranges: Vec<(u64, u64)>,
+    pub continuity_result: TransportContinuityReceipt,
+}
+```
+
+Rules:
+- a resumed remote session MUST either adopt a prior `VerifiedSparseBlob`
+  under matching transport identity or discard it
+- Merkle-qualified range attestations SHOULD outrank weak HTTP validators when
+  both exist
+- preserve/signature-sensitive workflows MUST cite whether remote trust depended
+  on weak validators, range digests, or Merkle manifests
+- `ResumptionReceipt` MAY be attached to proof artifacts, receipts, or failure
+  capsules whenever cross-session remote trust materially influenced correctness
+
 **Integration with progressive rendering:** When the render pipeline encounters a stream whose
 bytes are not yet available, it:
 1. Records a placeholder in the tile output.
@@ -2646,6 +2745,7 @@ pub enum IndexKind {
     NameTreeLookup,
     TextSearch,
     AnchorSpatial,
+    CoverageCells,
     ActionGraph,
     ImportClosure,
     RevisionFrameLookup,
@@ -2679,6 +2779,50 @@ Required behavior:
   only with an explicit diagnostic and traceable reason
 - invalidation remains exact: changed digests dirty only dependent indexes and
   queries, while clean indexes remain reusable
+
+### Spatial evidence index doctrine
+
+Monkeybee MUST maintain a page-space `CoverageCellIndex` as a first-class
+derived index for invalidation, hit-testing, redaction auditing, semantic
+anchoring, and prepress region analysis.
+
+```
+pub struct CoverageAtom {
+    pub bbox: Rectangle,
+    pub object_ref: Option<ObjRef>,
+    pub operator_span: Option<ContentOpRef>,
+    pub text_span: Option<SpanId>,
+    pub resource_refs: Vec<ObjRef>,
+    pub ocg_membership: Vec<String>,
+    pub signed_overlap: bool,
+    pub hidden_content_flags: Vec<String>,
+    pub ink_coverage_estimate: Option<f32>,
+}
+
+pub struct CoverageCell {
+    pub cell_id: u64,
+    pub bbox: Rectangle,
+    pub atoms: Vec<CoverageAtom>,
+}
+
+pub struct CoverageCellIndex {
+    pub page_index: u32,
+    pub grid_policy: String,
+    pub cells: Vec<CoverageCell>,
+}
+```
+
+Rules:
+- exact invalidation MAY descend to cell granularity when page-wide
+  invalidation is provably unnecessary
+- redaction audits MUST query `CoverageCellIndex` before claiming visual or
+  extractive erasure
+- semantic anchors MAY attach to coverage cells as one stability layer beneath
+  higher-level semantic nodes
+- prepress region TAC accounting, hidden-content detectors, and hit-testing
+  MUST reuse the same cell index rather than private region walkers
+- `CoverageCellIndex` is a derived artifact subject to the ordinary
+  `MaterializationReceipt` and `InvalidationWitness` rules
 
 #### `monkeybee-catalog`
 
@@ -3316,6 +3460,49 @@ Key responsibilities:
 The 3D crate shares the wgpu device/queue with `monkeybee-gpu` when both are active. The scene
 graph is immutable per snapshot. 3D rendering respects `ExecutionContext` budgets including vertex
 count, texture memory, and shader workload limits.
+
+### 3D scene receipt doctrine
+
+3D support MUST emit scene-level receipts, not only screenshots. A successful
+3D parse/render operation needs a stable semantic artifact describing what scene
+was interpreted, how named views were resolved, and which topology/product
+surfaces were actually available.
+
+```
+pub enum SceneFormat {
+    PRC,
+    U3D,
+    Mixed,
+}
+
+pub struct ViewStateDigest {
+    pub camera_digest: [u8; 32],
+    pub section_plane_digest: Option<[u8; 32]>,
+    pub render_mode: String,
+    pub visibility_mask_digest: [u8; 32],
+}
+
+pub struct SceneReceipt {
+    pub scene_format: SceneFormat,
+    pub scene_digest: [u8; 32],
+    pub mesh_count: u64,
+    pub part_count: u64,
+    pub material_count: u64,
+    pub pmi_item_count: u64,
+    pub named_view_digests: Vec<[u8; 32]>,
+    pub topology_witness_digest: Option<[u8; 32]>,
+    pub budget_class: String,
+}
+```
+
+Rules:
+- 3D proof fixtures MUST compare scene receipts in addition to screenshots
+- deterministic camera-path witnesses MUST exist for named-view interpolation
+  tests
+- section-plane operations MUST carry `ViewStateDigest` provenance so geometry
+  and screenshot comparisons stay explainable
+- PMI extraction and product-structure traversal MUST be exposed as inventory
+  surfaces even when advanced interactive rendering degrades
 
 #### `monkeybee-gpu`
 
@@ -4090,6 +4277,7 @@ Key responsibilities:
 - `monkeybee inspect <file> --actions --link-map --threads --portfolio --piece-info --web-capture --multimedia`
 - `monkeybee render <file> --simulate-overprint [--soft-proof <icc>] [--separations <all|plate>]`
 - `monkeybee validate <file> --print-preflight` / `monkeybee validate <file> --pdf-ua-audit`
+- `monkeybee capability-matrix --json` — emit the generated capability surface matrix with support class, determinism class, proof-gating, and witness-surface data
 
 
 
@@ -4327,6 +4515,59 @@ In preserve mode, the model additionally retains:
 ### Geometry guarantees
 
 All subsystems that deal with spatial operations (rendering, annotation, extraction, editing) share the same coordinate geometry and transformation pipeline from `monkeybee-core`. No subsystem maintains its own private geometry stack that can drift.
+
+### Numeric robustness and geometry-kernel doctrine
+
+Monkeybee MUST treat numerically delicate geometry as a shared engine concern
+rather than crate-local epsilon folklore. `monkeybee-core::geometry` is the
+single baseline home for affine conditioning, path flattening contracts,
+interval guards, exact-or-filtered predicates, degeneracy classification, and
+geometry witness emission.
+
+```
+pub enum NumericRobustnessClass {
+    ProofCanonical,
+    IntervalGuarded,
+    FastApproximate,
+    Experimental,
+}
+
+pub enum DegeneracyClass {
+    ZeroAreaPath,
+    NearlySingularTransform,
+    CoincidentEdges,
+    SelfIntersection,
+    CatastrophicCancellationRisk,
+}
+
+pub struct AffineConditionWitness {
+    pub matrix_digest: [u8; 32],
+    pub condition_estimate: f64,
+    pub degeneracies: Vec<DegeneracyClass>,
+}
+
+pub struct GeometryWitness {
+    pub page_index: Option<u32>,
+    pub robustness_class: NumericRobustnessClass,
+    pub transforms: Vec<AffineConditionWitness>,
+    pub clipped_regions: Vec<RegionRef>,
+    pub degraded_due_to_numeric_risk: Vec<RegionRef>,
+    pub trace_digest: [u8; 32],
+}
+```
+
+Rules:
+- proof-canonical rendering and extraction MUST use a pinned tolerance policy
+  from `monkeybee-core::geometry`
+- geometry-sensitive surfaces MAY use faster kernels in non-canonical modes,
+  but MUST report the chosen robustness class
+- boolean/path/intersection operators MUST emit degeneracy classifications when
+  they fall off the ideal path
+- redaction, annotation placement, prepress region accounting, hit-testing, and
+  3D cross-sections MUST consume the shared geometry kernel rather than private
+  implementations
+- geometry-sensitive materializations SHOULD link to a `GeometryWitness` digest
+  in receipts, reports, or trace artifacts
 
 ### Mutation safety
 
@@ -4702,6 +4943,70 @@ Rules:
 - if a relevant semantic surface is unavailable or materially degraded, the
   engine must not claim semantic equivalence for that surface
 
+### Preservation constraint graph doctrine
+
+`WritePlan` selection MUST be backed by an explicit
+`PreservationConstraintGraph`. Save planning is a feasibility problem, not only
+an object-classification pass.
+
+```
+pub enum PreservationConstraintKind {
+    SignedByteRangeIntegrity,
+    ForeignBytePreservation,
+    IncrementalAppendClosure,
+    ProfileConformance,
+    ActiveContentSanitization,
+    OutputIntentRetention,
+    CrossDocumentAliasUniqueness,
+    TransportContinuityDependency,
+    EncryptionHandlerConstraint,
+}
+
+pub struct PreservationConstraintNode {
+    pub node_id: String,
+    pub kind: PreservationConstraintKind,
+    pub subject_objects: Vec<ObjRef>,
+    pub summary: String,
+}
+
+pub struct PreservationConstraintEdge {
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
+pub struct PreservationConstraintGraph {
+    pub nodes: Vec<PreservationConstraintNode>,
+    pub edges: Vec<PreservationConstraintEdge>,
+}
+
+pub enum FeasibilityVerdict {
+    Feasible,
+    FeasibleWithEscalation,
+    Unsat,
+}
+
+pub struct FeasibilityWitness {
+    pub verdict: FeasibilityVerdict,
+    pub chosen_write_mode: WriteMode,
+    pub escalations: Vec<String>,
+    pub unsat_core: Vec<String>,
+    pub policy_digest: [u8; 32],
+    pub trace_digest: [u8; 32],
+}
+```
+
+Rules:
+- `WritePlan::compute` MUST emit a `PreservationConstraintGraph` and
+  `FeasibilityWitness`
+- any escalation from incremental append to full rewrite MUST cite the minimal
+  blocking constraint set
+- save refusal due to incompatible constraints MUST return the unsat core, not
+  a generic "cannot save in preserve mode"
+- `BytePatchPlan`, `WriteReceipt`, and proof capsules MAY reference the
+  feasibility witness by digest, but the unsat core remains the canonical
+  user-visible explanation
+
 ### Save planning invariant
 
 Before any write, Monkeybee computes a `WritePlan` that classifies each touched object as one of:
@@ -4760,6 +5065,7 @@ pub struct WriteReceipt {
     pub provenance_summary: Option<SurfaceProvenanceSummary>,
     pub transport_continuity: Option<TransportContinuityReceipt>,
     pub emission_journal: Option<EmissionJournal>,
+    pub feasibility_witness: Option<FeasibilityWitness>,
     pub post_write_validation: Vec<ValidationFinding>,
 }
 ```
@@ -4876,6 +5182,8 @@ before any bytes are written.
 - `ownership_transitions`
 - `blocked_preserve_regions`
 - `full_rewrite_reasons`
+- `preservation_constraint_graph`
+- `feasibility_witness`
 - `structure_impact`
 - `accessibility_impact`
 - `permission_impact`
@@ -5854,6 +6162,60 @@ Crashers and regressions must be minimized into the `minimized/` tier whenever f
 - signature-impact classification
 The corpus must be indexed, categorized, and continuously exercised by CI.
 
+### Metamorphic proof doctrine
+
+Oracle comparison is necessary but not sufficient. Monkeybee MUST maintain a
+metamorphic proof lane that applies representation-changing transforms with
+known semantic expectations, then verifies which surfaces are preserved, which
+are allowed to drift, and which drifts are bugs.
+
+```
+pub enum MetamorphicTransformKind {
+    ObjectRenumbering,
+    XrefTableToStreamReencoding,
+    XrefStreamToTableReencoding,
+    WhitespaceAndCommentPerturbation,
+    DictionaryKeyOrderPermutation,
+    StreamFilterRecomposition,
+    IncrementalChainSquash,
+    PageTreeRebalance,
+    FontSubsetPrefixRename,
+    OptionalContentConfigReorder,
+}
+
+pub struct MetamorphicExpectation {
+    pub preserved_surfaces: Vec<String>,
+    pub allowed_drift_surfaces: Vec<String>,
+    pub forbidden_drift_surfaces: Vec<String>,
+}
+
+pub struct MetamorphicWitness {
+    pub transform_kind: MetamorphicTransformKind,
+    pub before_digest: [u8; 32],
+    pub after_digest: [u8; 32],
+    pub expectation: MetamorphicExpectation,
+    pub observed_deltas: Vec<String>,
+    pub verdict: String,
+}
+
+pub struct FixtureGenealogy {
+    pub fixture_digest: [u8; 32],
+    pub parent_fixture: Option<[u8; 32]>,
+    pub derived_by: Option<MetamorphicTransformKind>,
+    pub reducer_chain: Vec<String>,
+}
+```
+
+Rules:
+- `tests/metamorphic/` carries representation-preserving or bounded-drift
+  transforms with explicit surface expectations
+- `tests/reducers/` carries deterministic minimizers for crashes,
+  disagreements, proof failures, and repair drift
+- reduced fixtures MUST retain `FixtureGenealogy` so minimized cases stay
+  attributable to their parent corpus artifacts and transform chain
+- metamorphic proof SHOULD compare receipts first and bytes/pixels second when
+  the transform is intended to preserve meaning rather than byte layout
+
 **Specific test case classes and what each proves:**
 
 *Class: xref-repair*
@@ -5911,6 +6273,10 @@ Proves: the content stream interpreter handles scale and edge cases without perf
 *Class: signature-preserve*
 Test cases: signed documents modified with incremental-append save, verification that byte ranges are preserved, verification that existing signatures validate after Monkeybee's modifications.
 Proves: preserve-mode write path does not corrupt existing signatures.
+
+*Class: metamorphic-proof*
+Test cases: object renumbering, xref table/stream reencoding, whitespace/comment perturbation, dictionary key-order permutation, stream-filter recomposition, incremental-chain squash, page-tree rebalance, font-subset prefix rename, and optional-content configuration reorder.
+Proves: semantic, render, extraction, and receipt surfaces follow declared preserved/allowed/forbidden drift expectations rather than accidental byte identity.
 
 *Class: redaction-safety*
 Test cases: text-only, image-only, mixed vector/text, reused XObjects, form XObjects, transparency, and canary-text leakage checks.
@@ -6607,6 +6973,9 @@ pub struct NumericRobustnessProfile {
 Rules:
 - `RenderReport`, `ExtractReport`, and canonical `BenchmarkWitness` artifacts
   SHOULD surface the active `NumericRobustnessProfile`
+- geometry-sensitive derived artifacts SHOULD also expose a
+  `GeometryWitness` digest so the active tolerance/degeneracy path stays
+  auditable at artifact granularity
 - `proof-canonical` mode MUST pin the active profile
 - any downgrade from a stronger to a weaker numeric kernel is a
   plan-selection event and must remain visible in trace/evidence artifacts
@@ -6942,6 +7311,47 @@ No feature may be `v1_gating` in one section and `post_v1` in another.
 `tagged_structure_preservation` MUST have an explicit scope class.
 Recommended initial classification: `v1_advisory`.
 
+### Capability surface matrix doctrine
+
+The scope registry remains the canonical declaration of intended support.
+Monkeybee additionally generates a schema-versioned `CapabilitySurfaceMatrix`
+from the scope registry, support-class rules, determinism classes, proof
+artifacts, and feature-module/provider manifests so every public capability
+claim is derived from one machine-readable surface.
+
+```
+pub enum SupportClass {
+    ProofCanonical,
+    NativeCompatible,
+    NativeHardened,
+    NativeStrict,
+    WasmStrict,
+    ExperimentalOnly,
+}
+
+pub struct CapabilitySurfaceMatrixEntry {
+    pub feature_code: FeatureCode,
+    pub support_class: SupportClass,
+    pub compatibility_tier: u8,
+    pub determinism_class: Option<RenderDeterminismClass>,
+    pub required_modules: Vec<String>,
+    pub required_providers: Vec<String>,
+    pub proof_gating: bool,
+    pub witness_surfaces: Vec<String>,
+    pub expected_degradations: Vec<FeatureCode>,
+}
+```
+
+Rules:
+- README capability tables, website matrices, CLI capability output, and CI
+  gates MUST be generated from `CapabilitySurfaceMatrix`
+- no public capability claim may be hand-maintained once the matrix exists
+- feature promotion from experimental or advisory to release-facing support MUST
+  update the matrix and attach proof references
+- the matrix is generated from `docs/scope_registry.yaml` plus proof/capability
+  artifacts; it is not a second competing source of truth
+- the CLI MUST expose `monkeybee capability-matrix --json`
+
 ### Functional gates
 
 - [ ] Parser handles all corpus categories with correct Tier 1/2/3 classification.
@@ -6983,9 +7393,11 @@ Recommended initial classification: `v1_advisory`.
 
 - [ ] Invariant certificates are emitted, schema-validated, and independently recomputable in proof mode.
 - [ ] Ambiguous-repair fixtures produce hypothesis-set evidence rather than silent collapse.
+- [ ] Metamorphic proof fixtures emit schema-valid witnesses and deterministic fixture genealogy for preserved, bounded-drift, and forbidden-drift transforms.
 - [ ] Temporal replay and semantic-anchor stability harnesses run on representative fixtures.
 - [ ] Canonical proof runs emit reproducibility manifests, plan-selection records, and typed oracle-disagreement artifacts linked from ledgers and capsules.
 - [ ] Canonical proof runs emit oracle-consensus records and blind-spot ledgers wherever arbitration or coverage thresholds materially affect release-facing claims.
+- [ ] Canonical proof and scope outputs generate a capability surface matrix consumed by README/site/CLI surfaces without manual drift.
 
 ### Test obligation matrix
 
@@ -6999,7 +7411,7 @@ Each gated test class has a defined pass threshold and responsible crate:
 | producer-quirks | parser + render | ≥90% of quirk fixtures render correctly | MS-SSIM ≥0.95 |
 | incremental-update | parser + write | 100% of corpus fixtures | Parse-save-reparse |
 | encryption-read | parser | 100% of standard handlers (V1-V5) | Decrypt success |
-| 3d-render | 3d + render | ≥95% of PRC/U3D fixtures render correctly | Screenshot similarity + scene-graph validation |
+| 3d-render | 3d + render | ≥95% of PRC/U3D fixtures render correctly | Screenshot similarity + scene-receipt / scene-graph validation |
 | annotation-roundtrip | annotate + write | 100% of annotation types | Geometry ≤0.5pt drift |
 | page-mutation | edit + document | 100% of mutation ops | Structural validity |
 | generation | compose + write | 100% of generation tests | Strict-mode self-parse + ref render |
@@ -7011,6 +7423,7 @@ Each gated test class has a defined pass threshold and responsible crate:
 | substrate-delta | substrate + document | 100% of edit fixtures | Changed-subgraph reuse + digest stability |
 | historical-replay | bytes + substrate + document | 100% of multi-revision fixtures | Frame-local render/extract/diff consistency |
 | hypothesis-recovery | parser + proof | ≥99% candidate-selection stability on ambiguous corpus or explicit unresolved classification | Candidate digests + evidence |
+| metamorphic-proof | proof + parser + write | 100% of declared representation-preserving fixtures preserve their required surfaces | Metamorphic witnesses + receipt/render/extraction expectations |
 | cross-document-import | document + edit + write | 100% of copy/merge/split fixtures | Provenance map completeness + import-closure certificate + render/structure validity |
 | policy-composition | core + security + write | 100% invalid combinations rejected, 100% canonical combinations stable | Conflict classification + policy digest stability |
 | query-acceleration | substrate + extract | ≥95% of large-query fixtures use fresh indexes or explicit scan fallback | Index freshness + invalidation-witness completeness |
@@ -7089,7 +7502,7 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 - [ ] All `unsafe` blocks are documented and tested.
 - [ ] Public API is documented with examples.
 - [ ] README and website capability tables are generated from proof artifacts + scope registry
-      (no manual capability claims).
+      via the generated capability surface matrix (no manual capability claims).
 - [ ] Resource limits are enforced for all adversarial-input-facing code paths.
 - [ ] Artifact publication paths for saves, ledgers, capsules, and benchmark witnesses are crash-safe and manifest-last.
 
