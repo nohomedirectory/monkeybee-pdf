@@ -69,7 +69,14 @@ and rendering-quality upgrades adds **39** more named capabilities for a forward
 catalog lanes, yielding an inclusive planning total of **155** when those preserve/expose surfaces
 are counted too. This revision also adds a **26-item deep-correctness and hardening uplift**,
 yielding a **169-item priority-plus-hardening total** and a **181-item fully inclusive planning
-total** when every currently named uplift family is counted together.
+total** when every currently named uplift family is counted together. The latest
+additive expansion then contributes **70 more concrete planning additions**
+across formal verification, external validation, test/CI hardening, demo and
+binding surfaces, release engineering, comparative benchmarking,
+observability/doctoring, documentation, security hardening, and ecosystem
+lanes, yielding a **251-item one-for-one working planning total** and a
+**240+** public shorthand when packaging/documentation lanes are grouped into
+their families.
 
 Those counts are not marketing garnish. In implementation terms they mean the workspace topology,
 report structures, ledger code families, fixture manifests, and test obligations must all be able
@@ -105,6 +112,16 @@ named inventory is nearly **5x** larger on named algorithmic breadth, while the 
 priority-plus-hardening framing is well beyond **5x**. Implementation planning must therefore
 preserve the full information gain from both uplifts in crate boundaries, proof fixtures, report
 schemas, and ledger code families rather than compressing them into generic "future work."
+
+The new 70-item expansion means the implementation surface must now also own:
+
+- a real formal-verification workspace (`lean/`) plus Kani/Miri/sanitizer lanes
+- external-validator adapters and typed corpus imports
+- browser/demo packaging plus language-binding crates
+- release/distribution machinery, feature-matrix governance, and package-size
+  tracking
+- observability, doctoring, and error-message doctrine as code, not prose
+- published comparative benchmarking and ecosystem-adoption surfaces
 
 ## APR sequencing for expansion lanes
 
@@ -180,11 +197,29 @@ The 26-item hardening uplift is intentionally cross-cutting rather than isolated
   approval classification, JavaScript timing graphs, structured destinations, and web-capture
   provenance.
 
+The additive 70-item expansion is sequenced as a second explicit wave stack:
+
+- **Wave 4 — proof hardening:** Lean/Kani/Miri/sanitizer infrastructure,
+  external-validator adapters, smoke/property/snapshot/mutation/differential
+  test lanes, and adversarial-budget fixtures. This wave is mostly owned by
+  `monkeybee-proof`, `monkeybee-security`, `monkeybee-parser`,
+  `monkeybee-write`, and shared CI tooling.
+- **Wave 5 — outward-facing packaging:** `monkeybee-wasm`, browser demo,
+  `monkeybee doctor`, comparative benchmarking, and observability/error-quality
+  surfaces. This wave makes the proof posture legible without changing the core
+  engine thesis.
+- **Wave 6 — ecosystem reach:** Python/Node/C bindings, plugin/provider
+  registration hardening, migration/adoption docs, fixture/bench helper crates,
+  and release-engineering automation. This wave remains important, but it must
+  stay downstream of the stable Rust facade and scope registry.
+
 ## Workspace topology
 
 ```
 monkeybee-pdf/
 ├── Cargo.toml                    # workspace root
+├── rust-toolchain.toml           # pinned toolchain for reproducible/MSRV-aware builds
+├── lean/                         # Lean 4 workspace for formal proof lanes
 ├── crates/
 │   ├── monkeybee/                # stable public facade crate
 │   │   ├── src/
@@ -490,6 +525,7 @@ monkeybee-pdf/
 │   │   │   ├── lib.rs
 │   │   │   ├── corpus.rs         # corpus management and indexing
 │   │   │   ├── render_compare.rs # render comparison harness
+│   │   │   ├── external.rs       # veraPDF/JHOVE/external-suite adapters + typed findings
 │   │   │   ├── roundtrip.rs      # round-trip validation harness
 │   │   │   ├── temporal.rs       # historical replay harness
 │   │   │   ├── anchors.rs        # semantic-anchor stability harness
@@ -497,7 +533,12 @@ monkeybee-pdf/
 │   │   │   ├── certificates.rs   # invariant-certificate recomputation + audit
 │   │   │   ├── ledger.rs         # compatibility and hypothesis ledgers
 │   │   │   ├── benchmark.rs      # performance benchmarks
+│   │   │   ├── smoke.rs          # sub-10-second catastrophic-regression suite
+│   │   │   ├── snapshot.rs       # insta-backed output snapshot harnesses
+│   │   │   ├── property.rs       # proptest generators and invariant runners
+│   │   │   ├── mutants.rs        # cargo-mutants orchestration / result ingestion
 │   │   │   ├── fuzz.rs           # fuzz testing coordination
+│   │   │   ├── competitive.rs    # MuPDF/PDFium comparative benchmark orchestration
 │   │   │   ├── reducer.rs        # automatic failure minimization
 │   │   │   └── evidence.rs       # artifact generation, evidence-closure graphs, and bundle publication
 │   │   └── Cargo.toml
@@ -516,10 +557,17 @@ monkeybee-pdf/
 │   │   │   └── ltv.rs            # offline long-term validation readiness
 │   │   └── Cargo.toml
 │   ├── monkeybee-native/         # all optional FFI/native bridges, broker adapters, and isolation attestations
-│   └── monkeybee-cli/            # command-line interface
+│   ├── monkeybee-cli/            # command-line interface
 │       ├── src/
-│       │   └── main.rs
+│       │   ├── main.rs
+│       │   └── doctor.rs         # environment/corpus/oracle/self-diagnostic command
 │       └── Cargo.toml
+│   ├── monkeybee-wasm/           # wasm-bindgen package and browser worker helpers
+│   ├── monkeybee-python/         # PyO3 + maturin bindings
+│   ├── monkeybee-node/           # NAPI-RS bindings
+│   └── monkeybee-capi/           # cbindgen-powered C ABI surface
+├── web/
+│   └── demo/                     # static demo/playground shell and Playwright coverage
 ```
 
 Key topology rules:
@@ -543,6 +591,12 @@ Key topology rules:
    action/portfolio/multimedia inventory are intentionally cross-cutting lanes. They must reuse
    shared color, structure, content, and preservation machinery rather than spawning parallel
    feature silos.
+9. `monkeybee-wasm`, `monkeybee-python`, `monkeybee-node`, and `monkeybee-capi` are adapter
+   packages over the shared facade/session model. They do not own alternate parsing, rendering, or
+   save logic.
+10. The `web/demo` surface is proof packaging, not a second engine. It consumes generated
+    capability/proof artifacts and the `monkeybee-wasm` package instead of maintaining separate
+    truth tables.
 
 ## Crate dependency graph
 
@@ -4088,6 +4142,10 @@ PdfSnapshot + extract profile
 - **`indexmap`** — ordered dictionaries
 - **`dashmap`** — concurrent maps for caches, substrate store, and query metadata
 - **`blake3`** — baseline digest engine for substrate nodes, roots, deltas, and receipts
+- **`rustybuzz`** — shaping engine for generated complex-script text
+- **`tracing` + `tracing-subscriber`** — structured spans/events for library and CLI observability
+- **`metrics`** — counters/gauges/histograms for engine and proof telemetry
+- **`miette`** — rich CLI diagnostic rendering with spans/help text
 - **`once_cell` / `std::sync::OnceLock`** — lazy initialization
 - **`asupersync`** — async runtime, structured concurrency, cancellation, Budget semiring, Outcome type, LabRuntime deterministic testing, watch/oneshot channels, DPOR, oracle suite, chaos injection
 - **`rayon`** — CPU-bound parallelism; lifecycle owned by asupersync regions
@@ -4097,6 +4155,15 @@ PdfSnapshot + extract profile
 - **`aes`** — AES encryption for PDF security handlers
 - **`rc4`** — RC4 encryption for legacy security handlers
 - **`miniz_oxide`** — alternative pure-Rust DEFLATE
+- **`proptest`** — property-based invariant testing
+- **`insta`** — snapshot testing for CLI/report/output surfaces
+- **`criterion`** — benchmark harnesses
+- **`dhat`** — heap/allocation profiling
+- **`pyo3` + `maturin`** — Python bindings and packaging
+- **`napi-rs`** — Node.js bindings
+- **`cbindgen`** — C header generation
+- **`wasm-bindgen`** — WASM/browser bindings
+- **`cargo-deny` / `cargo-audit` / `cargo-mutants`** — dependency governance and mutation-testing tooling
 
 ### Dependency principles
 
@@ -4112,6 +4179,9 @@ PdfSnapshot + extract profile
   dependency on Salsa in the baseline plan. The query engine must integrate tightly with
   asupersync/Rayon budgets, spill-aware caches, deterministic receipts, and document-scale binary
   artifacts; a focused internal query runtime is the more realistic v1 choice.
+- Binding/demo dependencies (`pyo3`, `napi-rs`, `wasm-bindgen`, frontend test runners) remain
+  outside the core engine crates and must not leak host-runtime assumptions back into the facade or
+  kernel crates.
 - No dependency may introduce undefined behavior or memory unsafety that escapes its abstraction boundary.
 
 ## Test obligations by crate
@@ -4144,11 +4214,15 @@ PdfSnapshot + extract profile
 - Active-content policy tests: XFA / active-content detection never silently upgrades to native execution.
 - Native-isolation tests: `PureRust`, `WorkerIsolated`, `BrokeredSubprocess`, and `Denied`
   paths emit the correct isolation-class evidence and never leak partial native results into clean caches.
+- Linux isolation tests: seccomp/Landlock policy application is exercised on supported hosts and
+  skipped explicitly with a typed reason on unsupported hosts.
 
 ### monkeybee-parser
 - Unit tests: lexer on known token sequences, object parsing on all types, xref parsing on well-formed and malformed tables.
 - Corpus tests: parse every file in the pathological corpus, verify no panics, collect diagnostics.
 - Fuzz tests: random bytes -> parser -> no panics, no UB, bounded memory.
+- Kani tests: bounded-allocation, no-panic, xref-offset overflow, allocation-overflow sizing, and
+  bounded reference-resolution invariants.
 - Repair tests: known malformed inputs -> verify repair produces usable output, including
   non-standard Type 1 encryption keys, `/Identity` crypt-filter no-op streams, and broken
   name/number-tree `/Limits`.
@@ -4205,6 +4279,8 @@ PdfSnapshot + extract profile
 - Unit tests: font program parsing (Type 1, TrueType, CFF, CIDFont, Type 3), CMap parsing, ToUnicode resolution.
 - Decode pipeline tests: char code -> font/CMap -> CID/glyph -> Unicode/metrics for each font type.
 - Authoring pipeline tests: Unicode -> shaping/bidi/line breaking/font fallback -> positioned glyph runs.
+- Shaping-engine tests: `rustybuzz`-backed Arabic/Indic/Thai shaping fixtures remain deterministic
+  and script-correct across releases.
 - Unicode fallback chain tests: known fonts with broken/missing ToUnicode produce expected mappings.
 - Truth-surface tests: extraction can cite `FontTruthClass` per span on demand,
   and render-side substitution remains distinguishable from extraction-side
@@ -4221,6 +4297,8 @@ PdfSnapshot + extract profile
   regenerated or repaired fonts.
 - Validation tests: `/FontDescriptor` flag bits are cross-checked against embedded font data and
   CID vertical metrics from `/W2` / `/DW2` drive expected vertical layout.
+- Variable-font tests: variation-axis dictionaries, instance selection, and preservation receipts
+  remain stable even before full variation rendering is promoted.
 - Search/hit-test tests: known text at known positions -> verify search finds it, hit-test returns correct quads.
 
 ### monkeybee-color
@@ -4407,6 +4485,19 @@ PdfSnapshot + extract profile
 - Evidence tests: artifact generation produces valid, parseable output.
 - Ledger JSON schema tests: ledger output validates against schema, version tracking fields populate correctly, schema versioning remains backward-compatible within majors.
 - Reproducibility tests: canonical runs emit a manifest and every ledger/capsule/disagreement/plan-selection artifact links back to it.
+- External-validator tests: veraPDF/JHOVE adapters parse typed findings correctly and fixture
+  expectations match Isartor/Ghent/Matterhorn/PDF Association lanes.
+- Smoke-lane tests: catastrophic-regression smoke suites stay under the target runtime envelope and
+  exercise open/render/save/help-path basics.
+- Snapshot tests: insta-backed CLI/ledger/report outputs pin stable machine-readable surfaces.
+- Mutation-orchestration tests: cargo-mutants result ingestion stays schema-valid and kill-rate
+  regressions are surfaced coherently.
+- Property-generator tests: proptest generators remain deterministic under pinned seeds and emit
+  reusable minimized fixtures on failure.
+- Differential-fuzz tests: oracle disagreement artifacts from MuPDF/Poppler comparative fuzzing
+  preserve provenance through reducers and capsules.
+- Formal-proof plumbing tests: Lean workspace status, `lake build` result ingestion, and Kani/Miri
+  summaries are surfaced as typed proof artifacts rather than ad hoc CI logs.
 - Topology-policy tests: proof/oracle work cannot silently starve viewport-critical
   render lanes under canonical topology policies.
 - Coverage-lattice tests: typed coverage observations and
@@ -4447,7 +4538,50 @@ PdfSnapshot + extract profile
 - Certificate tests: proof harness can recompute invariant-certificate digests independently.
 - Evidence-bundle tests: canonical regressions publish `ReproducerBundle`s whose
   environment lock and child-artifact closure are complete and durable.
+- Comparative-benchmark tests: MuPDF/PDFium benchmark ingest produces stable ratio outputs for
+  `COMPARED_TO.md` and dashboard consumers.
 - Regression tests: unknown degradations, hypothesis drift, or scope-class violations fail unless triaged.
+
+### monkeybee-native
+- Isolation tests: native bridges emit version/isolation attestations and never contaminate clean
+  caches on timeout, crash, or policy denial.
+- Broker tests: subprocess/broker adapters survive restart and emit typed failure capsules.
+- FFI-audit tests: supported native modules are enumerated with version/provenance metadata and
+  corresponding seccomp/Landlock policy expectations when applicable.
+
+### monkeybee-cli
+- Snapshot tests: `render`, `extract`, `inspect`, `diagnose`, `proof`, `capabilities`, and
+  `doctor` outputs remain stable and machine-readable where promised.
+- Help-surface tests: every subcommand's `--help` output is present and included in the smoke lane.
+- Doctor tests: missing oracle binaries, absent corpora, degraded host capabilities, and invalid
+  feature-module states produce actionable diagnostics instead of vague failures.
+
+### monkeybee-wasm
+- Browser-worker tests: render/extract/ledger APIs operate correctly in Worker contexts and respect
+  transfer/clone boundaries.
+- Size-budget tests: compressed WASM artifacts stay within the configured budget or emit a visible
+  warning artifact.
+- Demo-integration tests: the static demo consumes the package without drift in capability or
+  ledger schema expectations.
+
+### monkeybee-python
+- API-mirror tests: open/render/extract/inspect/annotate/save mirror the Rust facade semantics on
+  representative fixtures.
+- Packaging tests: maturin-built wheels import cleanly on supported targets and generated `.pyi`
+  stubs remain in sync with the exported API.
+- NumPy bridge tests: raster outputs map into NumPy arrays without shape/stride corruption.
+
+### monkeybee-node
+- Buffer/worker tests: Buffer-based I/O and worker-thread rendering/extraction behave deterministically.
+- Type-generation tests: generated TypeScript declarations remain aligned with the NAPI surface.
+- Packaging tests: npm artifacts load on supported targets without postinstall surprises.
+
+### monkeybee-capi
+- ABI tests: generated headers remain stable across compatible revisions and opaque-handle
+  ownership rules are enforced.
+- Memory-management tests: `monkeybee_*_free()` contracts are Valgrind-clean on canonical fixture
+  paths.
+- Error-taxonomy tests: C-facing error codes remain aligned with the shared Rust taxonomy.
 
 ## Subordinate implementation docs
 
@@ -4463,6 +4597,12 @@ their respective subsystems:
 - `docs/implementation/geometry-kernel.md` — numeric robustness doctrine, tolerance policy, degeneracy classes, and geometry witnesses
 - `docs/implementation/preservation-algebra.md` — preserved properties, transform composition, WritePlan derivation, receipts
 - `docs/implementation/save-feasibility.md` — preservation constraint graphs, escalation policy, unsat-core reporting
+- `docs/implementation/formal-verification.md` — Lean workspace layout, Kani/Miri ownership, proof artifact ingestion
+- `docs/implementation/external-validation.md` — veraPDF/JHOVE/external-suite adapters, typed findings, corpus licensing boundaries
+- `docs/implementation/observability.md` — tracing hierarchy, metrics schema, doctor command, error-message doctrine
+- `docs/implementation/bindings.md` — Python/Node/C/WASM adapter rules, packaging, API mirroring, worker constraints
+- `docs/implementation/demo.md` — static demo architecture, Playwright/Lighthouse/axe coverage, issue-capture workflow
+- `docs/implementation/release.md` — reproducible builds, MSRV, cross-compilation, release automation, feature-matrix governance
 - `docs/implementation/document-model.md` — semantic object index, reference resolution, dependency graph, snapshots, transactions
 - `docs/implementation/cross-document-import.md` — import closure computation, collision handling, provenance remap, target id allocation
 - `docs/implementation/normal-forms.md` — semantic-normal-form digests, alias maps, proof tolerances, equivalence claims

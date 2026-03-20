@@ -1113,6 +1113,22 @@ Proof surfaces: distribution-plan fixtures, metadata/attachment stripping
 regressions, layer-state pinning checks, taint/erasure receipts on
 redaction-heavy files, and share-safe signature-impact classification.
 
+### Workflow 22: Explore, compare, and report in the browser
+
+A user drops a PDF into a static Monkeybee playground that runs entirely in the
+browser. The demo renders the file with `monkeybee-wasm`, compares it side by
+side with `pdf.js`, exposes the compatibility ledger, shows extracted text with
+truth/provenance highlighting, visualizes the object graph and page tree,
+offers X-ray toggles for layers/annotations/operators, inventories fonts and
+signatures, surfaces parse/render/memory telemetry, and can file a bug report
+containing the ledger plus disagreement artifacts without requiring a server
+round trip.
+
+Proof surfaces: Playwright E2E coverage for the interactive demo, Lighthouse CI
+scores of at least 90 on all categories, `axe-core` accessibility checks,
+Playwright visual-regression screenshots, and a compressed WASM budget of
+at most 5 MiB for the core browser build.
+
 ---
 
 ## Part 2 — Compatibility target
@@ -1560,6 +1576,49 @@ annotations is Tier 2.
 required to process the document. The engine must parse requirement dictionaries, check handler
 availability, and report unsatisfied requirements in `CapabilityReport`.
 
+### Additional standards and feature clarifications
+
+Several modern or commonly encountered feature families are too important to
+leave as implied footnotes. Monkeybee therefore tracks the following explicitly:
+
+- **SVG-in-PDF (PDF 2.0):** native SVG graphic content MUST be detected,
+  preserved, and ledgered as its own feature family rather than being collapsed
+  into generic XObject handling. Initial scope is `v1_advisory` for
+  parse/preserve/round-trip and `post_v1` for native rendering through a
+  sandboxed or pure-Rust SVG pipeline such as `resvg` or an equivalent audited
+  engine.
+- **Variable fonts:** `/FontVariation` dictionaries, variation-axis metadata,
+  and instance-selection state MUST be parsed and preserved distinctly from
+  static OpenType/CFF fonts. Initial scope is `v1_advisory` for detection and
+  preservation, `post_v1` for full variation-aware rendering and authoring.
+- **OpenType shaping for generated text:** Monkeybee's authoring pipeline MUST
+  name an implementation strategy rather than hand-waving "bidi and shaping."
+  The baseline plan is `rustybuzz` for shaping plus explicit bidi ordering in
+  `monkeybee-text::shaping`; this is `v1_gating` for any generation path that
+  claims correct Arabic, Devanagari, Thai, or other complex-script output.
+- **PDF/UA-2:** PDF/UA-2 (ISO 14289-2:2024) MUST be tracked as a separate scope
+  and validation family from PDF/UA-1 because the requirements differ and it is
+  coupled to PDF 2.0 semantics. It is not a baseline-v1 gate, but it MUST exist
+  in the scope registry, compatibility ledger, and audit planning as a distinct
+  post-v1 lane rather than being implicitly bundled into generic "PDF/UA."
+- **PDF/A-4 subtypes:** PDF/A-4, PDF/A-4e, and PDF/A-4f MUST be modeled as
+  distinct profile classes with separate constraint surfaces for embedded files,
+  engineering/3D content, and attachment policy. Validation may remain advisory
+  in v1, but the subtype distinction cannot be omitted.
+- **PDF/X-6 specifics:** PDF/X-6 support must explicitly name spot-color,
+  transparency, overprint, and output-intent obligations rather than only
+  advertising generic "profile validation." Initial scope is `v1_advisory`
+  validation backed by public corpus and external validator evidence.
+- **Redaction standard compliance:** PDF/A-4 Annex F and the associated
+  redaction-handling rules MUST be cited by the redaction and validation
+  surfaces. Monkeybee's redaction assurance cannot stop at visual removal; it
+  must also reason about profile-compliance implications when a caller targets a
+  PDF/A-4 derivative.
+- **Mathematical and symbol-heavy PDFs:** math-heavy fixture classes such as
+  arXiv-style LaTeX output with dense Type 1 math fonts, Symbol/ZapfDingbats
+  fallback, and unusual glyph-name mappings MUST remain a named extraction and
+  rendering truth surface rather than being treated as incidental font noise.
+
 ### Tiered compatibility doctrine
 
 For every feature category, Monkeybee must classify its handling:
@@ -1795,6 +1854,97 @@ rendering, or write policy; it owns the persistent computational substrate that 
 `monkeybee-syntax` remains dumb but durable. `monkeybee-document` remains semantically rich. The
 substrate exists so those crates do not each reinvent structural sharing, diffing, lineage, and
 invalidation in slightly incompatible ways.
+
+### Demo-site and browser-proof architecture
+
+The public demo is part of the proof doctrine, not marketing garnish. Monkeybee
+therefore carries an explicit browser-facing architecture:
+
+- the demo is a static site deployable to GitHub Pages, Cloudflare Pages, or
+  Netlify with no required server-side component
+- `monkeybee-wasm` provides the browser engine core; the site shells it with a
+  worker-friendly UI layer rather than reimplementing PDF semantics in
+  JavaScript
+- first-page render should begin before the full browser payload is resident;
+  progressive loading is allowed to stage additional WASM/data assets after the
+  first visible result
+- a service worker SHOULD cache the WASM, standard assets, and recently used
+  ledgers so the demo remains usable offline after the first load
+- share links MUST be able to encode relevant render settings such as DPI,
+  comparison mode, page range, and inspection toggles in the URL
+- OpenGraph metadata SHOULD allow static preview sharing with rendered page
+  thumbnails when build-time fixture pages are available
+- the demo surface itself is required to expose the compatibility ledger,
+  side-by-side `pdf.js` comparison, extracted text with truth/provenance
+  highlighting, object/page-tree visualization, annotation/layer/operator
+  X-ray overlays, font inventory, signature summary, performance counters, and
+  one-click issue capture with attached evidence references
+
+### Language-binding architecture
+
+Monkeybee's public surface is not Rust-only. The workspace architecture MUST
+reserve explicit lanes for thin bindings over the shared facade/session model:
+
+- **`monkeybee-python`** via PyO3 + maturin, published as `monkeybee` on PyPI,
+  exposing `open`, `render`, `extract_text`, `extract_images`, `inspect`,
+  `annotate`, and `save`, with NumPy-friendly raster exchange, optional async
+  integration, generated `.pyi` stubs, and a pytest mirror of core workflow
+  tests
+- **`monkeybee-node`** via NAPI-RS, published as `monkeybee` on npm, exposing
+  buffer-based I/O, worker-thread rendering/extraction, and generated
+  TypeScript declarations backed by Jest or Vitest workflow tests
+- **`monkeybee-capi`** via `cbindgen`, exposing opaque engine/session/snapshot
+  handles, error codes aligned with the shared taxonomy, explicit
+  `monkeybee_*_free()` ownership release, and Valgrind-clean fixture tests
+- **`monkeybee-wasm`** via `wasm-bindgen`, published as `@monkeybee/wasm`,
+  exposing browser-friendly typed APIs, streaming/progressive rendering,
+  Web Worker helpers, and optional `SharedArrayBuffer` acceleration where host
+  policy allows it
+
+Rules:
+- bindings MUST remain thin adapters over the Rust core, not forked business
+  logic or alternate parsers/renderers
+- binding tests MUST mirror the same closed-loop workflows the Rust facade
+  proves
+- initial scope is `post_v1` for Python/Node/C and `v1_advisory` for WASM
+  because the browser proof surface materially de-risks the architecture even
+  before it becomes release-gating
+
+### Observability and operator-diagnostics doctrine
+
+Monkeybee's engine surfaces must be operationally explainable for library
+consumers, CLI users, and proof infrastructure:
+
+- all crates SHOULD emit structured spans through `tracing`, using a
+  hierarchy that matches engine/session/snapshot/operation/page/resource lanes
+- quantitative counters, gauges, and histograms SHOULD be emitted through
+  `metrics` for parse latency, render latency, cache hit/miss, repair counts,
+  decode counts, memory envelopes, and active-session state
+- CLI-facing error rendering SHOULD use `miette` or an equivalent rich
+  diagnostic layer so source spans, help text, and spec/profile references stay
+  actionable instead of degenerating into raw token errors
+- `monkeybee doctor` is a required CLI/operator surface for checking oracle
+  availability, corpus indexing, feature-module health, host capabilities, and
+  configuration drift before a proof or benchmark run begins
+- every user-facing error MUST state what happened, why it matters, and what to
+  do next; spec/profile references SHOULD be attached when they materially help
+
+### Extension, adapter, and ecosystem doctrine
+
+Monkeybee names extension and adoption lanes explicitly so the engine can become
+useful in adjacent ecosystems without surrendering architectural ownership:
+
+- the project SHOULD document migration paths from `pdf-rs`, `lopdf`,
+  `printpdf`, and similar libraries, and may expose adapter traits or
+  compatibility shims where doing so accelerates adoption without freezing bad
+  internal abstractions
+- the `FeatureModule` model MUST grow into an explicit plugin-registration
+  contract for custom decoders, font providers, crypto providers, and oracle
+  providers rather than relying on ad hoc global registries
+- the ecosystem plan reserves `monkeybee-derive` for proc-macro helpers,
+  `monkeybee-test-fixtures` for canonical downstream corpus reuse, and
+  `monkeybee-bench-fixtures` for repeatable performance fixtures as separately
+  versioned crates or packages when the public API stabilizes
 
 ### Persistent incremental document substrate
 
@@ -8107,6 +8257,44 @@ Where references disagree, the disagreement itself is recorded and investigated.
 
 Every proof run records an oracle manifest: renderer name, exact version, build hash/container digest, invocation flags, and platform. Pinned oracle manifests are required in canonical CI runs for reproducibility.
 
+### External validation tool integration
+
+Consensus renderers are necessary but not sufficient. Monkeybee also integrates
+external validators, profile suites, and third-party corpora as typed proof
+surfaces:
+
+- **veraPDF:** every Monkeybee-generated PDF/A output MUST be runnable through
+  veraPDF. The XML report is parsed into typed `VeraPdfFinding` records. PDF/A-4
+  outputs require zero validator violations to pass their profile gate. The
+  exact veraPDF version is pinned in the oracle manifest.
+- **Isartor:** the Isartor malformed PDF/A suite lives under
+  `tests/corpus/external/isartor/`, with each file carrying an expected
+  violation class so Monkeybee proves it catches the known defect rather than
+  merely failing vaguely.
+- **Ghent Workgroup suites:** these fixtures back enterprise print claims for
+  output intents, overprint, color spaces, and trap-network semantics.
+- **JHOVE:** format-identification and characterization results are captured
+  alongside veraPDF findings for cross-validation of conformance claims.
+- **Bavaria / PDF Association suites:** PDF 2.0 and tagged-accessibility test
+  files from the PDF Association are indexed as first-class proof lanes.
+- **Poppler regression corpus:** long-tail parser and renderer regressions from
+  Poppler become external oracle fixtures rather than relying only on ad hoc
+  single-file imports.
+- **pdf.js test corpus:** browser and web-font/linearization edge cases are
+  imported explicitly rather than sampled indirectly through render comparison.
+- **Apache PDFBox test files:** these strengthen forms, encryption, and
+  signatures coverage.
+- **iText test PDFs:** these strengthen digital-signature, PAdES, and
+  form-handling proof surfaces.
+- **ICC reference profiles and targets:** ICC.org profiles plus canonical test
+  images/targets back color-truth and prepress assertions.
+- **Matterhorn / WCAG / PDF/UA assertions:** Matterhorn Protocol assertions are
+  mapped into explicit Monkeybee audit rules and fixtures.
+
+These lanes are owned by `B-PROOF-019` plus the `B-EXTERNAL-001` through
+`B-EXTERNAL-010` family. Oracle manifests MUST track exact tool versions,
+fixture provenance, and redistribution constraints for every external suite.
+
 ### Arlington-model conformance validation
 
 The Arlington PDF Model is a machine-readable description of the entire PDF specification's object structure: which dictionary keys are required, optional, or deprecated for each object type; what types and value ranges are legal for each key; which keys are mutually exclusive or conditionally required. Monkeybee integrates the Arlington model as a structural validation oracle:
@@ -8116,6 +8304,47 @@ The Arlington PDF Model is a machine-readable description of the entire PDF spec
 3. **Integration with the write path:** Before serializing any object, validate it against the Arlington model. The write path must not emit objects that violate the spec — this is a hard invariant, not a best-effort check.
 4. **Profile-specific validation:** When the target output is a supported v1 profile (PDF/A-4, PDF/X-6), the Arlington model encodes the additional constraints of that profile. The validator checks both base PDF conformance and profile-specific requirements. This is the foundation for the downlevel write mode.
 5. **Coverage metric:** Track which Arlington rules are exercised by the pathological corpus. Rules that are never exercised represent document structures the engine has never encountered — these are blind spots that should drive corpus acquisition.
+
+### Extended test methodology and CI hardening
+
+Example fixtures and differential renders are necessary but insufficient.
+Monkeybee explicitly layers the following disciplines into the proof doctrine:
+
+- **Property-based testing via `proptest`:** generate arbitrary object graphs,
+  content-stream operator sequences, edit-transaction sequences, font-encoding
+  chains, preservation-claim compositions, and import/remap scenarios with
+  invariant checks.
+- **Mutation testing via `cargo-mutants`:** after the core suite stabilizes,
+  mutation runs identify dead tests or under-asserted logic. Kill-rate
+  regression is actionable.
+- **Snapshot testing via `insta`:** CLI output, extraction surfaces,
+  compatibility-ledger JSON, diagnostics, `DiffReport`, and `WritePlanReport`
+  outputs are pinned and diffed on every relevant PR.
+- **Smoke suite:** the first CI stage is a sub-10-second suite that opens,
+  renders, saves, and reopens a small structurally diverse corpus slice,
+  validates Base 14 font metrics, and checks `--help` for every CLI subcommand.
+- **Differential fuzzing:** `cargo-fuzz` harnesses SHOULD compare Monkeybee
+  against MuPDF and/or Poppler on identical mutated inputs and emit typed
+  disagreement artifacts when object/render/text counts diverge materially.
+- **Chaos expansion:** write-time I/O failures, corrupt range-response bytes,
+  allocator/OOM injection, clock skew, and forced process interruption during
+  commit all belong in the chaos lane, not just parser/runtime cancellation.
+- **Regression-fixture generation:** every production bug, resolved oracle
+  disagreement, and minimized fuzz crasher MUST become a tracked fixture or
+  expectation update.
+- **Coverage enforcement:** CI SHOULD run `cargo-llvm-cov` or
+  `cargo-tarpaulin`, track branch as well as line coverage, publish reports as
+  artifacts, and target at least 85% line coverage for parser, renderer, and
+  writer families unless explicitly waived.
+- **Documentation coverage:** public API surfaces are expected to run warning
+  clean under `#![warn(missing_docs)]` and `cargo doc --no-deps`.
+- **Example coverage:** public API surfaces SHOULD carry working
+  `/// # Examples` blocks and `cargo test --doc` is a standard CI lane.
+- **Dependency governance:** `cargo-deny` and `cargo-audit` are canonical CI
+  lanes for license compatibility, duplicate-dependency visibility, and RustSec
+  vulnerability blocking.
+- **Runtime sanitizers:** ASAN, MSAN, and TSAN supplement Miri with real
+  workload and concurrency coverage.
 
 
 ### Round-trip requirements
@@ -8503,6 +8732,29 @@ Rules:
 
 **Aggregation:** The proof harness aggregates individual ledgers across the entire corpus into a corpus-level compatibility report: feature coverage matrix (which features are Tier 1/2/3 across the corpus), repair frequency histogram (which repairs fire most often), producer-specific breakdown, and regression tracking (did a feature that was Tier 1 last week become Tier 3?).
 
+### Honest comparative positioning and continuous competitive benchmarking
+
+Monkeybee is allowed to be ambitious, but not vague. Comparative claims MUST be
+anchored in generated evidence:
+
+- `COMPARED_TO.md` is a generated-or-checked-in comparative document that
+  tracks feature and proof-surface differences against `pdf-rs`/`lopdf`,
+  Poppler, MuPDF, PDFium, `pdf.js`, Apache PDFBox, iText, and Ghostscript
+- comparative claims MUST distinguish feature presence, correctness evidence,
+  and performance evidence rather than collapsing them into a single checkbox
+- continuous benchmarking SHOULD run Monkeybee against MuPDF and PDFium on a
+  pinned corpus slice and publish relative parse/render/extract numbers as
+  ratios, not only absolute local timings
+- comparative dashboards or static pages MAY be published, but only from the
+  same benchmark witnesses and oracle manifests already required by the proof
+  doctrine
+- no README, website, or release note may claim "faster" or "more correct"
+  without citing canonical benchmark witnesses and corpus-qualified oracle
+  evidence
+
+This lane is owned by `B-BENCH-004` and `B-DOCS-003` and is intended to make
+Monkeybee's public posture defensible rather than rhetorical.
+
 ### CI integration contract
 
 The proof harness integrates with CI as follows:
@@ -8851,17 +9103,75 @@ Rules:
 
 ### Targeted formal verification
 
-Monkeybee does not require "formal methods theater" everywhere. But for a small number of critical invariants where bugs would be catastrophic (security-relevant parser paths, preserve-mode byte integrity), formal verification provides stronger assurance than testing alone:
+Monkeybee does not require theorem-prover theater everywhere. It does require a
+named formal-verification lane for invariants where ordinary tests leave too
+much room for catastrophic failure.
 
-**Kani proof harnesses for parser safety:**
-- **Bounded allocation proof:** For each parser entry point (`parse_object`, `parse_xref`, `parse_content_stream`), prove via Kani that the parser cannot allocate more than `MAX_ALLOCATION_LIMIT` bytes for any input of bounded size. This is a proof that the parser is not vulnerable to zip-bomb or allocation-bomb attacks.
-- **No-panic proof:** For the core lexer and tokenizer, prove via Kani that no input sequence (up to a bounded length) can trigger a panic. This covers index-out-of-bounds, integer overflow, and unwrap-on-None paths.
-- **Reference resolution termination:** Prove that the indirect reference resolver terminates for all inputs (no infinite loops from circular references). The proof formalizes the visited-set invariant.
+**Lean 4 workspace and proof family:**
+
+- the repository reserves a top-level `lean/` workspace checked by `lake build`
+  in CI on every PR
+- the initial proof family is `B-LEAN-001` through `B-LEAN-011`
+- initial targets include:
+  - preservation-algebra composition for signature-safe transforms
+  - `q`/`Q` stack-discipline well-bracketing inside the graphics-state machine
+  - CTM-composition associativity in operator order
+  - clipping monotonicity inside save/restore frames
+  - reference-resolver termination via the visited-set invariant
+  - incremental-append byte-range integrity for signed ranges
+  - winding-number accumulation correctness for the exact analytic raster lane
+  - Porter-Duff algebra properties for documented blend families
+  - object-number allocator monotonicity and collision-freedom
+  - free-list generation-number monotonic increment
+- Lean proofs start as `v1_advisory`; once any three critical proofs are green
+  in CI, the family is promoted to `v1_supported_non_gating`
+
+**Kani proof harness expansion:**
+
+- the existing lexer-oriented Kani lane expands beyond "no panic" into
+  property-backed harnesses for every `unsafe` block that survives review
+- required bounded proofs include:
+  - bounded allocation for parser entry points
+  - no panic for core lex/token paths
+  - integer-overflow absence in xref-offset arithmetic
+  - allocation-overflow absence in decode-buffer sizing
+  - `DecodedStreamCache` eviction never serving stale data across snapshots
+  - `EditTransaction::commit()` never producing dangling references
+  - reference-resolver termination for bounded models
+  - preserve-mode byte-range integrity for incremental append
 
 **Preserve-mode byte integrity proof:**
-- The preserve-mode write path's central invariant is: bytes within the signed byte ranges of existing signatures are never modified. This can be formalized as a post-condition on the `write_incremental` function: for all (offset, length) pairs in the signature's `/ByteRange`, `output[offset..offset+length] == input[offset..offset+length]`. A Kani harness for bounded document sizes can verify this property exhaustively.
 
-These are not aspirational targets. They are specific, scoped verification goals with concrete proof harness designs. The engine can ship v1 without them complete, but the proof harness infrastructure must support them, and at least the no-panic and bounded-allocation proofs for the lexer should be delivered in v1.
+- the preserve-mode write path's central invariant remains:
+  `output[offset..offset+length] == input[offset..offset+length]` for every
+  signed `/ByteRange` span not explicitly rewritten under a proven-safe plan
+- Kani provides bounded model checking for concrete small documents; Lean owns
+  the algebraic statement of the invariant family
+
+The engine can ship v1 without the entire Lean family complete, but the
+workspace, CI hooks, and Kani infrastructure must exist. The minimum baseline
+expectation remains delivered no-panic/bounded-allocation parser proofs plus
+the preserve-byte-integrity harness.
+
+### Safety hardening and hostile-environment verification
+
+Testing unsafe Rust only with ordinary unit tests is not enough. Monkeybee
+therefore hardens unsafe and hostile-input surfaces with multiple layers:
+
+- **Miri:** every surviving `unsafe` block MUST pass `cargo +nightly miri test`
+  on the owning crate or an equivalent targeted harness. Stacked Borrows and
+  Tree Borrows findings are release-blocking. This lane is owned by
+  `B-SAFETY-001` unless absorbed into `B-PROOF-006`.
+- **Sanitizers:** ASAN/MSAN/TSAN MUST run on fuzz targets and concurrency-heavy
+  workloads to supplement Miri with real execution coverage.
+- **Linux native-decoder isolation:** `WorkerIsolated` native decoders for
+  JBIG2/JPX/ICC/FreeType-class bridges SHOULD use seccomp-bpf or Landlock where
+  available so the isolation class is enforced by the host kernel, not only by
+  process convention.
+- **Adversarial-budget stress fixtures:** every resource limit in this part
+  requires at least one intentionally adversarial fixture proving the limit
+  fires cleanly with a structured error instead of a crash, hang, or silent
+  truncation.
 
 ### Runtime layering doctrine
 
@@ -8924,6 +9234,28 @@ Gates use sustained throughput and regression budget against previous canonical 
 
 *Memory profile:* defined allocator, artifact-store policy, and corpus subset.
 Gates use peak RSS and peak decoded-bytes counters.
+
+### Benchmark and profiling infrastructure
+
+The performance doctrine requires explicit tooling, not hand-timed anecdotes:
+
+- **Criterion.rs benchmark suites:** the workspace owns a dedicated `benches/`
+  lane for parse, render, extract, write, and round-trip families across tiny,
+  small, medium, large, and pathological fixtures
+- **Memory profiling:** `dhat` integration and optional `jemalloc` profiling
+  SHOULD back allocation and peak-residency investigations; benchmark witnesses
+  MAY cite allocation counts and heap-profile references, not only wall-clock
+  time
+- **Compile-time performance:** CI SHOULD track full build time and incremental
+  rebuild time because an engine built for heavy iteration cannot ignore
+  developer-facing compile regressions
+- **SIMD runtime dispatch:** SIMD tier selection is a first-class witness
+  surface. Native builds SHOULD detect SSE2/SSE4.2/AVX2/AVX-512/NEON at runtime,
+  choose the best verified kernel, and record the active dispatch in benchmark
+  and render receipts rather than relying on hidden compile-time assumptions
+- **Size tracking:** stripped `monkeybee-cli` size and compressed
+  `monkeybee-wasm` size SHOULD be tracked in CI so performance wins are not
+  silently paid for with runaway distribution artifacts
 
 ### Numeric robustness profile
 
@@ -9232,6 +9564,10 @@ The engine must enforce configurable resource limits to prevent adversarial inpu
 
 All limits are configured and accounted through `ExecutionContext`; actual budget consumption is reportable in diagnostics and traces. The defaults are chosen to handle all legitimate PDFs while rejecting pathological adversarial inputs.
 
+Every configured limit MUST also have an explicit stress fixture proving the
+limit fires cleanly with a typed error instead of a crash, hang, or silent
+fallback.
+
 ---
 
 ## Part 8 — Release gates for v1
@@ -9338,6 +9674,45 @@ Rules:
   artifacts; it is not a second competing source of truth
 - the CLI MUST expose `monkeybee capability-matrix --json`
 
+### Release engineering and distribution doctrine
+
+Release engineering is part of correctness, not packaging afterthought:
+
+- reproducible builds require a committed `Cargo.lock`, pinned toolchains via
+  `rust-toolchain.toml`, and deterministic artifact checks across canonical CI
+  runs
+- the workspace MUST declare and enforce an MSRV via `rust-version`; MSRV,
+  stable, and nightly are all tested in CI, and MSRV bumps require an explicit
+  semver-governed release note
+- the release pipeline SHOULD build and verify at least
+  `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+  `x86_64-apple-darwin`, `aarch64-apple-darwin`,
+  `x86_64-pc-windows-msvc`, `wasm32-unknown-unknown`, and `wasm32-wasi`
+- release automation SHOULD use a documented `cargo-release`-style flow plus
+  changelog generation (`git-cliff`, `cargo-changelog`, or equivalent) and
+  publish checksums with GitHub Releases
+- every workspace feature flag MUST be documented centrally in `FEATURES.md`
+  and tested in at least `default`, `minimal`, `all-features`, and `wasm`
+  matrices
+- binary-size tracking is warning-level by default but visible in CI for both
+  native and WASM artifacts
+
+### Documentation, examples, and supply-chain doctrine
+
+Public claims, API ergonomics, and dependency hygiene are release surfaces:
+
+- `ARCHITECTURE.md` MUST exist as a 10-minute overview with crate graph,
+  data-flow diagram, and contributor entry points
+- `CONTRIBUTING.md` MUST document how scope, beads, fixtures, proof harnesses,
+  and code-style expectations fit together
+- rustdoc examples are expected to be self-contained and executable
+- `COMPARED_TO.md` is the honest comparative-positioning document tied to proof
+  artifacts, not a marketing appendix
+- demo scripts in `docs/demos/` are legitimate documentation artifacts because
+  the wow-factor doctrine is part of the project's public proof posture
+- `cargo-deny` and `cargo-audit` are part of release hygiene, not optional
+  afterthoughts
+
 ### Functional gates
 
 - [ ] Parser handles all corpus categories with correct Tier 1/2/3 classification.
@@ -9351,6 +9726,7 @@ Rules:
 - [ ] Cross-document page import, document merge/split, and provenance-aware remap work without silent collisions.
 - [ ] Metadata inspection and modification work.
 - [ ] CLI exposes baseline workflows: render, extract, inspect, annotate, edit-pages, validate, diagnose.
+- [ ] CLI exposes `doctor` for environment/oracle/corpus/self-diagnostic checks.
 - [ ] All three parse modes (Strict/Tolerant/Preserve) are functional.
 - [ ] Both write modes (full rewrite, incremental append) are functional.
 - [ ] Incremental-append save preserves existing digital signatures on representative signed documents.
@@ -9373,9 +9749,16 @@ Rules:
 - [ ] Core Arlington validation for catalog/page tree/font/resource/writeback invariants is v1-gating.
 - [ ] PDF/A-4 and PDF/X-6 profile validation is advisory in v1 unless backed by public corpus coverage
   and pinned oracle evidence.
+- [ ] External validation lanes (veraPDF, JHOVE, and at least one public PDF/A profile suite) are wired into canonical proof runs when the corresponding profile claim is advertised.
 - [ ] Experimental backends are optional and benchmarked head-to-head against the baseline.
 - [ ] Performance benchmarks exist for all benchmark classes.
 - [ ] Canonical benchmark witnesses exist for each benchmark class and record support class, render determinism class, and threshold verdicts.
+- [ ] Smoke tests run before expensive proof jobs and fail fast on catastrophic regressions.
+- [ ] Snapshot, property-based, and mutation-testing lanes are present for the surfaces that claim schema or algebra stability.
+- [ ] Coverage reports are emitted and coverage regressions are surfaced as blocking or explicitly waived failures.
+- [ ] Miri runs on crates containing `unsafe` and is treated as a CI gate.
+- [ ] Kani infrastructure exists for bounded parser/write proofs, with delivered baseline proofs for lexer no-panic, bounded allocation, and preserve-byte integrity.
+- [ ] The Lean workspace builds in CI even if the full proof family is still advisory.
 
 - [ ] Invariant certificates are emitted, schema-validated, and independently recomputable in proof mode.
 - [ ] Ambiguous-repair fixtures produce hypothesis-set evidence rather than silent collapse.
@@ -9489,6 +9872,11 @@ Fuzz testing is the primary mechanism for discovering parser crashes, panics, in
 - [ ] All errors use the shared error taxonomy.
 - [ ] All `unsafe` blocks are documented and tested.
 - [ ] Public API is documented with examples.
+- [ ] `cargo doc --no-deps` is warning-clean on public surfaces and doctests pass.
+- [ ] `cargo-deny` and `cargo-audit` are green on release branches.
+- [ ] MSRV, stable, and nightly all pass the required workspace matrix.
+- [ ] Reproducible-build checks, release checksums, and target-matrix artifacts are published by CI.
+- [ ] Central feature-flag documentation exists and the documented feature matrix matches the tested matrix.
 - [ ] README and website capability tables are generated from proof artifacts + scope registry
       via the generated capability surface matrix (no manual capability claims).
 - [ ] Resource limits are enforced for all adversarial-input-facing code paths.
@@ -9560,6 +9948,23 @@ The following table consolidates the baseline/experimental classification from a
 | WASM build | Non-gating proof surface | Architecture validation, not release gate |
 | Kani proofs (lexer) | Baseline | No-panic + bounded-allocation for lexer |
 | Kani proofs (full) | Post-baseline | Infrastructure ready, proofs expand post-v1 |
+| Lean proof workspace | v1_advisory | CI-checked formal-proof lane for algebraic invariants |
+| Miri unsafe validation | Baseline | Memory-safety doctrine requires an unsafe-code interpreter gate |
+| Python bindings | Post-v1 | Important adoption lane but not a v1 kernel gate |
+| Node.js bindings | Post-v1 | Same reasoning as Python bindings |
+| C API | Post-v1 | Ecosystem reach and embedding surface, not baseline gate |
+| `monkeybee-wasm` package | v1_advisory | Browser proof surface and demo substrate |
+| Static demo site / WASM playground | v1_advisory | Public proof packaging, not kernel correctness |
+| SVG-in-PDF parse/preserve | v1_advisory | PDF 2.0 surface worth detecting/preserving in v1 |
+| SVG-in-PDF native render | Post-v1 | Requires a dedicated SVG pipeline and corpus |
+| Variable-font detection/preservation | v1_advisory | Modern font truth surface; full rendering deferred |
+| Variable-font rendering | Post-v1 | Depends on variation-instance selection and shaping integration |
+| OpenType shaping for generated text | Baseline | Required for correct complex-script authoring |
+| PDF/UA-2 tracking | Post-v1 | Separate from PDF/UA-1; must exist in registry before full validation |
+| PDF/A-4 subtype distinction (`-4`, `-4e`, `-4f`) | Baseline in scope registry, advisory in validation | The distinction must exist even if full validation remains advisory |
+| Structured logging and metrics | Baseline | Operator-facing observability is part of engine seriousness |
+| `monkeybee doctor` | v1_supported_non_gating | High-value diagnostic surface for users and CI |
+| Plugin/provider registration surface | Post-v1 | Important ecosystem lane but unsafe to rush into v1 kernel |
 | Linearized output | Post-v1 | Read-only for v1 |
 | XFA rendering | Not in v1 (Tier 2/3) | Detect and AcroForm fallback only |
 | PostScript XObjects | Not in v1 (Tier 2/3) | Detect and simple subset only |
@@ -9840,6 +10245,90 @@ B-CONTENT-002 remains the sole owner of the graphics state machine.
 - B-PROOF-016: Oracle disagreement records and plan-selection evidence
 - B-PROOF-017: Coverage-lattice acquisition planning and decoder-equivalence laboratory
 - B-PROOF-018: Evidence-closure graphs, share-safe distribution fixtures, and key-isolation signing evidence
+- B-PROOF-019: External validation tool integration and typed validator/corpus ingestion
+
+### Formal verification beads
+- B-LEAN-001: Lean workspace bootstrap and CI integration via `lake build`
+- B-LEAN-002: Preservation-algebra composition proofs
+- B-LEAN-003: Graphics-state `q`/`Q` well-bracketing proofs
+- B-LEAN-004: CTM-composition associativity proofs
+- B-LEAN-005: Clipping monotonicity within save/restore frames
+- B-LEAN-006: Reference-resolver termination proofs
+- B-LEAN-007: Incremental-append byte-range integrity proofs
+- B-LEAN-008: Exact-coverage winding-number correctness proofs
+- B-LEAN-009: Porter-Duff algebra-property proofs
+- B-LEAN-010: Object-number allocator monotonicity and collision-freedom proofs
+- B-LEAN-011: Free-list generation monotonic-increment proofs
+
+### Safety-hardening beads
+- B-SAFETY-001: Miri integration and unsafe-block gating
+- B-SAFETY-002: ASAN/MSAN/TSAN harness integration
+- B-SAFETY-003: Seccomp/Landlock native-decoder isolation
+- B-SAFETY-004: Adversarial-budget enforcement stress fixtures
+- B-SAFETY-005: Unsafe-block Kani harness expansion and stale-cache/dangling-reference proofs
+
+### Demo beads
+- B-DEMO-001: Static demo-site shell and deployment pipeline
+- B-DEMO-002: WASM playground render/compare/ledger surface
+- B-DEMO-003: Extracted-text truth-highlighting and object-graph visualization
+- B-DEMO-004: X-ray overlays for layers, annotations, and operators
+- B-DEMO-005: Font inventory, signature panel, and performance panel
+- B-DEMO-006: Report-a-bug evidence capture and issue filing workflow
+- B-DEMO-007: Playwright/Lighthouse/axe-core/visual-regression coverage
+- B-DEMO-008: Service-worker/offline/share-link/OpenGraph packaging
+
+### Binding beads
+- B-BINDINGS-001: Python bindings via PyO3 + maturin
+- B-BINDINGS-002: Node.js bindings via NAPI-RS
+- B-BINDINGS-003: C API via `cbindgen`
+- B-BINDINGS-004: WASM bindings via `wasm-bindgen`
+
+### Benchmark and comparison beads
+- B-BENCH-001: Criterion benchmark suite
+- B-BENCH-002: Memory profiling and allocation-regression infrastructure
+- B-BENCH-003: Compile-time performance tracking
+- B-BENCH-004: Continuous competitive benchmarking and comparative dashboards
+- B-BENCH-005: SIMD runtime-dispatch benchmarking and witnessing
+
+### External-suite beads
+- B-EXTERNAL-001: veraPDF integration
+- B-EXTERNAL-002: Isartor corpus integration
+- B-EXTERNAL-003: Ghent Workgroup suite integration
+- B-EXTERNAL-004: JHOVE integration
+- B-EXTERNAL-005: Bavaria / PDF Association suite integration
+- B-EXTERNAL-006: Poppler regression corpus integration
+- B-EXTERNAL-007: pdf.js corpus integration
+- B-EXTERNAL-008: Apache PDFBox and iText corpus integration
+- B-EXTERNAL-009: ICC reference-profile and target integration
+- B-EXTERNAL-010: Matterhorn / WCAG / PDF/UA assertion integration
+
+### Documentation beads
+- B-DOCS-001: `ARCHITECTURE.md`
+- B-DOCS-002: `CONTRIBUTING.md`
+- B-DOCS-003: `COMPARED_TO.md`
+- B-DOCS-004: Rustdoc example coverage and doctest doctrine
+- B-DOCS-005: Demo video scripts in `docs/demos/`
+
+### Release-engineering beads
+- B-RELEASE-001: Reproducible builds and pinned toolchains
+- B-RELEASE-002: Cross-compilation matrix and release artifacts
+- B-RELEASE-003: Changelog/release automation
+- B-RELEASE-004: Crates.io / package-registry publication flow
+- B-RELEASE-005: GitHub Actions release pipeline and checksum publication
+
+### Observability beads
+- B-OBSERVE-001: `tracing` integration and structured span hierarchy
+- B-OBSERVE-002: `metrics` integration and sink/export wiring
+- B-OBSERVE-003: `miette`-backed error rendering and message-quality doctrine
+- B-OBSERVE-004: `monkeybee doctor` CLI command
+
+### Property-testing beads
+- B-PROPTEST-001: Arbitrary object-graph generators
+- B-PROPTEST-002: Content-stream operator-sequence generators
+- B-PROPTEST-003: Edit-transaction sequence generators
+- B-PROPTEST-004: Font-chain and encoding-fallback generators
+- B-PROPTEST-005: Preservation-algebra composition generators
+- B-PROPTEST-006: Cross-document import/remap generators
 
 ### CLI beads
 - B-CLI-001: Render command
@@ -10054,3 +10543,36 @@ redaction canary scanning, certification/approval signature classification, Java
 graphs, CFF/Type1 font repair and subsetting correctness, then the print-fidelity hazard surfaces
 (`Trapped`, ICC versioning, DeviceN attributes, output-condition identifiers, and alternate image
 selection). Those items create the clearest information gain per proof artifact.
+
+### Additive expansion II — formal proof, validation, release, demo, and ecosystem lanes
+
+The 181-item fully inclusive planning total above is now the pre-expansion-II
+baseline. This revision adds **70 more concrete planning additions** across the
+following families:
+
+- formal verification: `+3`
+- external validation and corpus/tool integration: `+11`
+- test methodology and CI hardening: `+13`
+- demo-site architecture and browser proof surfaces: `+3`
+- language bindings: `+4`
+- build, release, and distribution: `+6`
+- competitive positioning and benchmarking: `+2`
+- additional PDF feature clarifications: `+8`
+- observability and operator experience: `+4`
+- performance infrastructure: `+4`
+- documentation and content: `+4`
+- security hardening: `+4`
+- adoption and ecosystem lanes: `+3`
+- bead-family expansion summary: `+1`
+
+This yields two useful updated shorthand counts:
+
+- **`181 + 70 = 251`** when every newly named lane is counted discretely for
+  bead and proof planning
+- **`240+`** as the public-facing shorthand for the broadened technique/tool
+  surface when multiple packaging/documentation lanes are collapsed into family
+  summaries rather than counted one by one
+
+The architectural rule does not change: none of these additions are allowed to
+remain prose-only wishes. If a lane is named here, it must appear in scope,
+evidence, implementation ownership, or bead planning.

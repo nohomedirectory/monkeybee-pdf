@@ -105,6 +105,8 @@ Baseline v1 must prove all of the following:
 - **Generation correctness**: documents created by Monkeybee render correctly under both Monkeybee and reference implementations.
 - **Compatibility accounting**: every unsupported or degraded zone is explicitly detected, categorized, surfaced in a generated capability surface matrix, and never silently swallowed.
 - **Reproducible proof evidence**: canonical runs emit pinned reproducibility manifests, environment locks, typed oracle-consensus and oracle-disagreement records with region-level explainability, blind-spot ledgers, coverage lattices, metamorphic witnesses with fixture genealogy, and plan-selection evidence linked back to ledgers, evidence bundles, and failure capsules.
+- **Unsafe-code and formal-assurance discipline**: baseline parser/write invariants are backed by Kani, every surviving `unsafe` path is expected to pass Miri, and a Lean workspace exists for the small algebraic invariant family that deserves theorem-prover treatment.
+- **External-validator consensus**: profile, accessibility, and prepress claims are checked not only against render oracles but also against tools and suites such as veraPDF, JHOVE, Isartor, Ghent, Matterhorn, and ICC reference assets where they materially improve confidence.
 - **Fault-contained execution and deterministic render classes**: operator/page/query/native failures stay contained and diagnosable, and proof-canonical rendering is explicitly separated from viewer-adaptive and experimental paths.
 - **Adaptive transport/execution control**: progressive fetch and runtime-lane adaptation stay inside the resolved policy envelope and emit typed control receipts when they shift.
 - **Witness-backed performance claims**: release-facing performance numbers come from schema-versioned benchmark witnesses tied to reproducibility manifests and annotated with runtime-topology evidence, hardware-capability manifests, kernel-dispatch receipts, calibrated prediction-error witnesses, segmented working-set forecasts, and peak-memory witnesses, not ad hoc timing logs.
@@ -158,6 +160,21 @@ hand-waved future wishes.
   DeviceN attributes, output-intent condition lookup, JavaScript trigger graph extraction, web
   capture provenance, structured destinations, and certification-vs-approval signature
   classification.
+- **Formal verification and unsafe-code hardening:** Lean 4 proofs for preservation algebra and
+  state-machine invariants, Kani expansion beyond the lexer, Miri gating for `unsafe`, sanitizer
+  coverage, and adversarial budget-enforcement stress fixtures.
+- **External validator and corpus consensus:** veraPDF, JHOVE, Isartor, Ghent, Bavaria, Poppler,
+  pdf.js, PDFBox/iText, ICC reference assets, and Matterhorn assertions are named proof lanes, not
+  optional side quests.
+- **Demo, bindings, and adoption surfaces:** a static WASM playground with side-by-side `pdf.js`
+  comparison, plus Python/Node/C/WASM bindings, drop-in migration guidance, plugin/provider
+  registration, and ecosystem crates for fixtures and macros.
+- **Modern PDF clarifications:** SVG-in-PDF, variable fonts, `rustybuzz`-backed authoring
+  shaping, PDF/UA-2 distinction, PDF/A-4 subtype distinctions, PDF/X-6 specifics, redaction
+  standards references, and math-heavy fixture classes are all now explicit scope lanes.
+- **Observability, release, and distribution doctrine:** `tracing`, `metrics`, `miette`,
+  `monkeybee doctor`, reproducible builds, MSRV, cross-compilation, feature-matrix docs, binary
+  size tracking, honest competitive benchmarking, and comparative docs are now first-class.
 
 These are not excuses to dilute the closed-loop proof. They are the high-value adjacencies that a
 closed-loop engine naturally grows into once the substrate, preservation model, and proof harness
@@ -190,6 +207,12 @@ valid when the counting policy is stated. What matters is that these additions a
 backlog items: they are the lanes that make the engine matter in prepress, regulated e-signature,
 accessibility compliance, government-form interchange, document forensics, and high-assurance
 redaction/font/metadata correctness.
+
+This revision also adds **70 more concrete planning additions** across formal verification,
+external validators, CI/test methodology, demo/bindings, release/distribution, observability,
+benchmarking, documentation, security, and ecosystem lanes. That takes the fully inclusive working
+planning surface from **181** to **251** when counted one-for-one, or **240+** as the public
+shorthand when packaging/documentation lanes are grouped into their families.
 
 For APR/public-round arithmetic, the priority uplift is intentionally spelled out:
 
@@ -313,6 +336,14 @@ Workspace crates:
 | `monkeybee-native` | Optional native bridge quarantine: JPX/JBIG2/ICC/FreeType adapters, FFI audit surface, native-isolation attestations, subprocess-friendly broker hooks |
 | `monkeybee-cli` | Command-line interface for inspection, rendering, extraction, prepress/signature/accessibility reporting, diffing, plan-save previews, diagnostics, proof execution |
 
+Adjacent delivery surfaces are also explicit in the architecture now:
+
+- `monkeybee-wasm` for browser and demo packaging
+- `monkeybee-python` via PyO3 + maturin
+- `monkeybee-node` via NAPI-RS
+- `monkeybee-capi` via `cbindgen`
+- a static `web/demo/` surface for the browser playground, side-by-side comparison, and issue capture
+
 Core library crates remain runtime-agnostic: they accept `&ExecutionContext` and do not import
 `asupersync` directly. The facade, bytes, proof, and CLI crates are `asupersync`-native. CPU-bound
 work remains Rayon-based and bridges back into structured async regions via oneshot channels.
@@ -356,6 +387,10 @@ monkeybee-pdf/
 ├── README.md                     ← you are here
 ├── NORTH_STAR.md                 ← constitutional thesis
 ├── SPEC.md                       ← operational master spec
+├── ARCHITECTURE.md               ← 10-minute contributor/system overview
+├── CONTRIBUTING.md               ← contributor and proof-harness workflow guide
+├── FEATURES.md                   ← centralized feature-flag documentation
+├── COMPARED_TO.md                ← evidence-backed comparative positioning
 ├── docs/implementation/implementation_master.md      ← APR-facing implementation reference
 ├── AGENTS.md                     ← agent/swarm coordination
 ├── Cargo.toml
@@ -389,10 +424,17 @@ monkeybee-pdf/
 │   ├── monkeybee-diff/
 │   ├── monkeybee-signature/
 │   ├── monkeybee-native/
-│   └── monkeybee-cli/
+│   ├── monkeybee-cli/
+│   ├── monkeybee-wasm/
+│   ├── monkeybee-python/
+│   ├── monkeybee-node/
+│   └── monkeybee-capi/
+├── web/
+│   └── demo/
 ├── docs/
 │   ├── scope_registry.yaml
 │   ├── architecture/
+│   ├── demos/
 │   ├── implementation/
 │   ├── testing/
 │   ├── compatibility/
@@ -424,6 +466,9 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
 - A **round-trip harness** that exercises load → modify → save → reload → validate cycles.
 - **Reference-guided validation** against external renderers (PDFium, MuPDF, pdf.js, Ghostscript)
   for differential correctness.
+- **External validator and suite integration** for veraPDF, JHOVE, Isartor, Ghent, Bavaria,
+  Poppler/pdf.js/PDFBox/iText corpora, ICC reference assets, and Matterhorn assertions where those
+  tools or suites materially strengthen profile, accessibility, color, or regression claims.
 - A **compatibility ledger** that tracks every detected degradation, unsupported feature zone, and
   failure category.
 - A **hypothesis ledger** for ambiguous repairs so materially different candidates remain visible.
@@ -435,10 +480,16 @@ Monkeybee's proof is automated, not rhetorical. The project maintains:
   ad hoc fixture hunting.
 - A **metamorphic proof lane with deterministic reducers and fixture genealogy** so
   representation-changing transforms, crash minimization, and repair drift stay auditable.
+- **Property-based, mutation, snapshot, smoke, and differential-fuzz testing lanes** so schema
+  surfaces, algebraic invariants, CLI output, and oracle disagreements are exercised beyond hand-picked fixtures.
 - **Write receipts and invariant certificates** for save-impact, preserve-mode, and redaction workflows.
 - **Anchor-stability and temporal-replay harnesses** on representative fixtures so post-v1 surfaces
   are forced to grow from stable primitives instead of hand-waving.
+- **Formal and unsafe verification lanes** built from Kani, Miri, sanitizer runs, and a Lean
+  workspace for the small invariant family that deserves theorem-prover treatment.
 - **Performance baselines** on representative hard workloads.
+- **Continuous competitive benchmarking and comparative docs** so speed/correctness claims against
+  other engines are evidence-backed rather than rhetorical.
 - **Schema-versioned benchmark witnesses** that bind support class, render determinism class,
   runtime-topology evidence, hardware/dispatch receipts, work-class receipts, calibration error,
   peak-memory witnesses, and threshold verdicts to reproducibility manifests.
@@ -461,7 +512,9 @@ supporting inventory bucket adds 12 document-structure and multimedia catalog la
 an inclusive planning total of 155 when those preserve/expose surfaces are counted too. This
 revision also adds a 26-item deep-correctness and hardening uplift, producing a 169-item
 priority-plus-hardening planning total and a fully inclusive planning total of 181 when all named
-uplift families are counted.
+uplift families are counted. The latest additive expansion then adds 70 more concrete planning
+lanes, yielding a one-for-one working total of 251 and a public shorthand of 240+ named techniques,
+tools, and proof surfaces.
 
 ## Specification philosophy
 
